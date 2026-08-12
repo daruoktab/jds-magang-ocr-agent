@@ -29,7 +29,7 @@ flowchart TD
         P5 --> P6[Embedding bge-m3]
         P6 --> P7[(FAISS index teks)]
         X3[Gambar dokumen] --> P8[vision_ocr dispatcher<br/>klasifikasi jenis + ekstraksi]
-        P8 -->|tabel {columns, rows}| P9[DataFrame → schema + SQLite]
+        P8 -->|tabel (columns, rows)| P9[DataFrame → schema + SQLite]
         P8 -->|key-value / teks| P5
         X3 -.->|plan: Qwen3-VL-Embedding| P10[(FAISS visual)]
     end
@@ -132,7 +132,7 @@ sequenceDiagram
 
     CLI->>DIS: dispatch(image_path)
     DIS->>VLM: prompt klasifikasi jenis dokumen<br/>(daftar agent + JSON mode)
-    VLM-->>DIS: {"doc_type": "receipt"}
+    VLM-->>DIS: (doc_type: receipt)
     DIS->>REG: get_agent("receipt")
     REG-->>DIS: ExtractionAgent<br/>(prompt tuning struk)
     DIS->>VLM: prompt tuning agent + gambar (base64)
@@ -169,7 +169,7 @@ sequenceDiagram
         AG->>RT: retrieve(subquery)
         AG->>SQ: POST /get_tablerag_response
         SQ->>SQ: NL2SQL (qwen3.5:4b) + eksekusi SQLite
-        SQ-->>AG: {sql_str, hasil eksekusi, schema}
+        SQ-->>AG: (sql_str, hasil eksekusi, schema)
         AG->>AG: COMBINE_PROMPT: cross-validate<br/>teks vs hasil SQL
         AG-->>AG: tool result → lanjut iterasi
     end
