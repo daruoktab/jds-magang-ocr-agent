@@ -2,7 +2,6 @@ import os
 import time
 import urllib3
 import sys
-import faiss
 import json
 import transformers
 import warnings
@@ -19,16 +18,18 @@ from utils.tool_utils import *
 import nltk
 from more_itertools import chunked
 import numpy as np
-import pickle
 from typing import Dict, List, Union, Tuple, Any, Optional
 from utils.utils import read_plain_csv
 
+import lancedb
+
 warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
-device = "cuda:0"
+
 
 class SemanticRetriever :
     """
     Retrieving process, containing recall and rerank.
+    Vector store: LanceDB (embedded, no server, persistent on disk).
     """
     def __init__(
         self,
@@ -37,28 +38,45 @@ class SemanticRetriever :
         chunk_file_index: Optional[Dict] = None,
         llm_path: Optional[str] = None,
         reranker_path: Optional[str] = None,
-        save_path: str = "./retrieval_result/embedding.pkl"
+        save_path: str = "./retrieval_result/lancedb"
     ) -> None:
         self.embedding_model = Embedder(llm_path)
         self.reranker = Reranker(reranker_path)
 
-        if os.path.exists(save_path) :
-            doc_embeddings, self.chunks, self.chunk_file_index = self.load_embeddings(save_path)
-            self.chunk_index = {idx: ch for idx, ch in enumerate(self.chunks)}
+        self.chunks = chunks
+        self.chunk_index = chunk_index
+        self.chunk_file_index = chunk_file_index or {}
+
+        # LanceDB persistent storage (save_path = direktori).
+        db_path = os.path.dirname(save_path) or "."
+        os.makedirs(db_path, exist_ok=True)
+        self.db = lancedb.connect(db_path)
+        self.table_name = "doc_chunks"
+
+        if self.table_name in self.db.list_tables() :
+            self.table = self.db.open_table(self.table_name)
         else :
-            self.chunks = chunks
-            self.chunk_index = chunk_index
-            self.chunk_file_index = chunk_file_index or {}
-            doc_embeddings = self.embed_doc(chunks, save_path=save_path)
-        
+            self.table = self._build_table(chunks)
+
         self.thread_local = threading.local()
         self.index_lock = threading.RLock()
 
-        print("embedding size", doc_embeddings.shape)
-        self.res = faiss.StandardGpuResources() if faiss.get_num_gpus() > 0 else None
-        self.index_IP = self.build_index(doc_embeddings)
+    def _build_table(self, chunks: List[str]) -> Any :
+        """Embed semua chunk lalu simpan sebagai tabel LanceDB."""
+        print("Building LanceDB table ...")
+        embeddings = self.embed_doc(chunks)
+        data = [
+            {
+                "id": str(i),
+                "vector": embeddings[i].tolist(),
+                "text": chunks[i],
+                "filename": self.chunk_file_index.get(i, ""),
+            }
+            for i in range(len(chunks))
+        ]
+        return self.db.create_table(self.table_name, data=data)
 
-    def embed_doc(self, chunks: List[str], batch_size: int = 512, save_path: Optional[str] = None) -> Any :
+    def embed_doc(self, chunks: List[str], batch_size: int = 512) -> Any :
         """
         Embed documents in batches for improved performance
 
@@ -80,83 +98,24 @@ class SemanticRetriever :
                 encode_vecs.append(batch_embeddings)
             else :
                 encode_vecs.extend(batch_embeddings)
-                 
+
         encode_vecs = np.array(encode_vecs)
         if len(encode_vecs.shape) == 3 :
             encode_vecs = encode_vecs.reshape(-1, encode_vecs.shape[-1])
-        
-        if save_path :
-            self.save_embeddings(encode_vecs, chunks, save_path)
-            print("Embedding Vectors Saved.")
-        
+
         return encode_vecs
-    
-    def save_embeddings(self, embeddings: Any, chunks: List[str], save_path: str) -> None :
-        """
-        Save embeddings and optionally the original chunks.
-
-        Args:
-            embeddings: numpy array of embeddings
-            chunks: orignal text chunks
-            save_path: path to save the embeddings
-        """
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        if save_path.endswith('.pkl') :
-            data = {
-                "embeddings": embeddings,
-                "chunks": chunks,
-                "chunk_file_index": self.chunk_file_index
-            }
-            with open(save_path, "wb") as f :
-                pickle.dump(data, f)
-            print(f"Embeddings and chunks saved to {save_path}")
-
-    @staticmethod
-    def load_embeddings(load_path: Optional[str] = None) -> Tuple[Any, Any, Any] :
-        """
-        Load saved embeddings.
-
-        Args:
-            load_path: Path to the saved embeddings.
-        
-        Returns:
-            embeddings if .npy file, (embeddings, chunks) if .pkl file
-        """
-        assert load_path is not None
-        if load_path.endswith('.npy') :
-            return np.load(load_path)
-        elif load_path.endswith('.pkl') :
-            with open(load_path, 'rb') as f :
-                data = pickle.load(f)
-            return data['embeddings'], data['chunks'], data['chunk_file_index']
-
-        raise ValueError(f"Unsupported embedding file format: {load_path}")
-        
-    def build_index(self, dense_vector: Any) -> Any :
-        print("Building Index.")
-        with self.index_lock :
-            _, dim = dense_vector.shape
-            index_IP = faiss.IndexFlatIP(dim)
-            co = faiss.GpuClonerOptions()
-
-            # make it to gpu index
-            # index_gpu = faiss.index_cpu_to_gpu(provider=self.res, device=2, index=index_IP, options=co)
-            index_gpu = index_IP
-            index_gpu.add(dense_vector)
-
-            return index_gpu
 
     def retrieve(self, query, recall_num, rerank_num) :
         docs, ori_file_name = self.recall(query, recall_num)
         reranked_docs, rerank_scores, filenames = self.rerank(query, docs, rerank_num, ori_file_name)
         return reranked_docs, rerank_scores, filenames
-        
-    def recall(self, query: str, topn:int) -> Tuple[List[str], List[str]] :
-        query_emb = self.embed_doc([query])
+
+    def recall(self, query: str, topn: int) -> Tuple[List[str], List[str]] :
+        query_emb = self.embed_doc([query])[0].tolist()
         with self.index_lock :
-            D, I = self.index_IP.search(query_emb, topn)
-        ori_docs = [self.chunk_index[i] for i in I[0]]
-        ori_file_name = [self.chunk_file_index[i] for i in I[0]]
+            rows = self.table.search(query_emb).limit(topn).to_list()
+        ori_docs = [row["text"] for row in rows]
+        ori_file_name = [row["filename"] for row in rows]
         return ori_docs, ori_file_name
 
     def rerank(self, query: str, docs: List[str], topn: int, ori_file_name: List[str]) -> Tuple[List[str], List[float], List[str]] :
@@ -174,7 +133,7 @@ class MixedDocRetriever :
         excel_dir_path: str,
         llm_path: Optional[str] = None,
         reranker_path: Optional[str] = None,
-        save_path: str = "./retrieve_result/embedding.pkl"
+        save_path: str = "./retrieval_result/lancedb"
     ) -> None:
         self.ori_documents = self.load_hybrid_dataset(doc_dir_path, excel_dir_path)
         print("Loading done.")
@@ -196,7 +155,7 @@ class MixedDocRetriever :
             content = excel_to_markdown(os.path.join(excel_dir_path, file))
             excel_content = content
             all_docs[file] = excel_content
-        
+
         for file in tqdm(os.listdir(doc_dir_path)) :
             with open(os.path.join(doc_dir_path, file), 'r', encoding="utf-8") as fin :
                 data_split = json.load(fin)
@@ -206,7 +165,6 @@ class MixedDocRetriever :
 
             all_docs[file] = key_value_doc
         return all_docs
-
 
     def build_index(self, chunking_dict: Dict) -> Tuple :
         flatten_chunks = []
@@ -243,8 +201,3 @@ class MixedDocRetriever :
 
     def retrieve(self, query: str, recall_nun: int = 50, rerank_num: int = 5) :
         return self.semantic_retriever.retrieve(query, recall_nun, rerank_num)
-
-
-
-
-

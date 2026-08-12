@@ -16,8 +16,7 @@ requests
 openai
 httpx
 
-# Database (MySQL)
-PyMySQL
+# Database (SQLite)
 SQLAlchemy
 
 # Data processing
@@ -25,10 +24,9 @@ pandas
 numpy
 openpyxl
 
-# Retrieval & embedding (bge-m3 / bge-reranker)
-# Pakai faiss-gpu jika lingkungan Anda mendukung GPU.
+# Retrieval & embedding (bge-m3 / bge-reranker) + vector store
 transformers
-faiss-cpu
+lancedb
 langchain-text-splitters
 nltk
 more-itertools

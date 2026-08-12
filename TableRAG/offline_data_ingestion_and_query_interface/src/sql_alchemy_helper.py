@@ -1,5 +1,4 @@
 import pandas as pd
-import pymysql
 from sqlalchemy import create_engine, text
 import math
 import json
@@ -22,30 +21,12 @@ def default_serializer(obj):
 
 class SQL_Alchemy_Helper:
     def __init__(self, config):
-        db_type = config.get("type", "mysql")
-
-        if db_type == "sqlite":
-            # SQLite: file-based, tanpa server & tanpa pool args MySQL.
-            db_path = config.get("sqlite_path", "./tablerag.db")
-            db_dir = os.path.dirname(db_path)
-            if db_dir:
-                os.makedirs(db_dir, exist_ok=True)
-            self.engine = create_engine(f"sqlite:///{db_path}")
-        else:
-            user = config["user"]
-            password = config["password"]
-            host = config["host"]
-            port = config["port"]
-            charset = config.get("charset", "utf8mb4")
-            db = config.get("database", "mysql")  # 默认库
-
-            self.engine = create_engine(
-                f'mysql+pymysql://{user}:{password}@{host}:{port}/{db}?charset={charset}',
-                pool_pre_ping=True,        # 防止 MySQL server has gone away
-                pool_recycle=1800,         # 30分钟回收连接
-                pool_size=10,
-                max_overflow=20
-            )
+        # SQLite: file-based, tanpa server.
+        db_path = config.get("sqlite_path", "./tablerag.db")
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+        self.engine = create_engine(f"sqlite:///{db_path}")
 
     def execute_sql(self, sql, args=None):
         """

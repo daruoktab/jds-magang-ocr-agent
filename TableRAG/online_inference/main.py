@@ -36,7 +36,7 @@ class TableRAG() :
             excel_dir_path=_args.excel_dir,
             llm_path=os.path.join(_args.bge_dir, "bge-m3"),
             reranker_path=os.path.join(_args.bge_dir, "bge-reranker-v2-m3"),
-            save_path="./embedding.pkl"
+            save_path="./retrieval_result/lancedb"
         )
         # self.repo_id = self.config.get("repo_id", "")
         self.function_lock = threading.Lock()
