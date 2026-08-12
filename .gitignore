@@ -1,0 +1,32 @@
+# ============ Environment agent (jangan commit) ============
+.agents/
+skills-lock.json
+
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.env
+
+# ============ Cache & artifacts ============
+*.pkl
+*.npy
+*.log
+logs/
+*.db
+*.sqlite
+*.sqlite3
+TableRAG/offline_data_ingestion_and_query_interface/data/
+
+# ============ Input pribadi (jangan commit) ============
+input/*
+!input/.gitkeep
+
+# ============ IDE & OS ============
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

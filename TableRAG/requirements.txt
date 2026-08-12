@@ -1,0 +1,37 @@
+# ============================================================
+# TableRAG dependencies
+# Versi sengaja TIDAK di-lock - pakai versi terbaru yang
+# tersedia. Jika ada konflik antar paket, perbaiki kodenya.
+#
+# NOTE: torch TIDAK disertakan di sini. Install secara manual
+# sesuai lingkungan Anda:
+#   CPU : pip install torch
+#   GPU : pip install torch --index-url https://download.pytorch.org/whl/cu121
+#   (samakan CUDA version dengan driver Anda)
+# ============================================================
+
+# Web / API
+Flask
+requests
+openai
+httpx
+
+# Database (MySQL)
+PyMySQL
+SQLAlchemy
+
+# Data processing
+pandas
+numpy
+openpyxl
+
+# Retrieval & embedding (bge-m3 / bge-reranker)
+# Pakai faiss-gpu jika lingkungan Anda mendukung GPU.
+transformers
+faiss-cpu
+langchain-text-splitters
+nltk
+more-itertools
+
+# Utils
+tqdm

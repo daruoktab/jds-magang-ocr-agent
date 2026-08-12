@@ -1,0 +1,5 @@
+{
+    "_comment": "Backend database TableRAG. type 'sqlite' (default, tanpa setup server) atau 'mysql' (contoh config di bawah).",
+    "type": "sqlite",
+    "sqlite_path": "../data/tablerag.db"
+}
