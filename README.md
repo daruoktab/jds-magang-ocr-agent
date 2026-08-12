@@ -29,7 +29,7 @@ flowchart TD
         P5 --> P6[Embedding bge-m3]
         P6 --> P7[(FAISS index teks)]
         X3[Gambar dokumen] --> P8[vision_ocr dispatcher<br/>klasifikasi jenis + ekstraksi]
-        P8 -->|tabel (columns, rows)| P9[DataFrame → schema + SQLite]
+        P8 -->|tabel| P9[DataFrame → schema + SQLite]
         P8 -->|key-value / teks| P5
         X3 -.->|plan: Qwen3-VL-Embedding| P10[(FAISS visual)]
     end
@@ -173,7 +173,7 @@ sequenceDiagram
         AG->>AG: COMBINE_PROMPT: cross-validate<br/>teks vs hasil SQL
         AG-->>AG: tool result → lanjut iterasi
     end
-    AG-->>USR: jawaban &lt;Answer&gt; ... (atau kosong setelah iterasi habis)
+    AG-->>USR: jawaban final (Answer) ... atau kosong
 ```
 
 ---
