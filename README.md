@@ -17,7 +17,7 @@ flowchart TD
         E1[LLM_BASE_URL + LLM_API_KEY]
         E2[VLM_MODEL=qwen-35b-vision]
         E3[OCR_MODEL=ocr-lighton]
-        E4[EMBEDDING_MODE=subprocess|http]
+        E4["EMBEDDING_MODE=subprocess|http"]
     end
 
     subgraph MODEL["3 kategori model (independen)"]
@@ -37,8 +37,8 @@ flowchart TD
     E4 --> M
     V --> PIPELINE
     M --> R
-    PIPELINE --> RES[VisionRAGResult → JSON]
-    O --> OCR2[OCRResult → teks]
+    PIPELINE --> RES["VisionRAGResult → JSON"]
+    O --> OCR2["OCRResult → teks"]
 ```
 
 - Setiap kategori model punya endpoint & nama sendiri, fallback ke `LLM_BASE_URL`/`LLM_API_KEY` global bila kosong → mudah menukar lokal (LM Studio) / server.
@@ -146,11 +146,11 @@ Laporan menampilkan gambar (path relatif agar render), ground truth kata-kata da
 
 ```mermaid
 flowchart LR
-    A[Gambar/PDF] --> B[classify: VLM → doc_type]
-    B --> C[extract: VLM → DocumentExtraction]
-    C --> D[retrieve: embedding → konteks relevan]
+    A[Gambar/PDF] --> B["classify: VLM → doc_type"]
+    B --> C["extract: VLM → DocumentExtraction"]
+    C --> D["retrieve: embedding → konteks relevan"]
     D --> E[build_result: VisionRAGResult JSON]
-    A -.-> O[OCR: ocr-lighton → OCRResult teks]
+    A -.-> O["OCR: ocr-lighton → OCRResult teks"]
 ```
 
 - **classify** : VLM klasifikasi jenis dokumen (structured output).
