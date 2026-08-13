@@ -20,9 +20,6 @@ logs/
 *.sqlite
 *.sqlite3
 output/
-archive/TableRAG/offline_data_ingestion_and_query_interface/data/
-archive/TableRAG/offline_data_ingestion_and_query_interface/dataset/hybridqa/dev_excel/
-archive/TableRAG/online_inference/retrieval_result/
 
 # ============ Input pribadi (jangan commit) ============
 input/*
