@@ -1,62 +1,48 @@
-# jds-magang — TableRAG × Vision OCR (RAG Multimodal Lokal)
+# jds-magang — Vision RAG Agent
 
-Proyek pengembangan **RAG multimodal 100% lokal** untuk reasoning di atas dokumen heterogen
-(teks, tabel, dan gambar dokumen). Dibangun di atas dua repo upstream — **TableRAG**
-(RAG hybrid: SQL execution + textual retrieval) dan **qwen3-vl-embedding** (embedding
-multimodal VLM via llama.cpp) — lalu dikembangkan dengan ide sendiri
-(**multi-agent VLM document extraction**).
+Agent **RAG vision** yang menggabungkan **vision embedding multimodal**, **VLM agent**, dan **OCR terstruktur** untuk mengekstrak dokumen (gambar/PDF) menjadi **JSON terstruktur** yang valid.
 
-Semua komponen LLM memakai **Ollama lokal** (`qwen3.5:4b`): backbone agent, NL2SQL, dan VLM ekstraksi gambar.
+- **VLM** : `qwen-35b-vision` (ekstraksi bebas + agent, structured output)
+- **OCR** : `ocr-lighton` (VLM kecil tuned, output teks terstruktur)
+- **Embedding** : Qwen3-VL-Embedding via `llama-vl-embedding` (llama.cpp, teks+gambar satu ruang vektor)
+- **Framework** : LangChain + LangGraph + Deep Agents + Pydantic
 
 ---
 
-## 🏗️ Arsitektur Keseluruhan
+## 🏗️ Arsitektur
 
 ```mermaid
 flowchart TD
-    subgraph OLLAMA["OLLAMA (lokal - qwen3.5:4b)"]
-        M1["Backbone agent<br/>reasoning + tool calling"]
-        M2["NL2SQL<br/>service"]
-        M3["VLM ekstraksi gambar<br/>vision_ocr"]
+    subgraph CONFIG[".env / Settings"]
+        E1[LLM_BASE_URL + LLM_API_KEY]
+        E2[VLM_MODEL=qwen-35b-vision]
+        E3[OCR_MODEL=ocr-lighton]
+        E4[EMBEDDING_MODE=subprocess|http]
     end
 
-    subgraph OFF["OFFLINE - Ingestion"]
-        X1[File Excel .xlsx] --> P1[data_persistent.py<br/>infer tipe + bersihkan kolom]
-        P1 --> P2[(SQLite / MySQL<br/>tabel data penuh)]
-        P1 --> P3[Schema JSON per tabel<br/>kolom + tipe + contoh nilai]
-        X2[Dokumen JSON + Excel] --> P4[MixedDocRetriever<br/>json → key-value, excel → markdown]
-        P4 --> P5[Chunk 1000/200 + prefix nama file]
-        P5 --> P6[Embedding bge-m3]
-        P6 --> P7[(FAISS index teks)]
-        X3[Gambar dokumen] --> P8[vision_ocr dispatcher<br/>klasifikasi jenis + ekstraksi]
-        P8 -->|tabel| P9[DataFrame → schema + SQLite]
-        P8 -->|key-value / teks| P5
-        X3 -.->|plan: Qwen3-VL-Embedding| P10[(FAISS visual)]
+    subgraph MODEL["3 kategori model (independen)"]
+        V[VLM normal: ekstraksi + agent]
+        O[OCR: teks terstruktur]
+        M[Embedding: multimodal teks+gambar]
     end
 
-    subgraph ON["ONLINE - Reasoning"]
-        Q[Query user] --> A1[Agent loop<br/>solve_subquery]
-        A1 -->|subquery| A2[Retriever hybrid<br/>dokumen + tabel]
-        A2 --> A3[COMBINE_PROMPT<br/>cross-validate teks vs SQL]
-        A1 -->|subquery| S1[Service SQL :5000<br/>NL2SQL + eksekusi]
-        A3 --> A1
-        A1 --> A4[Jawaban akhir &lt;Answer&gt;]
+    subgraph PIPELINE["VisionRAGPipeline (LangGraph)"]
+        C[classify] --> X[extract]
+        X --> R[retrieve]
+        R --> B[build_result]
     end
 
-    P2 -.-> S1
-    P3 -.-> S1
-    P7 -.-> A2
-    M1 -.-> A1
-    M2 -.-> S1
-    M3 -.-> P8
-    P9 -.-> P2
-    P10 -.->|plan| A2
+    E2 --> V
+    E3 --> O
+    E4 --> M
+    V --> PIPELINE
+    M --> R
+    PIPELINE --> RES[VisionRAGResult → JSON]
+    O --> OCR2[OCRResult → teks]
 ```
 
-**Alur ringkas:** dokumen disiapkan dua kali (SQL + embedding); saat query, agent memecah jadi
-subquery → retriever mencari materi → service SQL menjawab kuantitatif → hasil digabung &
-divalidasi → jawaban final. Gambar ditangani VLM (ekstraksi struktur) dan — pada tahap berikutnya —
-embedding multimodal (retrieval visual).
+- Setiap kategori model punya endpoint & nama sendiri, fallback ke `LLM_BASE_URL`/`LLM_API_KEY` global bila kosong → mudah menukar lokal (LM Studio) / server.
+- `chat_template_kwargs.enable_thinking=false` dikirim otomatis ke VLM (lewat `extra_body`) agar tidak membuang token untuk thinking. **OCR tidak** (tidak perlu).
 
 ---
 
@@ -64,197 +50,136 @@ embedding multimodal (retrieval visual).
 
 ```
 jds-magang/
-├── TableRAG/                        # Fork modifikasi dari yxh-y/TableRAG
-│   ├── offline_data_ingestion_and_query_interface/
-│   │   ├── config/                  #   database_config.json (type: sqlite / mysql)
-│   │   ├── dataset/hybridqa/        #   dev_excel.zip (dataset HeteQA)
-│   │   └── src/
-│   │       ├── data_persistent.py   #   Excel → schema JSON + insert DB
-│   │       ├── interface.py         #   Flask :5000 (endpoint /get_tablerag_response)
-│   │       ├── service.py           #   NL2SQL → eksekusi SQL
-│   │       ├── handle_requests.py   #   klien LLM (Ollama qwen3.5:4b)
-│   │       └── sql_alchemy_helper.py#   helper SQLAlchemy (SQLite/MySQL)
-│   └── online_inference/
-│       ├── main.py                  #   Agent loop (solve_subquery)
-│       ├── config.py                #   LLM = Ollama qwen3.5:4b
-│       ├── prompt.py                #   SYSTEM_EXPLORE / COMBINE prompt
-│       ├── chat_utils.py            #   OpenAI-compatible client
-│       ├── tools/retriever.py       #   MixedDocRetriever (FAISS + rerank)
-│       ├── tools/sql_tool.py        #   klien service SQL
-│       └── evaluation/hybrid_eval.py#   evaluasi jawaban LLM
-├── vision_ocr/                      # ⭐ IDE SENDIRI: multi-agent VLM extraction
-│   ├── dispatcher.py                #   Agent utama: klasifikasi jenis → routing
-│   ├── agents.py                    #   Registry 9 ExtractionAgent (prompt tuning)
-│   ├── extractor.py                 #   Gambar → VLM → JSON → validasi Pydantic
-│   ├── llm.py                       #   Backend modular (Ollama native / OpenAI-compatible)
-│   ├── schemas.py                   #   Pydantic: DocumentExtraction (struktur bebas)
-│   ├── embedder.py                  #   VisionEmbedder (wrapper llama-vl-embedding)
-│   ├── prompts.py                   #   Prompt general (model tentukan struktur)
-│   ├── cli.py                       #   CLI: auto-dispatch / paksa agent / klasifikasi
-│   └── tests/                       #   Gambar uji (struk, tabel)
-├── qwen3-vl-embedding/              # Fork ceveyne/qwen3-vl-embedding (belum di-setup)
-│   └── scripts/                     #   Convert GGUF + regression script
-├── input/                           # Gambar input pengguna (git-ignored)
-└── .gitignore
+├── app/                        # Kode utama
+│   ├── config.py               #   Settings: VLM/OCR/embedding + loader .env
+│   ├── llm.py                  #   build_vlm / build_ocr / image_data_uri
+│   ├── ocr.py                  #   OCRExtractor (chat biasa, output teks)
+│   ├── extractor.py            #   VisionExtractor (with_structured_output → Pydantic)
+│   ├── agents.py               #   ExtractionAgent + AGENT_REGISTRY (9 jenis dokumen)
+│   ├── embedding.py            #   VisionEmbedder + LlamaVLEmbeddings / LlamaServerEmbeddings
+│   ├── vector_store.py         #   VisionIndex (InMemoryVectorStore, RAG)
+│   ├── graph.py                #   VisionRAGPipeline (LangGraph: classify→extract→retrieve→result)
+│   ├── deep_agent.py           #   build_deep_agent (create_deep_agent + subagents)
+│   ├── pdf.py                  #   pdf_to_images (pymupdf, 200 DPI, <nama>_page<N>.jpg)
+│   ├── schemas.py              #   Pydantic: DocumentClassification/Extraction, OCRResult, VisionRAGResult
+│   └── prompts.py              #   Prompt general + per jenis dokumen
+├── scripts/
+│   ├── download_dataset.py     #   Download dataset FiftyOne → input/datatest
+│   ├── fix_dataset_paths.py    #   Perbaiki filepath dataset (jika media dipindah)
+│   └── run_eval_report.py      #   Evaluasi N gambar acak → laporan Markdown
+├── main.py                     # CLI
+├── pyproject.toml / uv.lock    # Dependency (uv)
+├── env.template                # Template konfigurasi → salin ke .env
+├── input/                      # Dataset (git LFS) + input pribadi (git-ignored)
+├── output/                     # Laporan evaluasi (git-ignored)
+└── archive/                    # Kode lama (TableRAG, vision_ocr, qwen3-vl-embedding)
 ```
 
 ---
 
-## ✅ Status Sekarang
+## ⚙️ Setup
 
-| Komponen | Status | Detail |
+```bash
+# 1. Environment (Python 3.12)
+uv venv --prompt magang-jds .venv
+uv pip install --python .venv deepagents langchain langgraph langchain-openai pydantic numpy Pillow pymupdf requests fiftyone
+
+# 2. Konfigurasi
+cp env.template .env
+#    → isi LLM_API_KEY (satu-satunya yang perlu diisi untuk VLM + OCR)
+
+# 3. (Opsional) Dataset evaluasi
+uv run --python .venv python scripts/download_dataset.py
+```
+
+### Variabel `.env`
+
+| Variabel | Default | Keterangan |
 |---|---|---|
-| **TableRAG pipeline** | ✅ Dimodifikasi | Backend DB → **SQLite** (MySQL tetap ada di config); LLM → **Ollama qwen3.5:4b**; prompt NL2SQL → SQLite syntax; ~15 bug runtime & type-checker diperbaiki (`ty check` bersih) |
-| **vision_ocr** | ✅ Berfungsi & teruji | Multi-agent VLM extraction: klasifikasi jenis + ekstraksi struktur bebas + validasi Pydantic |
-| **Model lokal** | ✅ Terverifikasi | Ollama `qwen3.5:4b` (VLM + tools + thinking): tool calling `solve_subquery` berhasil |
-| **qwen3-vl-embedding** | ⏳ Belum di-setup | Submodule belum init; binary `llama-vl-embedding` belum dibuild; model 2B/8B belum didownload |
-| **Repo** | ✅ Satu git tunggal | Private: `github.com/daruoktab/jds-magang` |
-
-### Hasil uji `vision_ocr` (model `qwen3.5:4b`)
-
-| Skenario | Klasifikasi | Hasil |
-|---|---|---|
-| Struk belanja Euro | `receipt` | Merchant, tanggal ISO (`2023-12-12`), 6 item (harga numerik + `currency: EUR`), `subtotal 20.45`, `tax 3.6`, `total 24.05`, `change 0.95` — semua akurat |
-| Tabel data | `table` | `{columns, rows}` — 3 kolom, 4 baris, akurat |
-| Mode generic | — | Model menentukan sendiri key-value & struktur terbaik (termasuk field yang tidak diminta) |
+| `LLM_BASE_URL` | `http://localhost:1234/v1` | Endpoint global (fallback VLM & OCR) |
+| `LLM_API_KEY` | — | **Wajib diisi** |
+| `VLM_MODEL` | `qwen-35b-vision` | VLM ekstraksi + agent |
+| `VLM_ENABLE_THINKING` | `false` | Kirim `chat_template_kwargs.enable_thinking` |
+| `OCR_MODEL` | `ocr-lighton` | OCR terstruktur |
+| `OCR_MAX_TOKENS` | `500` | Max token OCR |
+| `EMBEDDING_MODE` | `subprocess` | `subprocess` (binary lokal) / `http` (llama-server) |
+| `EMBEDDING_MODEL` | `Qwen3-VL-Embedding-2B-f16.gguf` | GGUF embedding |
+| `EMBEDDING_MMPROJ` | — | Wajib untuk embedding gambar |
+| `LLAMA_VL_EMBEDDING_BIN` | (PATH) | Binary `llama-vl-embedding` |
 
 ---
 
-## 🧠 Alur Multi-Agent `vision_ocr` (agent utama + sub-agent)
+## 🚀 Cara Pakai
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant CLI as CLI / caller
-    participant DIS as DocumentDispatcher<br/>(agent utama)
-    participant VLM as Ollama VLM<br/>qwen3.5:4b
-    participant REG as AGENT_REGISTRY<br/>(sub-agent)
+```bash
+# Ekstraksi dokumen penuh (classify + extract + retrieve) → JSON
+uv run --python .venv python main.py gambar.png
 
-    CLI->>DIS: dispatch(image_path)
-    DIS->>VLM: prompt klasifikasi jenis dokumen<br/>(daftar agent + JSON mode)
-    VLM-->>DIS: (doc_type: receipt)
-    DIS->>REG: get_agent("receipt")
-    REG-->>DIS: ExtractionAgent<br/>(prompt tuning struk)
-    DIS->>VLM: prompt tuning agent + gambar (base64)
-    VLM-->>DIS: JSON struktur bebas
-    DIS->>DIS: normalisasi + validasi Pydantic<br/>(DocumentExtraction)
-    DIS-->>CLI: (doc_type, DocumentExtraction)
+# Hanya klasifikasi jenis dokumen (tanpa embedding)
+uv run --python .venv python main.py gambar.png --classify-only
+
+# OCR terstruktur (ocr-lighton)
+uv run --python .venv python main.py gambar.png --ocr
+
+# Konversi PDF → gambar per halaman (<nama>_page<N>.jpg, 200 DPI)
+uv run --python .venv python main.py dokumen.pdf --pdf
+
+# Daftar jenis dokumen yang didukung
+uv run --python .venv python main.py --list-agents
 ```
 
-- **Agent utama** (`DocumentDispatcher`): satu panggilan VLM untuk klasifikasi jenis → pilih sub-agent.
-- **Sub-agent** (`ExtractionAgent`): prompt tuning per jenis (receipt, invoice, table, form,
-  business_card, bank_statement, label, screenshot, generic-fallback) — struktur output tetap
-  ditentukan model.
-- **Modular**: tambah jenis dokumen = tambah 1 entry di `AGENT_REGISTRY`; tiap agent bisa punya
-  model sendiri; backend LLM bisa diganti (Ollama / OpenAI-compatible).
+### Evaluasi 100 gambar acak → laporan Markdown
 
----
+```bash
+uv run --python .venv python scripts/run_eval_report.py --samples 100
+# → output/eval_report.md (gambar + ground truth + VLM JSON + OCR text)
 
-## 🔄 Alur Agent TableRAG (solve_subquery)
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant USR as User
-    participant AG as Agent LLM<br/>qwen3.5:4b (tools)
-    participant RT as MixedDocRetriever<br/>FAISS + rerank
-    participant SQ as SQL Service :5000<br/>NL2SQL + SQLite
-
-    USR->>AG: query + table_id
-    AG->>RT: retrieve(query, 30, 5)
-    RT-->>AG: tabel top-1 (markdown) + dokumen
-    AG->>AG: analisis: pecah menjadi subquery
-    loop max 5 iterasi
-        AG->>AG: panggil tool solve_subquery
-        AG->>RT: retrieve(subquery)
-        AG->>SQ: POST /get_tablerag_response
-        SQ->>SQ: NL2SQL (qwen3.5:4b) + eksekusi SQLite
-        SQ-->>AG: (sql_str, hasil eksekusi, schema)
-        AG->>AG: COMBINE_PROMPT: cross-validate<br/>teks vs hasil SQL
-        AG-->>AG: tool result → lanjut iterasi
-    end
-    AG-->>USR: jawaban final (Answer) ... atau kosong
+# Tes cepat (3 gambar, pacing dipercepat)
+uv run --python .venv python scripts/run_eval_report.py --samples 3 --fast
 ```
 
----
-
-## 💡 Ide: Combine VLM + Embedding Multimodal (pola TableRAG)
-
-Prinsip yang dipinjam dari TableRAG: **simpan 2 representasi, recall murah dulu, understand mahal belakangan**.
-
-```mermaid
-flowchart TD
-    subgraph OFF2["OFFLINE - dua representasi per gambar"]
-        G1[Gambar dokumen] --> E1[Qwen3-VL-Embedding<br/>llama-vl-embedding]
-        G1 --> E2[VLM qwen3.5:4b<br/>vision_ocr dispatcher]
-        E1 --> F1[(FAISS visual<br/>untuk RETRIEVAL)]
-        E2 --> F2[(SQLite + teks markdown<br/>untuk UNDERSTANDING)]
-    end
-
-    subgraph ON2["ONLINE - recall murah, understand mahal"]
-        Q2[Query user] --> EM[embed query sekali<br/>Qwen3-VL-Embedding]
-        EM --> SE[FAISS visual search<br/>top-k gambar relevan]
-        SE --> V2[VLM hanya untuk gambar terpilih<br/>→ struktur → COMBINE_PROMPT / SQL]
-    end
-
-    F1 -.-> SE
-    F2 -.-> V2
-```
-
-- **Embedding multimodal** (bge diganti total): satu model untuk teks, tabel markdown, dan gambar
-  — semua dalam satu ruang vektor.
-- **VLM** hanya dipanggil untuk top-k hasil retrieval — hemat token/waktu (persis alasan TableRAG
-  pakai SQL ketimbang baca tabel utuh).
-- **Extension agent**: tool baru `solve_image` di agent loop untuk "visual subquery" (gambar
-  dipertanyakan saat query → `vision_ocr` → hasil masuk `COMBINE_PROMPT`).
+Laporan menampilkan gambar (path relatif agar render), ground truth kata-kata dari label dataset (`words`), hasil VLM (doc_type + extraction JSON), dan teks OCR — untuk membandingkan hasil pipeline vs gambar asli.
 
 ---
 
-## 🗺️ Plan Sementara (Roadmap)
+## 🧠 Alur Pipeline
 
 ```mermaid
 flowchart LR
-    P1["1️⃣ Setup<br/>qwen3-vl-embedding<br/>(submodule, build, model, GGUF)"]
-    P2["2️⃣ vision_ingestor<br/>(gambar → SQLite + chunk)"]
-    P3["3️⃣ Retriever multimodal<br/>(ganti bge-m3, FAISS visual)"]
-    P4["4️⃣ Tool solve_image<br/>(visual subquery)"]
-    P5["5️⃣ Uji end-to-end<br/>(dev_excel + gambar)"]
-
-    P1 --> P2 --> P3 --> P4 --> P5
+    A[Gambar/PDF] --> B[classify: VLM → doc_type]
+    B --> C[extract: VLM → DocumentExtraction]
+    C --> D[retrieve: embedding → konteks relevan]
+    D --> E[build_result: VisionRAGResult JSON]
+    A -.-> O[OCR: ocr-lighton → OCRResult teks]
 ```
 
-| # | Langkah | Detail |
-|---|---|---|
-| 1 | **Setup `qwen3-vl-embedding`** | `git submodule update --init --recursive`; build `llama-vl-embedding` (Windows: `cmake --build llama.cpp/build --target llama-vl-embedding`); download Qwen3-VL-Embedding-2B/8B; convert GGUF (main `f16` + `--mmproj f16`) |
-| 2 | **`vision_ingestor.py`** | Offline: hasil `vision_ocr` → `TableData` jadi DataFrame → SQLite + schema JSON; key-value → chunk. Gambar ikut pipeline SQL seperti `.xlsx` |
-| 3 | **Retriever multimodal** | Extend `MixedDocRetriever`: `VisionEmbedder` (Qwen3-VL) ganti bge-m3; index FAISS visual paralel; query di-embed sekali → fusion skor → top-k |
-| 4 | **Tool `solve_image`** | Agent memanggil `vision_ocr` untuk subquery visual; hasil masuk `COMBINE_PROMPT` |
-| 5 | **Uji end-to-end** | Ingestion `dev_excel.zip` + gambar → service SQL → agent loop → evaluasi (`hybrid_eval.py`) |
+- **classify** : VLM klasifikasi jenis dokumen (structured output).
+- **extract** : `ExtractionAgent` terpilih (sesuai doc_type) mengekstrak struktur bebas → validasi Pydantic.
+- **retrieve** : query di-embed (Qwen3-VL) → cari di indeks vektor. *(Opsional; butuh binary embedding / mode http.)*
+- **OCR** : jalur terpisah, output teks mentah terstruktur (tanpa thinking, max_tokens 500).
+
+Alternatif agentic: `build_deep_agent()` membungkus semua kemampuan (extract / OCR / search) sebagai tools + subagents (`document-extractor`, `ocr`, `retriever`) di dalam `create_deep_agent`.
 
 ---
 
-## 🚀 Menjalankan
+## 🚨 Catatan Penting
 
-```bash
-# 1. Environment
-conda activate magang-jds          # Python 3.12; torch diinstall manual
-uv pip install -r TableRAG/requirements.txt
-ollama serve                       # + ollama pull qwen3.5:4b
+- **Rate limit server**: OCR `ocr-lighton` = **6 req/menit**, 8.000 token/menit; VLM = 40 req/menit, 5 concurrent. Script evaluasi sudah memberi pacing + retry otomatis.
+- **Embedding opsional**: `main.py gambar.png` (pipeline penuh) menyentuh embedding di node `retrieve`. Kalau belum ada binary `llama-vl-embedding`, pakai `--classify-only` / `--ocr`, atau set `EMBEDDING_MODE=http`.
+- **`with_structured_output`** (VLM) membutuhkan dukungan function calling / JSON schema di sisi server.
+- **Dataset di git LFS**: `input/datatest` (~246MB) di-track via Git LFS (`.gitattributes`). Laptop lain perlu `git-lfs` terpasang untuk menarik isinya (`git lfs pull`).
+- **Jaringan**: server `10.7.1.21` hanya bisa diakses dari jaringan server (WiFi/LAN internal). Kalau timeout, cek konektivitas dulu.
 
-# 2. Vision OCR (gambar → struktur)
-python -m vision_ocr.cli input/gambar.jpg                  # auto: klasifikasi + agent terbaik
-python -m vision_ocr.cli input/gambar.jpg --agent receipt  # paksa agent tertentu
-python -m vision_ocr.cli --list-agents                     # daftar jenis dokumen
+---
 
-# 3. TableRAG offline (ingestion + service SQL)
-cd TableRAG/offline_data_ingestion_and_query_interface/src
-python data_persistent.py          # Excel → SQLite (config: database_config.json)
-python interface.py                # Flask :5000 (NL2SQL via qwen3.5:4b)
+## 🗺️ Roadmap
 
-# 4. Agent loop
-cd TableRAG/online_inference
-python main.py --data_file_path <cases.json> --doc_dir <docs> --excel_dir <excels> --backbone v3
-```
-
-> **Catatan jaringan**: `git push` via protokol `github.com` tidak stabil di jaringan ini; push rutin
-> sebaiknya via `git@ssh.github.com:443` (SSH) atau Git Data API.
+- [x] Arsitektur 3 kategori model (VLM / OCR / embedding) + config `.env`
+- [x] Pipeline LangGraph (classify → extract → retrieve → result)
+- [x] Deep Agents harness + subagents
+- [x] Konversi PDF → gambar
+- [x] Script evaluasi Markdown (100 gambar acak)
+- [x] Dataset `form_understanding_in_noisy_scanned_documents_plus` (FiftyOne)
+- [ ] Build `llama-vl-embedding` (Vulkan/CPU) untuk embedding teks+gambar
+- [ ] Fallback JSON-mode jika `with_structured_output` tidak didukung server
+- [ ] Vector store persisten (Chroma/FAISS) + ingestion dokumen
