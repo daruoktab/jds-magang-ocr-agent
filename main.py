@@ -40,6 +40,16 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _output_json(text: str, out_dir: Optional[str], image: str, log_file=None) -> str:
+    if out_dir:
+        out_file = Path(out_dir) / f"{Path(image).stem}.json"
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(text, encoding="utf-8")
+        if log_file:
+            print(f"\n-> {out_file}", file=log_file)
+    return text
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -63,14 +73,15 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
 
         if args.ocr:
-            result = build_ocr_extractor(settings).extract(args.image)
-            print(json.dumps(result.model_dump(), indent=2))
+            out = _output_json(json.dumps(build_ocr_extractor(settings).extract(args.image).model_dump(), indent=2), args.out_dir, args.image, sys.stderr)
+            print(out)
             return 0
 
         pipeline = VisionRAGPipeline(settings)
 
         if args.classify_only:
-            print(json.dumps({"doc_type": pipeline.classify(args.image)}, indent=2))
+            out = _output_json(json.dumps({"doc_type": pipeline.classify(args.image)}, indent=2), args.out_dir, args.image, sys.stderr)
+            print(out)
             return 0
 
         state = pipeline.run(args.image, query=args.query)
