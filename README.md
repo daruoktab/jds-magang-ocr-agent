@@ -61,6 +61,7 @@ jds-magang/
 │   ├── graph.py                #   VisionRAGPipeline (LangGraph: classify→extract→retrieve→result)
 │   ├── deep_agent.py           #   build_deep_agent (create_deep_agent + subagents)
 │   ├── pdf.py                  #   pdf_to_images (pymupdf, 200 DPI, <nama>_page<N>.jpg)
+│   ├── report.py               #   generate_report (mode --report → markdown)
 │   ├── schemas.py              #   Pydantic: DocumentClassification/Extraction, OCRResult, VisionRAGResult
 │   └── prompts.py              #   Prompt general + per jenis dokumen
 ├── scripts/
@@ -70,9 +71,8 @@ jds-magang/
 ├── main.py                     # CLI
 ├── pyproject.toml / uv.lock    # Dependency (uv)
 ├── env.template                # Template konfigurasi → salin ke .env
-├── input/                      # Dataset (git LFS) + input pribadi (git-ignored)
-├── output/                     # Laporan evaluasi (git-ignored)
-└── archive/                    # Kode lama (TableRAG, vision_ocr, qwen3-vl-embedding)
+├── input/                      # Dataset (git-ignored) + input pribadi
+└── output/                     # Laporan evaluasi (git-ignored)
 ```
 
 ---
@@ -103,6 +103,7 @@ uv run --python .venv python scripts/download_dataset.py
 | `OCR_MODEL` | `ocr-lighton` | OCR terstruktur |
 | `OCR_MAX_TOKENS` | `500` | Max token OCR |
 | `EMBEDDING_MODE` | `subprocess` | `subprocess` (binary lokal) / `http` (llama-server) |
+| `EMBEDDING_ENABLED` | `true` | `false` = matikan retrieval (cukup VLM + OCR) |
 | `EMBEDDING_MODEL` | `Qwen3-VL-Embedding-2B-f16.gguf` | GGUF embedding |
 | `EMBEDDING_MMPROJ` | — | Wajib untuk embedding gambar |
 | `LLAMA_VL_EMBEDDING_BIN` | (PATH) | Binary `llama-vl-embedding` |
@@ -175,9 +176,9 @@ Alternatif agentic: `build_deep_agent()` membungkus semua kemampuan (extract / O
 ## 🚨 Catatan Penting
 
 - **Rate limit server**: OCR `ocr-lighton` = **6 req/menit**, 8.000 token/menit; VLM = 40 req/menit, 5 concurrent. Script evaluasi sudah memberi pacing + retry otomatis.
-- **Embedding opsional**: `main.py gambar.png` (pipeline penuh) menyentuh embedding di node `retrieve`. Kalau belum ada binary `llama-vl-embedding`, pakai `--classify-only` / `--ocr`, atau set `EMBEDDING_MODE=http`.
-- **`with_structured_output`** (VLM) membutuhkan dukungan function calling / JSON schema di sisi server.
-- **Dataset di git LFS**: `input/datatest` (~246MB) di-track via Git LFS (`.gitattributes`). Laptop lain perlu `git-lfs` terpasang untuk menarik isinya (`git lfs pull`).
+- **Embedding opsional**: matikan dengan `EMBEDDING_ENABLED=false` (cukup VLM+OCR). Kalau binary belum ada, pipeline **otomatis melewati retrieval** dengan warning (tidak crash) — mode `--report`, `--ocr`, `--classify-only` tidak menyentuh embedding sama sekali.
+- **`with_structured_output`** (VLM) membutuhkan dukungan function calling / JSON schema di sisi server (sudah terverifikasi jalan dengan `qwen-35b-vision`).
+- **Dataset**: `input/datatest` (~246MB) TIDAK di-track git (gitignored). Dapatkan lewat `python scripts/download_dataset.py`, atau salin manual antar mesin.
 - **Jaringan**: server `10.7.1.21` hanya bisa diakses dari jaringan server (WiFi/LAN internal). Kalau timeout, cek konektivitas dulu.
 
 ---
@@ -190,6 +191,6 @@ Alternatif agentic: `build_deep_agent()` membungkus semua kemampuan (extract / O
 - [x] Konversi PDF → gambar
 - [x] Script evaluasi Markdown (100 gambar acak)
 - [x] Dataset `form_understanding_in_noisy_scanned_documents_plus` (FiftyOne)
+- [x] Structured output (`with_structured_output`) terverifikasi jalan di server
 - [ ] Build `llama-vl-embedding` (Vulkan/CPU) untuk embedding teks+gambar
-- [ ] Fallback JSON-mode jika `with_structured_output` tidak didukung server
 - [ ] Vector store persisten (Chroma/FAISS) + ingestion dokumen
