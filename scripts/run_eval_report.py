@@ -26,7 +26,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import fiftyone as fo
 
@@ -34,6 +34,7 @@ from app.agents import get_agent
 from app.config import get_settings
 from app.graph import VisionRAGPipeline
 from app.ocr import build_ocr_extractor
+from app.report import PacedCaller
 
 DATASET_NAME = r"input/datatest/data"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -55,30 +56,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--skip-vlm", action="store_true", help="Lewati VLM")
     p.add_argument("--fast", action="store_true", help="Percepat pacing (untuk tes, bisa kena 429)")
     return p.parse_args(argv)
-
-
-class PacedCaller:
-    """Beri jeda antar panggilan + retry sederhana."""
-
-    def __init__(self, interval: float, max_retries: int) -> None:
-        self.interval = interval
-        self.max_retries = max_retries
-        self._last = 0.0
-
-    def __call__(self, fn: Callable[[], Any], label: str = "") -> Any:
-        for attempt in range(1, self.max_retries + 1):
-            elapsed = time.monotonic() - self._last
-            if elapsed < self.interval:
-                time.sleep(self.interval - elapsed)
-            self._last = time.monotonic()
-            try:
-                return fn()
-            except Exception as e:
-                wait = 5.0 * attempt
-                print(f"    ! {label} gagal (percobaan {attempt}): "
-                      f"{type(e).__name__}: {str(e)[:200]} -> tunggu {wait:.0f}s")
-                time.sleep(wait)
-        raise RuntimeError(f"{label} gagal setelah {self.max_retries} percobaan")
 
 
 def ground_truth_words(sample) -> str:

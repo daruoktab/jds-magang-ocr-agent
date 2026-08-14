@@ -6,6 +6,9 @@ Contoh:
     python main.py gambar.png --query "..."      # + retrieval context
     python main.py gambar.png --classify-only    # hanya klasifikasi jenis
     python main.py gambar.png --ocr              # OCR teks terstruktur (model OCR)
+    python main.py dokumen.pdf --pdf             # konversi PDF -> gambar per halaman
+    python main.py folder_gambar --report        # laporan markdown SEMUA gambar di folder
+    python main.py gambar.png --report           # laporan markdown SATU gambar
     python main.py --list-agents                 # daftar jenis dokumen
 """
 from __future__ import annotations
@@ -21,6 +24,7 @@ from app.config import get_settings
 from app.graph import VisionRAGPipeline
 from app.ocr import build_ocr_extractor
 from app.pdf import pdf_to_images
+from app.report import generate_report
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,15 +32,26 @@ def build_parser() -> argparse.ArgumentParser:
         prog="vision-rag",
         description="Vision RAG agent: gambar -> JSON terstruktur + retrieval.",
     )
-    p.add_argument("image", nargs="?", help="Path ke file gambar (png/jpg/webp)")
+    p.add_argument("image", nargs="?", help="Path file gambar ATAU folder gambar")
     p.add_argument("--query", default=None, help="Query retrieval opsional")
     p.add_argument("--list-agents", action="store_true", help="Daftar jenis dokumen yang didukung")
     p.add_argument("--classify-only", action="store_true", help="Hanya klasifikasi jenis dokumen")
     p.add_argument("--ocr", action="store_true", help="OCR teks terstruktur (model OCR tuned)")
     p.add_argument("--pdf", action="store_true", help="Konversi PDF menjadi gambar per-halaman")
     p.add_argument("--dpi", type=int, default=200, help="DPI untuk konversi PDF (default 200)")
-    p.add_argument("--out-dir", default=None, help="Direktori output (gambar PDF atau JSON hasil)")
-    p.add_argument("--out-json", action="store_true", help="Simpan hasil JSON ke file alih-alih stdout")
+    p.add_argument("--out-dir", default="output", help="Direktori output (default: output/)")
+
+    # Mode laporan markdown (file atau folder gambar)
+    p.add_argument("--report", action="store_true",
+                   help="Tulis laporan markdown (gambar dirender + hasil VLM/OCR)")
+    p.add_argument("--skip-vlm", action="store_true", help="(report) lewati VLM")
+    p.add_argument("--skip-ocr", action="store_true", help="(report) lewati OCR")
+    p.add_argument("--vlm-interval", type=float, default=2.0,
+                   help="(report) pacing VLM dalam detik (default 2.0)")
+    p.add_argument("--ocr-interval", type=float, default=10.0,
+                   help="(report) pacing OCR dalam detik (default 10.0)")
+    p.add_argument("--max-retries", type=int, default=3,
+                   help="(report) retry per request saat gagal/429")
     return p
 
 
@@ -70,6 +85,20 @@ def main(argv: Optional[list[str]] = None) -> int:
             images = pdf_to_images(args.image, output_dir=args.out_dir, dpi=args.dpi)
             for img in images:
                 print(img)
+            return 0
+
+        if args.report:
+            out_file = Path(args.out_dir) / "report.md"
+            generate_report(
+                input_path=args.image,
+                output_path=out_file,
+                settings=settings,
+                skip_vlm=args.skip_vlm,
+                skip_ocr=args.skip_ocr,
+                vlm_interval=args.vlm_interval,
+                ocr_interval=args.ocr_interval,
+                max_retries=args.max_retries,
+            )
             return 0
 
         if args.ocr:
