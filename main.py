@@ -34,7 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ocr", action="store_true", help="OCR teks terstruktur (model OCR tuned)")
     p.add_argument("--pdf", action="store_true", help="Konversi PDF menjadi gambar per-halaman")
     p.add_argument("--dpi", type=int, default=200, help="DPI untuk konversi PDF (default 200)")
-    p.add_argument("--out-dir", default=None, help="Direktori output gambar PDF (default: sama dengan PDF)")
+    p.add_argument("--out-dir", default=None, help="Direktori output (gambar PDF atau JSON hasil)")
+    p.add_argument("--out-json", action="store_true", help="Simpan hasil JSON ke file alih-alih stdout")
     return p
 
 
@@ -72,7 +73,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
 
         state = pipeline.run(args.image, query=args.query)
-        print(json.dumps(state["final_result"], indent=2))
+        result = json.dumps(state["final_result"], indent=2)
+        if args.out_dir:
+            out_file = Path(args.out_dir) / f"{Path(args.image).stem}.json"
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(result, encoding="utf-8")
+            print(result)
+            print(f"\n-> {out_file}", file=sys.stderr)
+        elif args.out_json:
+            raise SystemExit(result)
+        else:
+            print(result)
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

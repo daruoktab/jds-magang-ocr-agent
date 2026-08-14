@@ -35,7 +35,7 @@ from app.config import get_settings
 from app.graph import VisionRAGPipeline
 from app.ocr import build_ocr_extractor
 
-DATASET_NAME = "Voxel51/form_understanding_in_noisy_scanned_documents_plus"
+DATASET_NAME = r"input/datatest/data"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = PROJECT_ROOT / "output" / "eval_report.md"
 

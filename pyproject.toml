@@ -21,6 +21,7 @@ dependencies = [
     "fiftyone>=1.20.1",
     "huggingface>=0.0.1",
     "huggingface-hub>=1.27.0",
+    "cmake>=4.4.2",
 ]
 
 [project.optional-dependencies]
