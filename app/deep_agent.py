@@ -28,11 +28,19 @@ def build_deep_agent(settings: Optional[Settings] = None):
     ocr = build_ocr_extractor(settings)
 
     # Indeks dibuat malas: hanya butuh binary llama-vl-embedding saat dipakai.
-    _index_cache: dict[str, VisionIndex] = {}
+    # Kalau embedding dimatikan / binary belum ada -> None (tool menanganinya).
+    _index_cache: dict[str, "VisionIndex | None"] = {}
 
-    def _index() -> VisionIndex:
+    def _index() -> "VisionIndex | None":
         if "index" not in _index_cache:
-            _index_cache["index"] = VisionIndex(build_embeddings(settings))
+            if not settings.embedding_enabled:
+                _index_cache["index"] = None
+            else:
+                try:
+                    _index_cache["index"] = VisionIndex(build_embeddings(settings))
+                except Exception as e:  # noqa: BLE001 - binary belum dibuild, dll.
+                    print(f"[warn] Embedding tidak tersedia: {e}")
+                    _index_cache["index"] = None
         return _index_cache["index"]
 
     @tool
@@ -48,7 +56,10 @@ def build_deep_agent(settings: Optional[Settings] = None):
     @tool
     def search_index(query: str) -> str:
         """Ambil konteks relevan dari indeks vision embedding."""
-        docs = _index().search(query, k=4)
+        idx = _index()
+        if idx is None:
+            return "(embedding tidak tersedia - retrieval dilewati)"
+        docs = idx.search(query, k=4)
         if not docs:
             return "(tidak ada hasil)"
         return "\n\n".join(d.page_content for d in docs)

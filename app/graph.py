@@ -15,6 +15,7 @@ ke dalam graph di atas, karena keluarannya teks terstruktur (bukan JSON bebas).
 from __future__ import annotations
 
 import operator
+import warnings
 from functools import cached_property
 from typing import Annotated, List, Optional
 
@@ -103,10 +104,18 @@ class VisionRAGPipeline:
         return {"extraction": result.model_dump()}
 
     def _retrieve(self, state: VisionRAGState) -> dict:
+        # Embedding bisa di-off via EMBEDDING_ENABLED=false (VLM/OCR saja).
+        if not self.settings.embedding_enabled:
+            return {"retrieved_docs": []}
         query = state.get("query") or state.get("doc_type") or ""
         if not query:
             return {"retrieved_docs": []}
-        return {"retrieved_docs": self.index.search(query, k=4)}
+        # Auto-degrade: kalau binary/embedding tidak tersedia, lewati retrieval.
+        try:
+            return {"retrieved_docs": self.index.search(query, k=4)}
+        except Exception as e:  # noqa: BLE001 - binary belum dibuild, dll.
+            warnings.warn(f"Embedding tidak tersedia, node retrieve dilewati: {e}")
+            return {"retrieved_docs": []}
 
     def _build_result(self, state: VisionRAGState) -> dict:
         extraction = DocumentExtraction(**state["extraction"])

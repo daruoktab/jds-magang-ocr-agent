@@ -118,6 +118,7 @@ class Settings:
     ocr_max_tokens: int = field(default_factory=lambda: _int_env("OCR_MAX_TOKENS", "500"))
 
     # --- 3. Embedding (multimodal) ---
+    embedding_enabled: bool = field(default_factory=lambda: _bool_env("EMBEDDING_ENABLED", "true"))
     embedding_mode: str = field(default_factory=lambda: _env("EMBEDDING_MODE", "subprocess"))
     embedding_base_url: str = field(default_factory=lambda: _env("EMBEDDING_BASE_URL", "http://localhost:8080/v1"))
     embedding_api_key: str = field(default_factory=lambda: _env("EMBEDDING_API_KEY", ""))
