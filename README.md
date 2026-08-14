@@ -124,6 +124,16 @@ uv run --python .venv python main.py gambar.png --ocr
 # Konversi PDF → gambar per halaman (<nama>_page<N>.jpg, 200 DPI)
 uv run --python .venv python main.py dokumen.pdf --pdf
 
+# Laporan Markdown: proses SEMUA gambar di folder → output/report.md
+uv run --python .venv python main.py folder_gambar --report
+
+# Laporan Markdown: satu gambar saja
+uv run --python .venv python main.py gambar.png --report
+
+# (report) lewati VLM / OCR / atur pacing rate limit
+uv run --python .venv python main.py folder_gambar --report --skip-vlm
+uv run --python .venv python main.py folder_gambar --report --ocr-interval 10 --vlm-interval 2
+
 # Daftar jenis dokumen yang didukung
 uv run --python .venv python main.py --list-agents
 ```
