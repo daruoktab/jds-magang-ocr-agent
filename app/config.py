@@ -40,6 +40,7 @@ Pola env var (setiap kategori punya var sendiri, fallback ke nilai global):
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -47,7 +48,11 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_dotenv(path: Path) -> None:
-    """Loader `.env` minimal (tidak menimpa env yang sudah ada)."""
+    """Loader `.env` minimal (tidak menimpa env yang sudah ada).
+
+    Komentar inline ("# ..." setelah nilai) ikut dibuang agar aman kalau
+    key ditempel di baris yang sama dengan komentar.
+    """
     if not path.exists():
         return
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -55,6 +60,8 @@ def _load_dotenv(path: Path) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
+        # Buang komentar inline: "#" yang didahului spasi (mis. "sk-abc # isi di sini").
+        value = re.split(r"\s+#", value, maxsplit=1)[0]
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
