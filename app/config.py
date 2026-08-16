@@ -134,6 +134,16 @@ class Settings:
     embedding_context: int = field(default_factory=lambda: _int_env("EMBEDDING_CONTEXT", "4096"))
     embedding_ngl: str = field(default_factory=lambda: _env("EMBEDDING_NGL", "auto"))
 
+    # --- 4. Reranker (multimodal, refine hasil retrieval) ---
+    reranker_enabled: bool = field(default_factory=lambda: _bool_env("RERANKER_ENABLED", "false"))
+    reranker_model: str | None = field(default_factory=lambda: os.environ.get("RERANKER_MODEL") or None)
+    reranker_device: str = field(default_factory=lambda: _env("RERANKER_DEVICE", "auto"))
+    reranker_max_length: int = field(default_factory=lambda: _int_env("RERANKER_MAX_LENGTH", "8192"))
+    reranker_instruction: str = field(default_factory=lambda: _env(
+        "RERANKER_INSTRUCTION",
+        "Given a search query, retrieve relevant candidates that answer the query.",
+    ))
+
 
 _settings: Settings | None = None
 

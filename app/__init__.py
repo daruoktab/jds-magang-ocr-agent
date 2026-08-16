@@ -23,6 +23,7 @@ from .graph import VisionRAGPipeline
 from .ocr import OCRExtractor, build_ocr_extractor
 from .pdf import pdf_to_images
 from .report import generate_report
+from .reranker import Qwen3VLReranker, build_reranker
 from .schemas import DocumentClassification, DocumentExtraction, OCRResult
 from .vector_store import VisionIndex
 
@@ -42,6 +43,8 @@ __all__ = [
     "OCRExtractor",
     "pdf_to_images",
     "generate_report",
+    "Qwen3VLReranker",
+    "build_reranker",
     "VisionRAGPipeline",
     "DocumentClassification",
     "DocumentExtraction",
