@@ -83,8 +83,11 @@ class VisionEmbedder:
         if not items:
             return np.zeros((0, 0), dtype=np.float32)
 
+        binary_path = self.binary
+        assert binary_path is not None
+
         cmd = [
-            self.binary,
+            binary_path,
             "-m",
             self.model_path,
             "--inputs",
@@ -213,7 +216,7 @@ class HFTransformersEmbeddings(Embeddings):
             if item.get("image"):
                 img_by_idx[idx] = Image.open(item["image"]).convert("RGB")
 
-        results: List[List[float]] = [None] * len(items)  # type: ignore[list-item]
+        results: Dict[int, List[float]] = {}
 
         # Batch item teks-only (tanpa gambar)
         txt_idx = [i for i in range(len(items)) if i not in img_by_idx]
@@ -232,7 +235,7 @@ class HFTransformersEmbeddings(Embeddings):
             for i, out in zip(idx, outs):
                 results[i] = out
 
-        return results
+        return [results[i] for i in range(len(items))]
 
     def _embed_batch(
         self, text_prompts: List[str], images: Optional[List[Any]]
