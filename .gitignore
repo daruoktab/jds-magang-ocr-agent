@@ -23,6 +23,8 @@ output/
 
 # ============ Model & data lokal (jangan commit) ============
 models/
+data/
+.zed/
 
 # ============ Input pribadi (jangan commit) ============
 input/*
