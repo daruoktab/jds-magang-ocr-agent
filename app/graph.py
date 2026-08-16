@@ -17,12 +17,11 @@ from __future__ import annotations
 import operator
 import warnings
 from functools import cached_property
-from typing import Annotated, List, Optional
+from typing import Annotated, Any, List, Optional, TypedDict, cast
 
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
-from typing_extensions import TypedDict
 
 from .agents import AGENT_REGISTRY, get_agent
 from .config import Settings, get_settings
@@ -63,7 +62,7 @@ class VisionRAGPipeline:
 
     # --- LangGraph -------------------------------------------------------
     def _build_graph(self):
-        builder = StateGraph(VisionRAGState)
+        builder = StateGraph(cast(Any, VisionRAGState))
         builder.add_node("classify", self._classify)
         builder.add_node("extract", self._extract)
         builder.add_node("retrieve", self._retrieve)
@@ -86,8 +85,8 @@ class VisionRAGPipeline:
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},
         ]
-        messages = [SystemMessage(content=CLASSIFY_SYSTEM), HumanMessage(content=content)]
-        result: DocumentClassification = self._classifier.invoke(messages)
+        messages = [SystemMessage(content=CLASSIFY_SYSTEM), HumanMessage(content=cast(Any, content))]
+        result = cast(DocumentClassification, self._classifier.invoke(messages))
         return result.doc_type
 
     def run(self, image_path: str, query: Optional[str] = None) -> dict:

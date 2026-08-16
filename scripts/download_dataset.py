@@ -54,7 +54,6 @@ def main() -> None:
                 filename=rel_path,
                 repo_type="dataset",
                 local_dir=OUTPUT_DIR,
-                local_dir_use_symlinks=False,
             )
             actual = os.path.getsize(local_path)
             total_bytes += actual

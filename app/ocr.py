@@ -8,7 +8,7 @@ TIDAK memakai `with_structured_output`.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Any, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
@@ -38,7 +38,7 @@ class OCRExtractor:
         ]
 
         # Catatan: `content` HARUS array (text + image_url), bukan string.
-        message = HumanMessage(content=content)
+        message = HumanMessage(content=cast(Any, content))
         resp = self.llm.invoke([message])
 
         # Keluaran model OCR = teks biasa.
