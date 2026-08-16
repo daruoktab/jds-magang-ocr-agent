@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import InMemoryVectorStore
 
 from .embedding import LlamaVLEmbeddings
@@ -19,7 +20,7 @@ from .embedding import LlamaVLEmbeddings
 class VisionIndex:
     """Indeks vektor untuk dokumen teks (tabel markdown, hasil ekstraksi, dll.)."""
 
-    def __init__(self, embeddings: LlamaVLEmbeddings) -> None:
+    def __init__(self, embeddings: Embeddings) -> None:
         self._embeddings = embeddings
         self._store = InMemoryVectorStore(embeddings)
 

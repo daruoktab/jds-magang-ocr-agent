@@ -21,6 +21,9 @@ logs/
 *.sqlite3
 output/
 
+# ============ Model & data lokal (jangan commit) ============
+models/
+
 # ============ Input pribadi (jangan commit) ============
 input/*
 !input/.gitkeep

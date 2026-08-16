@@ -29,12 +29,14 @@ Pola env var (setiap kategori punya var sendiri, fallback ke nilai global):
   OCR_MAX_TOKENS      default 500
 
   # 3. Embedding
-  EMBEDDING_MODE      subprocess | http   (default subprocess)
+  EMBEDDING_MODE      subprocess | http | transformers  (default subprocess)
   EMBEDDING_MODEL     default Qwen3-VL-Embedding-2B-f16.gguf
   EMBEDDING_MMPROJ    path mmproj (wajib utk gambar)
   EMBEDDING_BASE_URL  default http://localhost:8080/v1  (hanya mode http)
   EMBEDDING_API_KEY   default ""                          (hanya mode http)
   LLAMA_VL_EMBEDDING_BIN  path binary (kosong = cari di PATH)
+  EMBEDDING_HF_MODEL  path/nama model safetensors (hanya mode transformers)
+  EMBEDDING_DEVICE    auto | cuda | cpu (hanya mode transformers)
   EMBEDDING_POOLING / EMBEDDING_NORMALIZE / EMBEDDING_CONTEXT / EMBEDDING_NGL
 """
 from __future__ import annotations
@@ -125,6 +127,8 @@ class Settings:
     embedding_model: str = field(default_factory=lambda: _env("EMBEDDING_MODEL", "Qwen3-VL-Embedding-2B-f16.gguf"))
     embedding_mmproj: str | None = field(default_factory=lambda: os.environ.get("EMBEDDING_MMPROJ") or None)
     embedder_binary: str | None = field(default_factory=lambda: os.environ.get("LLAMA_VL_EMBEDDING_BIN") or None)
+    embedding_hf_model: str | None = field(default_factory=lambda: os.environ.get("EMBEDDING_HF_MODEL") or None)
+    embedding_device: str = field(default_factory=lambda: _env("EMBEDDING_DEVICE", "auto"))
     embedding_pooling: str = field(default_factory=lambda: _env("EMBEDDING_POOLING", "last"))
     embedding_normalize: int = field(default_factory=lambda: _int_env("EMBEDDING_NORMALIZE", "2"))
     embedding_context: int = field(default_factory=lambda: _int_env("EMBEDDING_CONTEXT", "4096"))

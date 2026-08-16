@@ -20,6 +20,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import requests
+import torch
+import torch.nn.functional as F
 from langchain_core.embeddings import Embeddings
 
 from .config import Settings, get_settings
@@ -137,6 +139,144 @@ class VisionEmbedder:
         return arr
 
 
+class HFTransformersEmbeddings(Embeddings):
+    """
+    Embedding via transformers (safetensors lokal, GPU/CPU) - EMBEDDING_MODE=transformers.
+
+    Dipakai untuk model Qwen3-VL-Embedding FP8/safetensors (mis. alexliap/
+    Qwen3-VL-Embedding-2B-FP8-DYNAMIC) tanpa binary llama.cpp. Model dimuat malas
+    (lazy) agar import ringan; dimuat sekali lalu di-cache.
+
+    Catatan: embedding teks<->gambar model ini kurang sejajar tanpa vLLM
+    (is_matryoshka). Untuk retrieval teks<->teks tetap valid.
+    """
+
+    DEFAULT_INSTRUCTION = "Represent the user's input."
+
+    def __init__(
+        self,
+        model_name_or_path: str,
+        device: str = "auto",
+        pooling: str = "last",
+        dtype: Any = torch.bfloat16,
+        normalize: bool = True,
+        max_length: int = 8192,
+    ) -> None:
+        self.model_name_or_path = model_name_or_path
+        self.pooling = pooling
+        self.dtype = dtype
+        self.normalize = normalize
+        self.max_length = max_length
+        self._device = (
+            "cuda"
+            if device == "auto" and torch.cuda.is_available()
+            else ("cpu" if device == "auto" else device)
+        )
+        self._model: Any = None
+        self._processor: Any = None
+
+    # --- malas: muat model saat pertama kali dipakai --------------------
+    def _ensure_loaded(self) -> None:
+        if self._model is not None:
+            return
+        from transformers import AutoModel, AutoProcessor
+
+        self._model = (
+            AutoModel.from_pretrained(self.model_name_or_path, trust_remote_code=True, dtype=self.dtype)
+            .to(self._device)
+            .eval()
+        )
+        self._processor = AutoProcessor.from_pretrained(self.model_name_or_path, trust_remote_code=True)
+        print(f"[embedding] transformers model siap di {self._device}")
+
+    # --- inti: embed daftar item ----------------------------------------
+    def _embed(self, items: List[Dict[str, str]]) -> List[List[float]]:
+        """Tiap item: {text?} dan/atau {image: path}."""
+        self._ensure_loaded()
+        from PIL import Image
+
+        text_prompts: List[str] = []
+        img_by_idx: Dict[int, Any] = {}
+        for idx, item in enumerate(items):
+            content: list = []
+            if item.get("image"):
+                content.append({"type": "image", "image": item["image"]})
+            if item.get("text"):
+                content.append({"type": "text", "text": item["text"]})
+            conv = [
+                {"role": "system", "content": [{"type": "text", "text": self.DEFAULT_INSTRUCTION}]},
+                {"role": "user", "content": content},
+            ]
+            text_prompts.append(
+                self._processor.apply_chat_template(conv, add_generation_prompt=True, tokenize=False)
+            )
+            if item.get("image"):
+                img_by_idx[idx] = Image.open(item["image"]).convert("RGB")
+
+        results: List[List[float]] = [None] * len(items)  # type: ignore[list-item]
+
+        # Batch item teks-only (tanpa gambar)
+        txt_idx = [i for i in range(len(items)) if i not in img_by_idx]
+        if txt_idx:
+            outs = self._embed_batch([text_prompts[i] for i in txt_idx], images=None)
+            for i, out in zip(txt_idx, outs):
+                results[i] = out
+
+        # Batch item dengan gambar
+        if img_by_idx:
+            idx = sorted(img_by_idx)
+            outs = self._embed_batch(
+                [text_prompts[i] for i in idx],
+                images=[img_by_idx[i] for i in idx],
+            )
+            for i, out in zip(idx, outs):
+                results[i] = out
+
+        return results
+
+    def _embed_batch(
+        self, text_prompts: List[str], images: Optional[List[Any]]
+    ) -> List[List[float]]:
+        inputs = self._processor(
+            text=text_prompts,
+            images=images,
+            padding=True,
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+        inputs = {k: v.to(self._device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            hidden = self._model(**inputs).last_hidden_state
+        mask = inputs["attention_mask"].float()
+
+        if self.pooling == "mean":
+            emb = (hidden * mask.unsqueeze(-1)).sum(1) / mask.sum(1, keepdim=True)
+        else:  # "last"
+            flipped = mask.flip(dims=[1])
+            col = mask.shape[1] - flipped.argmax(dim=1) - 1
+            row = torch.arange(hidden.shape[0], device=hidden.device)
+            emb = hidden[row, col]
+
+        if self.normalize:
+            emb = F.normalize(emb, p=2, dim=-1)
+        return emb.float().cpu().tolist()
+
+    # --- antarmuka LangChain Embeddings --------------------------------
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return self._embed([{"text": t} for t in texts])
+
+    def embed_query(self, text: str) -> List[float]:
+        return self._embed([{"text": text}])[0]
+
+    def embed_images(self, image_paths: List[str]) -> List[List[float]]:
+        return self._embed([{"image": p} for p in image_paths])
+
+    def embed_mixed(self, items: List[Dict[str, str]]) -> List[List[float]]:
+        return self._embed(items)
+
+
 class LlamaVLEmbeddings(Embeddings):
     """Adapter LangChain `Embeddings` di atas `VisionEmbedder` (subprocess)."""
 
@@ -208,8 +348,20 @@ class LlamaServerEmbeddings(Embeddings):
 
 
 def build_embeddings(settings: Optional[Settings] = None) -> Embeddings:
-    """Bangun embedding sesuai `settings.embedding_mode` (subprocess | http)."""
+    """Bangun embedding sesuai `settings.embedding_mode` (subprocess | http | transformers)."""
     settings = settings or get_settings()
+
+    if settings.embedding_mode == "transformers":
+        if not settings.embedding_hf_model:
+            raise ValueError(
+                "EMBEDDING_MODE=transformers butuh EMBEDDING_HF_MODEL "
+                "(path model atau HF id, mis. models/Qwen3-VL-Embedding-2B-FP8-DYNAMIC)"
+            )
+        return HFTransformersEmbeddings(
+            model_name_or_path=settings.embedding_hf_model,
+            device=settings.embedding_device,
+            pooling=settings.embedding_pooling,
+        )
 
     if settings.embedding_mode == "http":
         return LlamaServerEmbeddings(
