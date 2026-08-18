@@ -2,13 +2,13 @@
 Generator laporan evaluasi Markdown (tanpa ground truth).
 
 Memproses satu file gambar atau seluruh gambar dalam satu folder, menjalankan
-VLM (classify + extract) dan OCR per gambar, lalu menulis laporan Markdown:
+pipeline agentik (VLM + OCR Fusion + Validasi), lalu menulis laporan Markdown:
   - gambar dirender (path relatif agar muncul di preview)
   - hasil VLM: doc_type + extraction JSON
   - hasil OCR : teks mentah
+  - hasil validasi konsistensi dan audit refleksi
 
 Rate limit server dihormati lewat `PacedCaller` (OCR 6 req/menit, VLM 40 req/menit).
-Embedding tidak disentuh di mode ini (cukup VLM + OCR).
 """
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .agents import get_agent
 from .config import Settings
 from .graph import VisionRAGPipeline
 from .ocr import build_ocr_extractor
@@ -72,10 +71,11 @@ def render_section(
     sample_path: Path,
     vlm: dict[str, Any] | None,
     ocr: str | None,
+    validation: dict[str, Any] | None,
     errors: dict[str, str],
     output_parent: Path,
 ) -> str:
-    """Satu blok markdown per gambar: gambar + hasil VLM + hasil OCR."""
+    """Satu blok markdown per gambar: gambar + hasil VLM + hasil OCR + validasi."""
     name = sample_path.name
     rel = os.path.relpath(str(sample_path), str(output_parent)).replace("\\", "/")
     lines: list[str] = []
@@ -83,6 +83,12 @@ def render_section(
     lines.append("")
     lines.append(f"![{name}]({rel})")
     lines.append("")
+
+    if validation:
+        status_str = "Lolos" if validation.get("is_valid") else "Ada Isu"
+        lines.append(f"- **Validasi Konsistensi:** `{status_str}` (Skor: `{validation.get('score', 1.0):.2f}`, Refleksi Retry: `{validation.get('reflection_attempts', 0)}`)")
+        if validation.get("issues"):
+            lines.append("  - *Isu:* " + "; ".join(validation["issues"]))
 
     if vlm is not None:
         lines.append(f"- **VLM doc_type:** `{vlm.get('doc_type')}`")
@@ -146,28 +152,28 @@ def generate_report(
             print(f"[{i}/{len(images)}] {image_path.name} ...", flush=True)
             vlm_result: dict[str, Any] | None = None
             ocr_text: str | None = None
+            val_data: dict[str, Any] | None = None
             errors: dict[str, str] = {}
 
             if not skip_vlm:
                 try:
                     img_str = str(image_path)
-                    doc_type = vlm_caller(
-                        lambda p=img_str: pipeline.classify(p), label="classify"
+                    state = vlm_caller(
+                        lambda p=img_str: pipeline.run(p), label="pipeline_run"
                     )
-                    agent = get_agent(doc_type)
-                    extraction = vlm_caller(
-                        lambda a=agent, p=img_str: a.build(pipeline.vlm)
-                        .extract(p)
-                        .model_dump(),
-                        label="extract",
-                    )
-                    vlm_result = {"doc_type": doc_type, "extraction": extraction}
+                    final_res = state["final_result"]
+                    vlm_result = {
+                        "doc_type": final_res["doc_type"],
+                        "extraction": final_res["extraction"],
+                    }
+                    val_data = final_res.get("validation")
+                    ocr_text = final_res.get("ocr_text")
                     stats["vlm_ok"] += 1
                 except Exception as e:  # noqa: BLE001
                     errors["vlm"] = f"{type(e).__name__}: {e}"
                     stats["vlm_fail"] += 1
 
-            if ocr_extractor is not None:
+            if ocr_text is None and ocr_extractor is not None:
                 try:
                     img_str = str(image_path)
                     ocr_text = ocr_caller(
@@ -179,7 +185,7 @@ def generate_report(
                     stats["ocr_fail"] += 1
 
             f.write(
-                render_section(i, image_path, vlm_result, ocr_text, errors, output_path.parent)
+                render_section(i, image_path, vlm_result, ocr_text, val_data, errors, output_path.parent)
             )
             f.flush()
 

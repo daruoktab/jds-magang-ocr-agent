@@ -2,13 +2,13 @@
 CLI vision RAG agent.
 
 Contoh:
-    python main.py gambar.png                    # pipeline penuh -> JSON terstruktur
+    python main.py gambar.png                    # pipeline agentik penuh -> JSON terstruktur
+    python main.py dokumen.pdf                   # proses PDF multi-halaman penuh -> JSON terpadu
     python main.py gambar.png --query "..."      # + retrieval context
     python main.py gambar.png --classify-only    # hanya klasifikasi jenis
     python main.py gambar.png --ocr              # OCR teks terstruktur (model OCR)
-    python main.py dokumen.pdf --pdf             # konversi PDF -> gambar per halaman
+    python main.py dokumen.pdf --pdf             # hanya konversi PDF -> gambar per halaman
     python main.py folder_gambar --report        # laporan markdown SEMUA gambar di folder
-    python main.py gambar.png --report           # laporan markdown SATU gambar
     python main.py --list-agents                 # daftar jenis dokumen
 """
 from __future__ import annotations
@@ -22,23 +22,27 @@ from app.agents import AGENT_REGISTRY
 from app.config import get_settings
 from app.graph import VisionRAGPipeline
 from app.ocr import build_ocr_extractor
-from app.pdf import pdf_to_images
+from app.pdf import pdf_to_images, process_multipage_pdf
 from app.report import generate_report
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vision-rag",
-        description="Vision RAG agent: gambar -> JSON terstruktur + retrieval.",
+        description="Vision RAG agent: gambar/PDF -> JSON terstruktur + validasi + retrieval.",
     )
-    p.add_argument("image", nargs="?", help="Path file gambar ATAU folder gambar")
+    p.add_argument("image", nargs="?", help="Path file gambar/PDF ATAU folder gambar")
     p.add_argument("--query", default=None, help="Query retrieval opsional")
+    p.add_argument("--retries", type=int, default=2, help="Maksimal self-reflection retry (default 2)")
     p.add_argument("--list-agents", action="store_true", help="Daftar jenis dokumen yang didukung")
     p.add_argument("--classify-only", action="store_true", help="Hanya klasifikasi jenis dokumen")
     p.add_argument("--ocr", action="store_true", help="OCR teks terstruktur (model OCR tuned)")
-    p.add_argument("--pdf", action="store_true", help="Konversi PDF menjadi gambar per-halaman")
+    p.add_argument("--pdf", action="store_true", help="Hanya konversi PDF menjadi gambar per-halaman")
     p.add_argument("--dpi", type=int, default=200, help="DPI untuk konversi PDF (default 200)")
     p.add_argument("--out-dir", default="output", help="Direktori output (default: output/)")
+
+    # Ingestion RAG opsional
+    p.add_argument("--ingest", default=None, help="Path file JSON/teks untuk diindeks ke vector store sebelum query")
 
     # Mode laporan markdown (file atau folder gambar)
     p.add_argument("--report", action="store_true",
@@ -79,17 +83,20 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = get_settings()
+        input_path = Path(args.image)
 
+        # 1. Mode Konversi PDF saja
         if args.pdf:
-            images = pdf_to_images(args.image, output_dir=args.out_dir, dpi=args.dpi)
+            images = pdf_to_images(input_path, output_dir=args.out_dir, dpi=args.dpi)
             for img in images:
                 print(img)
             return 0
 
+        # 2. Mode Laporan Evaluasi
         if args.report:
             out_file = Path(args.out_dir) / "report.md"
             generate_report(
-                input_path=args.image,
+                input_path=input_path,
                 output_path=out_file,
                 settings=settings,
                 skip_vlm=args.skip_vlm,
@@ -100,30 +107,67 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
+        # 3. Mode OCR langsung
         if args.ocr:
-            out = _output_json(json.dumps(build_ocr_extractor(settings).extract(args.image).model_dump(), indent=2), args.out_dir, args.image, sys.stderr)
+            out = _output_json(
+                json.dumps(build_ocr_extractor(settings).extract(str(input_path)).model_dump(), indent=2),
+                args.out_dir,
+                str(input_path),
+                sys.stderr,
+            )
             print(out)
             return 0
 
-        pipeline = VisionRAGPipeline(settings)
+        pipeline = VisionRAGPipeline(settings, max_retries=args.retries)
 
+        # Opsional: Ingest pengetahuan ke vector store
+        if args.ingest:
+            ingest_count = pipeline.index.ingest_knowledge(args.ingest)
+            print(f"[RAG] Berhasil mengindeks {ingest_count} item dari {args.ingest}", file=sys.stderr)
+
+        # 4. Mode Klasifikasi saja
         if args.classify_only:
-            out = _output_json(json.dumps({"doc_type": pipeline.classify(args.image)}, indent=2), args.out_dir, args.image, sys.stderr)
+            out = _output_json(
+                json.dumps({"doc_type": pipeline.classify(str(input_path))}, indent=2),
+                args.out_dir,
+                str(input_path),
+                sys.stderr,
+            )
             print(out)
             return 0
 
-        state = pipeline.run(args.image, query=args.query)
-        result = json.dumps(state["final_result"], indent=2)
+        # 5. Dokumen PDF Multi-halaman
+        if input_path.suffix.lower() == ".pdf":
+            multi_res = process_multipage_pdf(
+                pdf_path=input_path,
+                pipeline=pipeline,
+                output_dir=args.out_dir,
+                dpi=args.dpi,
+                query=args.query,
+            )
+            result = json.dumps(multi_res.model_dump(), indent=2, ensure_ascii=False)
+            if args.out_dir:
+                out_file = Path(args.out_dir) / f"{input_path.stem}.json"
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                out_file.write_text(result, encoding="utf-8")
+                print(result)
+                print(f"\n-> {out_file}", file=sys.stderr)
+            else:
+                print(result)
+            return 0
+
+        # 6. Gambar Tunggal (Pipeline Agentik Lengkap)
+        state = pipeline.run(str(input_path), query=args.query, max_retries=args.retries)
+        result = json.dumps(state["final_result"], indent=2, ensure_ascii=False)
         if args.out_dir:
-            out_file = Path(args.out_dir) / f"{Path(args.image).stem}.json"
+            out_file = Path(args.out_dir) / f"{input_path.stem}.json"
             out_file.parent.mkdir(parents=True, exist_ok=True)
             out_file.write_text(result, encoding="utf-8")
             print(result)
             print(f"\n-> {out_file}", file=sys.stderr)
-        elif args.out_json:
-            raise SystemExit(result)
         else:
             print(result)
+
     except Exception as e:  # noqa: BLE001
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

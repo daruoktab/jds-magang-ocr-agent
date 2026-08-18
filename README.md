@@ -1,48 +1,44 @@
-# jds-magang — Vision RAG Agent
+# jds-magang — Agentic Vision OCR RAG
 
-Agent **RAG vision** yang menggabungkan **vision embedding multimodal**, **VLM agent**, dan **OCR terstruktur** untuk mengekstrak dokumen (gambar/PDF) menjadi **JSON terstruktur** yang valid.
+Agent **Vision RAG Agentik** yang menggabungkan **VLM reasoning (`qwen-35b-vision`)**, **High-Resolution OCR (`ocr-lighton`)**, **Multimodal Embedding & Two-Stage Reranking (`Qwen3-VL-Embedding` + `Qwen3-VL-Reranker`)**, serta **Agentic Self-Correction & Reflection Loop** di LangGraph untuk mengekstrak dokumen (gambar tunggal / multi-page PDF) menjadi **JSON terstruktur** yang presisi dan tervalidasi.
 
-- **VLM** : `qwen-35b-vision` (ekstraksi bebas + agent, structured output)
-- **OCR** : `ocr-lighton` (VLM kecil tuned, output teks terstruktur)
-- **Embedding** : Qwen3-VL-Embedding via `llama-vl-embedding` (llama.cpp, teks+gambar satu ruang vektor)
-- **Framework** : LangChain + LangGraph + Deep Agents + Pydantic
+- **VLM** : `qwen-35b-vision` (ekstraksi bebas + reasoning agent, structured output)
+- **OCR** : `ocr-lighton` (VLM kecil tuned untuk auxiliary text & OCR grounding)
+- **Embedding** : `Qwen3-VL-Embedding-2B` via `llama-vl-embedding` / transformers / HTTP
+- **Reranker** : `Qwen3-VL-Reranker-2B` (Two-Stage Retrieval untuk refine presisi lintas modalitas)
+- **Framework** : LangChain + LangGraph + Deep Agents + Pydantic v2 + PyMuPDF
 
 ---
 
-## 🏗️ Arsitektur
+## 🏗️ Arsitektur Agentic Pipeline
 
 ```mermaid
 flowchart TD
-    subgraph CONFIG[".env / Settings"]
-        E1[LLM_BASE_URL + LLM_API_KEY]
-        E2[VLM_MODEL=qwen-35b-vision]
-        E3[OCR_MODEL=ocr-lighton]
-        E4["EMBEDDING_MODE=subprocess|http"]
+    subgraph INGESTION["1. Preprocessing & OCR Fusion"]
+        IMG["Gambar / PDF Multi-halaman"] --> PRE["preprocess: EXIF auto-rotate & contrast"]
+        PRE --> OCR["ocr: ocr-lighton auxiliary text"]
     end
 
-    subgraph MODEL["3 kategori model (independen)"]
-        V[VLM normal: ekstraksi + agent]
-        O[OCR: teks terstruktur]
-        M[Embedding: multimodal teks+gambar]
+    subgraph AGENTIC_GRAPH["2. LangGraph Agentic Extraction & Reflection"]
+        PRE --> CLS["classify: doc_type detection"]
+        CLS --> EXT["extract: VLM with OCR Fusion"]
+        OCR --> EXT
+        EXT --> VAL{"validate: math & schema"}
+        VAL -- "Inkonsisten (retry < max)" --> REF["reflect: formulate critique"]
+        REF --> EXT
+        VAL -- "Valid / Max Retry" --> RET
     end
 
-    subgraph PIPELINE["VisionRAGPipeline (LangGraph)"]
-        C[classify] --> X[extract]
-        X --> R[retrieve]
-        R --> B[build_result]
+    subgraph RETRIEVAL["3. Two-Stage Multimodal RAG"]
+        RET["1st Stage: Vector Embedding Search (k=12)"] --> RRK["2nd Stage: Qwen3-VL-Reranker (top_k=4)"]
+        RRK --> BUILD["build_result: VisionRAGResult"]
     end
 
-    E2 --> V
-    E3 --> O
-    E4 --> M
-    V --> PIPELINE
-    M --> R
-    PIPELINE --> RES["VisionRAGResult → JSON"]
-    O --> OCR2["OCRResult → teks"]
+    subgraph OUTPUT["4. Result & Aggregation"]
+        BUILD --> PDF_MERGE["Multi-Page Aggregator (bila PDF)"]
+        PDF_MERGE --> JSON_OUT["Final JSON + Validation Audit"]
+    end
 ```
-
-- Setiap kategori model punya endpoint & nama sendiri, fallback ke `LLM_BASE_URL`/`LLM_API_KEY` global bila kosong → mudah menukar lokal (LM Studio) / server.
-- `chat_template_kwargs.enable_thinking=false` dikirim otomatis ke VLM (lewat `extra_body`) agar tidak membuang token untuk thinking. **OCR tidak** (tidak perlu).
 
 ---
 
@@ -50,29 +46,32 @@ flowchart TD
 
 ```
 jds-magang/
-├── app/                        # Kode utama
-│   ├── config.py               #   Settings: VLM/OCR/embedding + loader .env
-│   ├── llm.py                  #   build_vlm / build_ocr / image_data_uri
-│   ├── ocr.py                  #   OCRExtractor (chat biasa, output teks)
-│   ├── extractor.py            #   VisionExtractor (with_structured_output → Pydantic)
+├── app/                        # Modul Utama
+│   ├── config.py               #   Settings: VLM, OCR, embedding, reranker + .env loader
+│   ├── preprocess.py           #   Auto-orientasi EXIF & penyesuaian kontras dokumen
+│   ├── llm.py                  #   Builder ChatOpenAI (VLM & OCR) + base64 image data URI
+│   ├── ocr.py                  #   OCRExtractor (ocr-lighton -> teks mentah)
+│   ├── validation.py           #   Validasi konsistensi matematika & kelengkapan data
+│   ├── schemas.py              #   Pydantic Schemas (DocumentExtraction, ValidationSummary, MultiPage)
+│   ├── prompts.py              #   System & user prompts + OCR fusion & reflection builder
+│   ├── extractor.py            #   VisionExtractor (structured output + OCR context)
 │   ├── agents.py               #   ExtractionAgent + AGENT_REGISTRY (9 jenis dokumen)
-│   ├── embedding.py            #   VisionEmbedder + LlamaVLEmbeddings / LlamaServerEmbeddings
-│   ├── vector_store.py         #   VisionIndex (InMemoryVectorStore, RAG)
-│   ├── graph.py                #   VisionRAGPipeline (LangGraph: classify→extract→retrieve→result)
-│   ├── deep_agent.py           #   build_deep_agent (create_deep_agent + subagents)
-│   ├── pdf.py                  #   pdf_to_images (pymupdf, 200 DPI, <nama>_page<N>.jpg)
-│   ├── report.py               #   generate_report (mode --report → markdown)
-│   ├── schemas.py              #   Pydantic: DocumentClassification/Extraction, OCRResult, VisionRAGResult
-│   └── prompts.py              #   Prompt general + per jenis dokumen
+│   ├── embedding.py            #   VisionEmbedder + LlamaVLEmbeddings / transformers adapter
+│   ├── reranker.py             #   Qwen3VLReranker multimodal reranking & scoring
+│   ├── vector_store.py         #   VisionIndex (Two-Stage Retrieval + persistensi lokal)
+│   ├── graph.py                #   VisionRAGPipeline (LangGraph Agentic Self-Reflection Loop)
+│   ├── pdf.py                  #   Konversi PDF & agregasi dokumen multi-halaman
+│   ├── deep_agent.py           #   Harness Deep Agents (create_deep_agent + 4 subagents)
+│   └── report.py               #   Markdown report generator (VLM + OCR + Validasi)
 ├── scripts/
-│   ├── download_dataset.py     #   Download dataset FiftyOne → input/datatest
-│   ├── fix_dataset_paths.py    #   Perbaiki filepath dataset (jika media dipindah)
-│   └── run_eval_report.py      #   Evaluasi N gambar acak → laporan Markdown
-├── main.py                     # CLI
+│   ├── download_dataset.py     #   Download sampel dataset FiftyOne -> input/datatest
+│   ├── fix_dataset_paths.py    #   Perbaiki filepath dataset bila media dipindah
+│   └── run_eval_report.py      #   Evaluasi kuantitatif (CER, WER, Recall) -> Markdown
+├── main.py                     # CLI Utama
 ├── pyproject.toml / uv.lock    # Dependency (uv)
-├── env.template                # Template konfigurasi → salin ke .env
-├── input/                      # Dataset (git-ignored) + input pribadi
-└── output/                     # Laporan evaluasi (git-ignored)
+├── env.template                # Template konfigurasi .env
+├── input/                      # Dataset & dokumen input
+└── output/                     # Hasil ekstraksi JSON & laporan evaluasi
 ```
 
 ---
@@ -80,103 +79,65 @@ jds-magang/
 ## ⚙️ Setup
 
 ```bash
-# 1. Environment (Python 3.12)
+# 1. Buat environment virtual (Python 3.12)
 uv venv --prompt magang-jds .venv
-uv pip install --python .venv deepagents langchain langgraph langchain-openai pydantic numpy Pillow pymupdf requests fiftyone
+uv pip install --python .venv deepagents langchain langgraph langchain-openai pydantic numpy Pillow pymupdf requests fiftyone huggingface-hub
 
-# 2. Konfigurasi
+# 2. Konfigurasi .env
 cp env.template .env
-#    → isi LLM_API_KEY (satu-satunya yang perlu diisi untuk VLM + OCR)
+#    -> Isi LLM_API_KEY di .env
 
-# 3. (Opsional) Dataset evaluasi
+# 3. (Opsional) Download dataset evaluasi
 uv run --python .venv python scripts/download_dataset.py
 ```
-
-### Variabel `.env`
-
-| Variabel | Default | Keterangan |
-|---|---|---|
-| `LLM_BASE_URL` | `http://localhost:1234/v1` | Endpoint global (fallback VLM & OCR) |
-| `LLM_API_KEY` | — | **Wajib diisi** |
-| `VLM_MODEL` | `qwen-35b-vision` | VLM ekstraksi + agent |
-| `VLM_ENABLE_THINKING` | `false` | Kirim `chat_template_kwargs.enable_thinking` |
-| `OCR_MODEL` | `ocr-lighton` | OCR terstruktur |
-| `OCR_MAX_TOKENS` | `500` | Max token OCR |
-| `EMBEDDING_MODE` | `subprocess` | `subprocess` (binary lokal) / `http` (llama-server) |
-| `EMBEDDING_ENABLED` | `true` | `false` = matikan retrieval (cukup VLM + OCR) |
-| `EMBEDDING_MODEL` | `Qwen3-VL-Embedding-2B-f16.gguf` | GGUF embedding |
-| `EMBEDDING_MMPROJ` | — | Wajib untuk embedding gambar |
-| `LLAMA_VL_EMBEDDING_BIN` | (PATH) | Binary `llama-vl-embedding` |
 
 ---
 
 ## 🚀 Cara Pakai
 
 ```bash
-# Ekstraksi dokumen penuh (classify + extract + retrieve) → JSON
+# 1. Ekstraksi gambar tunggal (VLM + OCR Fusion + Validasi -> JSON)
 uv run --python .venv python main.py gambar.png
 
-# Hanya klasifikasi jenis dokumen (tanpa embedding)
-uv run --python .venv python main.py gambar.png --classify-only
+# 2. Proses PDF multi-halaman penuh (otomatis diekstrak per halaman & diagregasikan)
+uv run --python .venv python main.py dokumen.pdf
 
-# OCR terstruktur (ocr-lighton)
+# 3. Ekstraksi dengan Two-Stage RAG context
+uv run --python .venv python main.py gambar.png --query "cari nomor rekening dan nama pemilik"
+
+# 4. Ingest pengetahuan katalog/aturan bisnis ke vector store sebelum query
+uv run --python .venv python main.py gambar.png --ingest rules.json --query "kode SKU"
+
+# 5. OCR terstruktur saja (ocr-lighton)
 uv run --python .venv python main.py gambar.png --ocr
 
-# Konversi PDF → gambar per halaman (<nama>_page<N>.jpg, 200 DPI)
+# 6. Hanya klasifikasi jenis dokumen
+uv run --python .venv python main.py gambar.png --classify-only
+
+# 7. Hanya konversi PDF menjadi gambar per-halaman
 uv run --python .venv python main.py dokumen.pdf --pdf
 
-# Laporan Markdown: proses SEMUA gambar di folder → output/report.md
+# 8. Laporan evaluasi Markdown untuk seluruh gambar di folder
 uv run --python .venv python main.py folder_gambar --report
 
-# Laporan Markdown: satu gambar saja
-uv run --python .venv python main.py gambar.png --report
-
-# (report) lewati VLM / OCR / atur pacing rate limit
-uv run --python .venv python main.py folder_gambar --report --skip-vlm
-uv run --python .venv python main.py folder_gambar --report --ocr-interval 10 --vlm-interval 2
-
-# Daftar jenis dokumen yang didukung
+# 9. Daftar jenis dokumen terdaftar
 uv run --python .venv python main.py --list-agents
 ```
 
-### Evaluasi 100 gambar acak → laporan Markdown
+---
+
+## 📊 Evaluasi Kuantitatif (CER, WER, Word Recall)
+
+Jalankan evaluasi komparatif kuantitatif terhadap dataset FiftyOne:
 
 ```bash
+# Evaluasi 100 gambar acak dengan metrik CER, WER, & Recall
 uv run --python .venv python scripts/run_eval_report.py --samples 100
-# → output/eval_report.md (gambar + ground truth + VLM JSON + OCR text)
 
-# Tes cepat (3 gambar, pacing dipercepat)
+# Tes cepat (3 gambar dengan pacing cepat)
 uv run --python .venv python scripts/run_eval_report.py --samples 3 --fast
 ```
 
-Laporan menampilkan gambar (path relatif agar render), ground truth kata-kata dari label dataset (`words`), hasil VLM (doc_type + extraction JSON), dan teks OCR — untuk membandingkan hasil pipeline vs gambar asli.
-
----
-
-## 🧠 Alur Pipeline
-
-```mermaid
-flowchart LR
-    A[Gambar/PDF] --> B["classify: VLM → doc_type"]
-    B --> C["extract: VLM → DocumentExtraction"]
-    C --> D["retrieve: embedding → konteks relevan"]
-    D --> E[build_result: VisionRAGResult JSON]
-    A -.-> O["OCR: ocr-lighton → OCRResult teks"]
-```
-
-- **classify** : VLM klasifikasi jenis dokumen (structured output).
-- **extract** : `ExtractionAgent` terpilih (sesuai doc_type) mengekstrak struktur bebas → validasi Pydantic.
-- **retrieve** : query di-embed (Qwen3-VL) → cari di indeks vektor. *(Opsional; butuh binary embedding / mode http.)*
-- **OCR** : jalur terpisah, output teks mentah terstruktur (tanpa thinking, max_tokens 500).
-
-Alternatif agentic: `build_deep_agent()` membungkus semua kemampuan (extract / OCR / search) sebagai tools + subagents (`document-extractor`, `ocr`, `retriever`) di dalam `create_deep_agent`.
-
----
-
-## 🚨 Catatan Penting
-
-- **Rate limit server**: OCR `ocr-lighton` = **6 req/menit**, 8.000 token/menit; VLM = 40 req/menit, 5 concurrent. Script evaluasi sudah memberi pacing + retry otomatis.
-- **Embedding opsional**: matikan dengan `EMBEDDING_ENABLED=false` (cukup VLM+OCR). Kalau binary belum ada, pipeline **otomatis melewati retrieval** dengan warning (tidak crash) — mode `--report`, `--ocr`, `--classify-only` tidak menyentuh embedding sama sekali.
-- **`with_structured_output`** (VLM) membutuhkan dukungan function calling / JSON schema di sisi server (sudah terverifikasi jalan dengan `qwen-35b-vision`).
-- **Dataset**: `input/datatest` (~246MB) TIDAK di-track git (gitignored). Dapatkan lewat `python scripts/download_dataset.py`, atau salin manual antar mesin.
-- **Jaringan**: server `10.7.1.21` hanya bisa diakses dari jaringan server (WiFi/LAN internal). Kalau timeout, cek konektivitas dulu.
+Laporan di `output/eval_report.md` menghasilkan:
+- **Tabel Ringkasan Metrik**: Rata-rata Character Error Rate (CER), Word Error Rate (WER), JSON Word Recall, dan Skor Validasi Konsistensi.
+- **Audit Detail Per-Sampel**: Render gambar, Ground Truth kata-kata, hasil VLM JSON, teks OCR, dan log perbaikan refleksi bila terjadi ketidaksesuaian matematika.

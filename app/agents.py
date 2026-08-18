@@ -47,8 +47,18 @@ class ExtractionAgent:
             system_prompt=self.system_prompt,
         )
 
-    def run(self, image_path: str, llm: BaseChatModel) -> BaseModel:
-        return self.build(llm).extract(image_path)
+    def run(
+        self,
+        image_path: str,
+        llm: BaseChatModel,
+        *,
+        ocr_text: str | None = None,
+        critique: str | None = None,
+    ) -> BaseModel:
+        return self.build(llm).extract(
+            image_path, ocr_text=ocr_text, critique=critique
+        )
+
 
 
 AGENT_REGISTRY: dict[str, ExtractionAgent] = {

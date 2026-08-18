@@ -52,11 +52,42 @@ class RetrievedChunk(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict, description="Metadata dokumen")
 
 
+class ValidationSummary(BaseModel):
+    """Ringkasan hasil validasi konsistensi & audit agentic reflection."""
+
+    is_valid: bool = Field(default=True, description="Apakah ekstraksi lolos validasi konsistensi")
+    score: float = Field(default=1.0, description="Skor validasi kualitas (0.0 - 1.0)")
+    issues: list[str] = Field(default_factory=list, description="Daftar kejanggalan/isu yang terdeteksi")
+    reflection_attempts: int = Field(default=0, description="Berapa kali VLM melakukan self-reflection retry")
+
+
 class VisionRAGResult(BaseModel):
-    """Hasil akhir vision RAG: klasifikasi + ekstraksi + konteks retrieval."""
+    """Hasil akhir vision RAG: klasifikasi + ekstraksi + konteks retrieval + validasi."""
 
     doc_type: str = Field(description="Jenis dokumen yang terdeteksi")
     extraction: DocumentExtraction = Field(description="Hasil ekstraksi terstruktur")
+    ocr_text: str | None = Field(default=None, description="Teks mentah hasil auxiliary OCR")
     context: list[RetrievedChunk] = Field(
         default_factory=list, description="Konteks relevan hasil retrieval"
     )
+    validation: ValidationSummary = Field(
+        default_factory=ValidationSummary, description="Hasil validasi dan audit trail refleksi"
+    )
+
+
+class MultiPageExtractionResult(BaseModel):
+    """Hasil ekstraksi gabungan untuk dokumen PDF multi-halaman."""
+
+    filename: str = Field(description="Nama file dokumen asli")
+    total_pages: int = Field(description="Total halaman yang diproses")
+    doc_type: str = Field(description="Jenis dokumen utama terdeteksi")
+    consolidated_data: dict[str, Any] = Field(
+        description="Hasil gabungan data terstruktur seluruh halaman"
+    )
+    pages: list[VisionRAGResult] = Field(
+        default_factory=list, description="Hasil ekstraksi per-halaman secara rinci"
+    )
+    validation: ValidationSummary = Field(
+        default_factory=ValidationSummary, description="Hasil validasi gabungan"
+    )
+

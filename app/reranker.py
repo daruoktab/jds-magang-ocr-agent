@@ -95,13 +95,44 @@ class Qwen3VLReranker:
         """Skor relevansi (query, dokumen-gambar) -> [0,1]."""
         return self.score_many(query, [document_images])[0]
 
+    def score_text(self, query: str, text_doc: str) -> float:
+        """Skor relevansi untuk dokumen teks murni."""
+        self._ensure_loaded()
+        return self._score_pair(query=query, pages=None, text_doc=text_doc)
+
     def score_many(self, query: str, documents: list[list[Any]]) -> list[float]:
         """Skor untuk banyak dokumen (tiap dokumen = list gambar halaman)."""
         self._ensure_loaded()
         scores = []
         for pages in documents:
-            scores.append(self._score_pair(query, pages))
+            scores.append(self._score_pair(query, pages=pages))
         return scores
+
+    def rerank_documents(
+        self,
+        query: str,
+        documents: list[Any],
+        top_k: int = 4,
+    ) -> list[Any]:
+        """
+        Rerank daftar LangChain Document berdasarkan relevansi skor Qwen3-VL-Reranker.
+        """
+        if not documents:
+            return []
+        self._ensure_loaded()
+
+        scored_docs: list[tuple[float, Any]] = []
+        for doc in documents:
+            content = getattr(doc, "page_content", str(doc))
+            img_path = getattr(doc, "metadata", {}).get("image_path") if hasattr(doc, "metadata") else None
+            pages = [img_path] if img_path and os.path.exists(img_path) else None
+
+            score = self._score_pair(query=query, pages=pages, text_doc=content)
+            scored_docs.append((score, doc))
+
+        # Urutkan descending berdasarkan skor
+        scored_docs.sort(key=lambda x: x[0], reverse=True)
+        return [doc for _, doc in scored_docs[:top_k]]
 
     def process(self, payload: dict[str, Any]) -> list[float]:
         """API kompatibel pola resmi: {instruction, query:{text?,image?}, documents:[{image?}...]}."""
@@ -112,24 +143,30 @@ class Qwen3VLReranker:
         for doc in payload.get("documents", []):
             images = doc.get("image", [])
             images = [images] if isinstance(images, str) else images
-            scores.append(self._score_pair(q_text, images, instruction=instruction))
+            text_doc = doc.get("text", "")
+            scores.append(self._score_pair(q_text, pages=images or None, text_doc=text_doc, instruction=instruction))
         return scores
 
     # --- inti scoring ----------------------------------------------------
     def _score_pair(
-        self, query: str, pages: list[Any], instruction: str | None = None
+        self,
+        query: str,
+        pages: list[Any] | None = None,
+        text_doc: str | None = None,
+        instruction: str | None = None,
     ) -> float:
         from PIL import Image  # noqa: F401
 
         content: list[dict[str, Any]] = [
             {"type": "text", "text": f"<Instruct>: {instruction or self.instruction}"},
             {"type": "text", "text": f"<Query>: {query}"},
-            {"type": "text", "text": "\n<Document>: "},
+            {"type": "text", "text": f"\n<Document>: {text_doc or ''}"},
         ]
-        content += [
-            {"type": "image", "image": p, "min_pixels": MIN_PIXELS, "max_pixels": MAX_PIXELS}
-            for p in pages
-        ]
+        if pages:
+            content += [
+                {"type": "image", "image": p, "min_pixels": MIN_PIXELS, "max_pixels": MAX_PIXELS}
+                for p in pages
+            ]
         conv = [{"role": "system", "content": [{"type": "text", "text": RERANKER_SYSTEM}]},
                 {"role": "user", "content": content}]
 
@@ -140,6 +177,7 @@ class Qwen3VLReranker:
         with torch.no_grad():
             hidden = self._model(**inputs).last_hidden_state[:, -1]
         return float(torch.sigmoid(self._score_linear(hidden)).item())
+
 
 
 def build_reranker(settings: Settings | None = None) -> Qwen3VLReranker | None:

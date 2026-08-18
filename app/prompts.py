@@ -166,3 +166,33 @@ tidak terlihat.
 Output HANYA JSON:
 {{"doc_type": "screenshot", "data": {<struktur bebas>}}}
 """
+
+
+def build_extraction_user_prompt(
+    base_prompt: str,
+    ocr_text: str | None = None,
+    critique: str | None = None,
+) -> str:
+    """
+    Gabungkan base prompt jenis dokumen dengan OCR auxiliary context dan
+    catatan perbaikan refleksi bila tersedia.
+    """
+    parts = [base_prompt.strip()]
+
+    if ocr_text and ocr_text.strip():
+        parts.append(
+            "\n--- AUXILIARY OCR TEXT (REFERENSI TEKS TAMBAHAN) ---\n"
+            "Teks mentah berikut diekstrak dari gambar menggunakan model OCR beresolusi tinggi. "
+            "Gunakan teks ini untuk membantu memastikan ejaan kata, angka nominal, atau kode yang kecil/pudar, "
+            "tetapi gambar dokumen tetaplah sumber kebenaran visual utama:\n"
+            f"```\n{ocr_text.strip()}\n```"
+        )
+
+    if critique and critique.strip():
+        parts.append(
+            "\n--- CATATAN PERBAIKAN REFLEKSI (SELF-REFLECTION FEEDBACK) ---\n"
+            f"{critique.strip()}"
+        )
+
+    return "\n\n".join(parts)
+

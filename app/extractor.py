@@ -14,12 +14,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from .llm import image_data_uri
-from .prompts import GENERAL_USER_PROMPT, SYSTEM_EXTRACTOR
+from .prompts import GENERAL_USER_PROMPT, SYSTEM_EXTRACTOR, build_extraction_user_prompt
 from .schemas import DocumentExtraction
 
 
 class VisionExtractor:
-    """Ekstraktor generik: satu model + satu schema + satu prompt."""
+    """Ekstraktor generik: satu model + satu schema + satu prompt (dengan opsi OCR fusion & critique)."""
 
     def __init__(
         self,
@@ -36,15 +36,30 @@ class VisionExtractor:
         # agar structured output bekerja (qwen3.5 mendukung tool calling).
         self._structured = llm.with_structured_output(schema)
 
-    def extract(self, image_path: str) -> BaseModel:
+    def extract(
+        self,
+        image_path: str,
+        *,
+        ocr_text: str | None = None,
+        critique: str | None = None,
+    ) -> BaseModel:
         """
         Ekstrak informasi dari gambar menjadi instance Pydantic.
+
+        Args:
+            image_path: Path ke file gambar dokumen.
+            ocr_text: Teks OCR opsional untuk membantu referensi VLM (fusion).
+            critique: Catatan validasi / kejanggalan sebelumnya untuk refleksi mandiri.
 
         Raises:
             pydantic.ValidationError: jika output model gagal divalidasi.
         """
+        effective_user_prompt = build_extraction_user_prompt(
+            self.user_prompt, ocr_text=ocr_text, critique=critique
+        )
+
         content: list[dict] = [
-            {"type": "text", "text": self.user_prompt},
+            {"type": "text", "text": effective_user_prompt},
             {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},
         ]
 
@@ -54,3 +69,4 @@ class VisionExtractor:
         messages.append(HumanMessage(content=cast(Any, content)))
 
         return cast(BaseModel, self._structured.invoke(messages))
+
