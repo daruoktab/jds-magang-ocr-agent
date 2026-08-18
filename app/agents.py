@@ -8,15 +8,12 @@ model dan schema Pydantic sendiri. Menambah jenis baru = tambah satu entri di
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Type
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
 
 from .extractor import VisionExtractor
 from .prompts import (
-    GENERAL_USER_PROMPT,
-    SYSTEM_EXTRACTOR,
     _PROMPT_BANK_STATEMENT,
     _PROMPT_BUSINESS_CARD,
     _PROMPT_FORM,
@@ -25,6 +22,8 @@ from .prompts import (
     _PROMPT_RECEIPT,
     _PROMPT_SCREENSHOT,
     _PROMPT_TABLE,
+    GENERAL_USER_PROMPT,
+    SYSTEM_EXTRACTOR,
 )
 from .schemas import DocumentExtraction
 
@@ -36,8 +35,8 @@ class ExtractionAgent:
     name: str
     description: str
     user_prompt: str
-    model: Optional[str] = None
-    schema: Type[BaseModel] = DocumentExtraction
+    model: str | None = None
+    schema: type[BaseModel] = DocumentExtraction
     system_prompt: str = SYSTEM_EXTRACTOR
 
     def build(self, llm: BaseChatModel) -> VisionExtractor:
@@ -52,7 +51,7 @@ class ExtractionAgent:
         return self.build(llm).extract(image_path)
 
 
-AGENT_REGISTRY: Dict[str, ExtractionAgent] = {
+AGENT_REGISTRY: dict[str, ExtractionAgent] = {
     "receipt": ExtractionAgent(
         name="receipt",
         description="Struk belanja / nota kasir (daftar item + total bayar)",

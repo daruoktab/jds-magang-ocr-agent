@@ -15,9 +15,10 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from .agents import get_agent
 from .config import Settings
@@ -53,7 +54,7 @@ class PacedCaller:
         raise RuntimeError(f"{label} gagal setelah {self.max_retries} percobaan")
 
 
-def discover_images(path: str | Path) -> List[Path]:
+def discover_images(path: str | Path) -> list[Path]:
     """Kumpulkan gambar dari satu file atau seluruh isi folder (terurut)."""
     p = Path(path)
     if p.is_file():
@@ -69,15 +70,15 @@ def discover_images(path: str | Path) -> List[Path]:
 def render_section(
     idx: int,
     sample_path: Path,
-    vlm: Optional[Dict[str, Any]],
-    ocr: Optional[str],
-    errors: Dict[str, str],
+    vlm: dict[str, Any] | None,
+    ocr: str | None,
+    errors: dict[str, str],
     output_parent: Path,
 ) -> str:
     """Satu blok markdown per gambar: gambar + hasil VLM + hasil OCR."""
     name = sample_path.name
     rel = os.path.relpath(str(sample_path), str(output_parent)).replace("\\", "/")
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append(f"## Sample {idx:03d} — {name}")
     lines.append("")
     lines.append(f"![{name}]({rel})")
@@ -116,7 +117,7 @@ def generate_report(
     vlm_interval: float = 2.0,
     ocr_interval: float = 10.0,
     max_retries: int = 3,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     """Jalankan pipeline pada semua gambar lalu tulis laporan Markdown."""
     images = discover_images(input_path)
     if not images:
@@ -134,7 +135,7 @@ def generate_report(
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("# Laporan Evaluasi Vision RAG\n\n")
-        f.write(f"- Tanggal: {datetime.now().isoformat(timespec='seconds')}\n")
+        f.write(f"- Tanggal: {datetime.now(UTC).isoformat(timespec='seconds')}\n")
         f.write(f"- Input: {input_path} ({len(images)} gambar)\n")
         f.write(f"- VLM: {settings.vlm_model} @ {settings.vlm_base_url}\n")
         f.write(f"- OCR: {settings.ocr_model} @ {settings.ocr_base_url}\n")
@@ -143,19 +144,20 @@ def generate_report(
 
         for i, image_path in enumerate(images, start=1):
             print(f"[{i}/{len(images)}] {image_path.name} ...", flush=True)
-            vlm_result: Optional[Dict[str, Any]] = None
-            ocr_text: Optional[str] = None
-            errors: Dict[str, str] = {}
+            vlm_result: dict[str, Any] | None = None
+            ocr_text: str | None = None
+            errors: dict[str, str] = {}
 
             if not skip_vlm:
                 try:
+                    img_str = str(image_path)
                     doc_type = vlm_caller(
-                        lambda: pipeline.classify(str(image_path)), label="classify"
+                        lambda p=img_str: pipeline.classify(p), label="classify"
                     )
                     agent = get_agent(doc_type)
                     extraction = vlm_caller(
-                        lambda: agent.build(pipeline.vlm)
-                        .extract(str(image_path))
+                        lambda a=agent, p=img_str: a.build(pipeline.vlm)
+                        .extract(p)
                         .model_dump(),
                         label="extract",
                     )
@@ -167,8 +169,9 @@ def generate_report(
 
             if ocr_extractor is not None:
                 try:
+                    img_str = str(image_path)
                     ocr_text = ocr_caller(
-                        lambda: ocr_extractor.extract(str(image_path)).text, label="ocr"
+                        lambda p=img_str: ocr_extractor.extract(p).text, label="ocr"
                     )
                     stats["ocr_ok"] += 1
                 except Exception as e:  # noqa: BLE001

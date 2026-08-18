@@ -8,13 +8,9 @@ antarmuka retrieval.
 """
 from __future__ import annotations
 
-from typing import List, Optional
-
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import InMemoryVectorStore
-
-from .embedding import LlamaVLEmbeddings
 
 
 class VisionIndex:
@@ -25,14 +21,14 @@ class VisionIndex:
         self._store = InMemoryVectorStore(embeddings)
 
     def add_texts(
-        self, texts: List[str], metadatas: Optional[List[dict]] = None
-    ) -> List[str]:
+        self, texts: list[str], metadatas: list[dict] | None = None
+    ) -> list[str]:
         return self._store.add_texts(texts, metadatas=metadatas)
 
-    def add_documents(self, documents: List[Document]) -> List[str]:
+    def add_documents(self, documents: list[Document]) -> list[str]:
         return self._store.add_documents(documents)
 
-    def search(self, query: str, k: int = 4) -> List[Document]:
+    def search(self, query: str, k: int = 4) -> list[Document]:
         return self._store.similarity_search(query, k=k)
 
     def as_retriever(self, k: int = 4):

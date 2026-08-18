@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import requests
@@ -32,13 +32,13 @@ class VisionEmbedder:
 
     def __init__(
         self,
-        binary: Optional[str] = None,
-        model_path: Optional[str] = None,
-        mmproj_path: Optional[str] = None,
+        binary: str | None = None,
+        model_path: str | None = None,
+        mmproj_path: str | None = None,
         pooling: str = "last",
         embd_normalize: int = 2,
         context: int = 4096,
-        ngl: Optional[Any] = "auto",
+        ngl: Any | None = "auto",
         timeout: float = 300,
     ) -> None:
         self.binary = binary or shutil.which("llama-vl-embedding")
@@ -59,17 +59,17 @@ class VisionEmbedder:
         self.timeout = timeout
 
     # --- API publik -------------------------------------------------------
-    def embed_text(self, texts: List[str]) -> np.ndarray:
+    def embed_text(self, texts: list[str]) -> np.ndarray:
         """Embed daftar teks -> (n, dim)."""
         return self._run([{"text": t} for t in texts])
 
-    def embed_image(self, image_paths: List[str]) -> np.ndarray:
+    def embed_image(self, image_paths: list[str]) -> np.ndarray:
         """Embed daftar path gambar -> (n, dim). Wajib mmproj."""
         if not self.mmproj_path:
             raise ValueError("mmproj_path wajib diisi untuk embedding gambar")
         return self._run([{"image": p} for p in image_paths])
 
-    def embed_mixed(self, items: List[Dict[str, str]]) -> np.ndarray:
+    def embed_mixed(self, items: list[dict[str, str]]) -> np.ndarray:
         """
         Embed campuran; tiap item dict {text?, image?} (salah satu atau keduanya).
 
@@ -79,7 +79,7 @@ class VisionEmbedder:
         return self._run(items)
 
     # --- internal ---------------------------------------------------------
-    def _run(self, items: List[Dict[str, str]]) -> np.ndarray:
+    def _run(self, items: list[dict[str, str]]) -> np.ndarray:
         if not items:
             return np.zeros((0, 0), dtype=np.float32)
 
@@ -106,7 +106,13 @@ class VisionEmbedder:
         if self.ngl is not None:
             cmd += ["-ngl", str(self.ngl)]
 
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+            check=False,
+        )
         if proc.returncode != 0:
             raise RuntimeError(
                 f"llama-vl-embedding gagal (rc={proc.returncode}):\n"
@@ -193,13 +199,13 @@ class HFTransformersEmbeddings(Embeddings):
         print(f"[embedding] transformers model siap di {self._device}")
 
     # --- inti: embed daftar item ----------------------------------------
-    def _embed(self, items: List[Dict[str, str]]) -> List[List[float]]:
+    def _embed(self, items: list[dict[str, str]]) -> list[list[float]]:
         """Tiap item: {text?} dan/atau {image: path}."""
         self._ensure_loaded()
         from PIL import Image
 
-        text_prompts: List[str] = []
-        img_by_idx: Dict[int, Any] = {}
+        text_prompts: list[str] = []
+        img_by_idx: dict[int, Any] = {}
         for idx, item in enumerate(items):
             content: list = []
             if item.get("image"):
@@ -216,7 +222,7 @@ class HFTransformersEmbeddings(Embeddings):
             if item.get("image"):
                 img_by_idx[idx] = Image.open(item["image"]).convert("RGB")
 
-        results: Dict[int, List[float]] = {}
+        results: dict[int, list[float]] = {}
 
         # Batch item teks-only (tanpa gambar)
         txt_idx = [i for i in range(len(items)) if i not in img_by_idx]
@@ -238,8 +244,8 @@ class HFTransformersEmbeddings(Embeddings):
         return [results[i] for i in range(len(items))]
 
     def _embed_batch(
-        self, text_prompts: List[str], images: Optional[List[Any]]
-    ) -> List[List[float]]:
+        self, text_prompts: list[str], images: list[Any] | None
+    ) -> list[list[float]]:
         inputs = self._processor(
             text=text_prompts,
             images=images,
@@ -267,16 +273,16 @@ class HFTransformersEmbeddings(Embeddings):
         return emb.float().cpu().tolist()
 
     # --- antarmuka LangChain Embeddings --------------------------------
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return self._embed([{"text": t} for t in texts])
 
-    def embed_query(self, text: str) -> List[float]:
+    def embed_query(self, text: str) -> list[float]:
         return self._embed([{"text": text}])[0]
 
-    def embed_images(self, image_paths: List[str]) -> List[List[float]]:
+    def embed_images(self, image_paths: list[str]) -> list[list[float]]:
         return self._embed([{"image": p} for p in image_paths])
 
-    def embed_mixed(self, items: List[Dict[str, str]]) -> List[List[float]]:
+    def embed_mixed(self, items: list[dict[str, str]]) -> list[list[float]]:
         return self._embed(items)
 
 
@@ -286,16 +292,16 @@ class LlamaVLEmbeddings(Embeddings):
     def __init__(self, embedder: VisionEmbedder) -> None:
         self._embedder = embedder
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return self._embedder.embed_text(texts).tolist()
 
-    def embed_query(self, text: str) -> List[float]:
+    def embed_query(self, text: str) -> list[float]:
         return self._embedder.embed_text([text])[0].tolist()
 
-    def embed_images(self, image_paths: List[str]) -> List[List[float]]:
+    def embed_images(self, image_paths: list[str]) -> list[list[float]]:
         return self._embedder.embed_image(image_paths).tolist()
 
-    def embed_mixed(self, items: List[Dict[str, str]]) -> List[List[float]]:
+    def embed_mixed(self, items: list[dict[str, str]]) -> list[list[float]]:
         return self._embedder.embed_mixed(items).tolist()
 
 
@@ -311,7 +317,7 @@ class LlamaServerEmbeddings(Embeddings):
         self,
         base_url: str,
         model: str,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         timeout: float = 300,
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -319,7 +325,7 @@ class LlamaServerEmbeddings(Embeddings):
         self.api_key = api_key or ""
         self.timeout = timeout
 
-    def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -329,28 +335,28 @@ class LlamaServerEmbeddings(Embeddings):
         resp.raise_for_status()
         return resp.json()
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         data = self._post("/embeddings", {"model": self.model, "input": texts})
         items = sorted(data["data"], key=lambda x: x.get("index", 0))
         return [item["embedding"] for item in items]
 
-    def embed_query(self, text: str) -> List[float]:
+    def embed_query(self, text: str) -> list[float]:
         return self.embed_documents([text])[0]
 
-    def embed_images(self, image_paths: List[str]) -> List[List[float]]:
+    def embed_images(self, image_paths: list[str]) -> list[list[float]]:
         raise NotImplementedError(
             "Embedding gambar via HTTP tidak didukung endpoint standar "
             "llama-server. Gunakan EMBEDDING_MODE=subprocess."
         )
 
-    def embed_mixed(self, items: List[Dict[str, str]]) -> List[List[float]]:
+    def embed_mixed(self, items: list[dict[str, str]]) -> list[list[float]]:
         raise NotImplementedError(
             "Embedding campuran via HTTP tidak didukung endpoint standar "
             "llama-server. Gunakan EMBEDDING_MODE=subprocess."
         )
 
 
-def build_embeddings(settings: Optional[Settings] = None) -> Embeddings:
+def build_embeddings(settings: Settings | None = None) -> Embeddings:
     """Bangun embedding sesuai `settings.embedding_mode` (subprocess | http | transformers)."""
     settings = settings or get_settings()
 

@@ -6,7 +6,7 @@ sehingga satu pipeline dapat menangani banyak jenis dokumen tanpa schema kaku.
 Untuk integrasi yang butuh schema ketat, teruskan model Pydantic sendiri ke
 `VisionExtractor` - alur tidak berubah.
 """
-from typing import Any, Dict, List
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -28,7 +28,7 @@ class DocumentExtraction(BaseModel):
     """
 
     doc_type: str = Field(description="Jenis dokumen yang diputuskan model")
-    data: Dict[str, Any] = Field(
+    data: dict[str, Any] = Field(
         description="Struktur bebas hasil ekstraksi, ditentukan oleh model"
     )
 
@@ -49,7 +49,7 @@ class RetrievedChunk(BaseModel):
     """Potongan konteks relevan hasil retrieval."""
 
     content: str = Field(description="Isi potongan dokumen yang relevan")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Metadata dokumen")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Metadata dokumen")
 
 
 class VisionRAGResult(BaseModel):
@@ -57,6 +57,6 @@ class VisionRAGResult(BaseModel):
 
     doc_type: str = Field(description="Jenis dokumen yang terdeteksi")
     extraction: DocumentExtraction = Field(description="Hasil ekstraksi terstruktur")
-    context: List[RetrievedChunk] = Field(
+    context: list[RetrievedChunk] = Field(
         default_factory=list, description="Konteks relevan hasil retrieval"
     )

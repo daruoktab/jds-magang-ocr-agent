@@ -7,7 +7,7 @@ model langsung divalidasi menjadi instance Pydantic - pola idiomatik LangChain
 """
 from __future__ import annotations
 
-from typing import Optional, Type, Any, cast
+from typing import Any, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -24,7 +24,7 @@ class VisionExtractor:
     def __init__(
         self,
         llm: BaseChatModel,
-        schema: Type[BaseModel] = DocumentExtraction,
+        schema: type[BaseModel] = DocumentExtraction,
         user_prompt: str = GENERAL_USER_PROMPT,
         system_prompt: str = SYSTEM_EXTRACTOR,
     ) -> None:

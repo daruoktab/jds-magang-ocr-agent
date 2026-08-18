@@ -18,7 +18,7 @@ Penggunaan dua-stage (rekomendasi resmi Qwen):
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, cast
 
 import torch
 
@@ -61,7 +61,11 @@ class Qwen3VLReranker:
     def _ensure_loaded(self) -> None:
         if self._model is not None:
             return
-        from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
+        from transformers import (
+            AutoModelForImageTextToText,
+            AutoProcessor,
+            AutoTokenizer,
+        )
 
         model_path: str = self.model_name_or_path
         lm = cast(Any, AutoModelForImageTextToText).from_pretrained(
@@ -87,11 +91,11 @@ class Qwen3VLReranker:
         print(f"[reranker] model siap di {self._device}")
 
     # --- API publik ------------------------------------------------------
-    def score(self, query: str, document_images: List[Any]) -> float:
+    def score(self, query: str, document_images: list[Any]) -> float:
         """Skor relevansi (query, dokumen-gambar) -> [0,1]."""
         return self.score_many(query, [document_images])[0]
 
-    def score_many(self, query: str, documents: List[List[Any]]) -> List[float]:
+    def score_many(self, query: str, documents: list[list[Any]]) -> list[float]:
         """Skor untuk banyak dokumen (tiap dokumen = list gambar halaman)."""
         self._ensure_loaded()
         scores = []
@@ -99,7 +103,7 @@ class Qwen3VLReranker:
             scores.append(self._score_pair(query, pages))
         return scores
 
-    def process(self, payload: Dict[str, Any]) -> List[float]:
+    def process(self, payload: dict[str, Any]) -> list[float]:
         """API kompatibel pola resmi: {instruction, query:{text?,image?}, documents:[{image?}...]}."""
         instruction = payload.get("instruction") or self.instruction
         query = payload.get("query", {})
@@ -113,11 +117,11 @@ class Qwen3VLReranker:
 
     # --- inti scoring ----------------------------------------------------
     def _score_pair(
-        self, query: str, pages: List[Any], instruction: Optional[str] = None
+        self, query: str, pages: list[Any], instruction: str | None = None
     ) -> float:
-        from PIL import Image
+        from PIL import Image  # noqa: F401
 
-        content: List[Dict[str, Any]] = [
+        content: list[dict[str, Any]] = [
             {"type": "text", "text": f"<Instruct>: {instruction or self.instruction}"},
             {"type": "text", "text": f"<Query>: {query}"},
             {"type": "text", "text": "\n<Document>: "},
@@ -138,7 +142,7 @@ class Qwen3VLReranker:
         return float(torch.sigmoid(self._score_linear(hidden)).item())
 
 
-def build_reranker(settings: Optional[Settings] = None) -> Optional[Qwen3VLReranker]:
+def build_reranker(settings: Settings | None = None) -> Qwen3VLReranker | None:
     """Bangun reranker dari settings. None jika dimatikan / model belum di-set."""
     settings = settings or get_settings()
     if not settings.reranker_enabled:

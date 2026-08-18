@@ -59,7 +59,7 @@ def main() -> None:
             total_bytes += actual
             downloaded += 1
             print(f"  [{total_bytes / 1024 / 1024:.1f} MB] {rel} ({actual / 1024:.1f} KB)")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"  SKIP {rel}: {e}")
 
     print(f"\nDone: {downloaded} files, {total_bytes / 1024 / 1024:.1f} MB saved to {OUTPUT_DIR}")

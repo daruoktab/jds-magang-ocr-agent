@@ -8,7 +8,6 @@ ukuran file berlebihan.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
 
 import pymupdf
 
@@ -20,10 +19,10 @@ DEFAULT_IMAGE_EXT = ".jpg"
 
 def pdf_to_images(
     pdf_path: str | Path,
-    output_dir: Optional[str | Path] = None,
+    output_dir: str | Path | None = None,
     dpi: int = DEFAULT_DPI,
     image_ext: str = DEFAULT_IMAGE_EXT,
-) -> List[Path]:
+) -> list[Path]:
     """
     Ubah seluruh halaman PDF menjadi gambar, satu file per halaman.
 
@@ -54,7 +53,7 @@ def pdf_to_images(
     stem = pdf_path.stem
     image_ext = image_ext if image_ext.startswith(".") else f".{image_ext}"
 
-    outputs: List[Path] = []
+    outputs: list[Path] = []
     with pymupdf.open(pdf_path) as doc:
         if doc.page_count == 0:
             raise ValueError(f"PDF tidak memiliki halaman: {pdf_path}")

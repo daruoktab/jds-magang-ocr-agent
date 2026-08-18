@@ -7,8 +7,6 @@ subagent spesialis yang bisa dipanggil lewat `task`.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from deepagents import SubAgent, create_deep_agent
 from langchain_core.tools import tool
 
@@ -20,7 +18,7 @@ from .ocr import build_ocr_extractor
 from .vector_store import VisionIndex
 
 
-def build_deep_agent(settings: Optional[Settings] = None):
+def build_deep_agent(settings: Settings | None = None):
     """Bangun deep agent vision RAG (mengembalikan compiled agent)."""
     settings = settings or get_settings()
     vlm = build_vlm(settings)
@@ -29,9 +27,9 @@ def build_deep_agent(settings: Optional[Settings] = None):
 
     # Indeks dibuat malas: hanya butuh binary llama-vl-embedding saat dipakai.
     # Kalau embedding dimatikan / binary belum ada -> None (tool menanganinya).
-    _index_cache: dict[str, "VisionIndex | None"] = {}
+    _index_cache: dict[str, VisionIndex | None] = {}
 
-    def _index() -> "VisionIndex | None":
+    def _index() -> VisionIndex | None:
         if "index" not in _index_cache:
             if not settings.embedding_enabled:
                 _index_cache["index"] = None

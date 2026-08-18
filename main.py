@@ -17,7 +17,6 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Optional
 
 from app.agents import AGENT_REGISTRY
 from app.config import get_settings
@@ -55,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _output_json(text: str, out_dir: Optional[str], image: str, log_file=None) -> str:
+def _output_json(text: str, out_dir: str | None, image: str, log_file=None) -> str:
     if out_dir:
         out_file = Path(out_dir) / f"{Path(image).stem}.json"
         out_file.parent.mkdir(parents=True, exist_ok=True)
@@ -65,7 +64,7 @@ def _output_json(text: str, out_dir: Optional[str], image: str, log_file=None) -
     return text
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.list_agents:
@@ -125,7 +124,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             raise SystemExit(result)
         else:
             print(result)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
 

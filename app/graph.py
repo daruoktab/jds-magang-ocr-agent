@@ -17,7 +17,7 @@ from __future__ import annotations
 import operator
 import warnings
 from functools import cached_property
-from typing import Annotated, Any, List, Optional, TypedDict, cast
+from typing import Annotated, Any, TypedDict, cast
 
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -42,14 +42,14 @@ class VisionRAGState(TypedDict, total=False):
     query: str
     doc_type: str
     extraction: dict
-    retrieved_docs: Annotated[List[Document], operator.add]
+    retrieved_docs: Annotated[list[Document], operator.add]
     final_result: dict
 
 
 class VisionRAGPipeline:
     """Pipeline LangGraph untuk vision RAG (VLM normal + embedding)."""
 
-    def __init__(self, settings: Optional[Settings] = None) -> None:
+    def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self.vlm = build_vlm(self.settings)
         self._classifier = self.vlm.with_structured_output(DocumentClassification)
@@ -89,7 +89,7 @@ class VisionRAGPipeline:
         result = cast(DocumentClassification, self._classifier.invoke(messages))
         return result.doc_type
 
-    def run(self, image_path: str, query: Optional[str] = None) -> dict:
+    def run(self, image_path: str, query: str | None = None) -> dict:
         """Jalankan pipeline penuh, kembalikan state akhir (dict)."""
         return self.graph.invoke({"image_path": image_path, "query": query or ""})
 

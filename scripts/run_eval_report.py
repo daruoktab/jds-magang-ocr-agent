@@ -22,11 +22,10 @@ import argparse
 import json
 import os
 import random
-import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import fiftyone as fo
 
@@ -41,7 +40,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = PROJECT_ROOT / "output" / "eval_report.md"
 
 
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="run_eval_report",
         description="Laporan evaluasi Markdown: gambar + ground truth + hasil VLM/OCR.",
@@ -71,14 +70,14 @@ def render_section(
     idx: int,
     sample_path: Path,
     gt: str,
-    vlm: Optional[Dict[str, Any]],
-    ocr: Optional[str],
-    errors: Dict[str, str],
+    vlm: dict[str, Any] | None,
+    ocr: str | None,
+    errors: dict[str, str],
     output_parent: Path,
 ) -> str:
     name = sample_path.name
     rel = os.path.relpath(str(sample_path), str(output_parent)).replace("\\", "/")
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append(f"## Sample {idx:03d} — {name}")
     lines.append("")
     lines.append(f"![{name}]({rel})")
@@ -112,7 +111,7 @@ def render_section(
     return "\n".join(lines)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     settings = get_settings()
 
@@ -137,7 +136,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
         f.write("# Evaluasi Vision RAG\n\n")
-        f.write(f"- Tanggal: {datetime.now().isoformat(timespec='seconds')}\n")
+        f.write(f"- Tanggal: {datetime.now(UTC).isoformat(timespec='seconds')}\n")
         f.write(f"- Dataset: {DATASET_NAME} ({len(dataset)} sampel)\n")
         f.write(f"- Sampel dievaluasi: {n} (seed={args.seed})\n")
         f.write(f"- VLM: {settings.vlm_model} @ {settings.vlm_base_url}\n")
@@ -153,33 +152,35 @@ def main(argv: Optional[List[str]] = None) -> int:
         image_path = Path(sample.filepath)
         print(f"[{i}/{n}] {image_path.name} ...", flush=True)
 
-        vlm_result: Optional[Dict[str, Any]] = None
-        ocr_text: Optional[str] = None
-        errors: Dict[str, str] = {}
+        vlm_result: dict[str, Any] | None = None
+        ocr_text: str | None = None
+        errors: dict[str, str] = {}
 
         if not args.skip_vlm:
             try:
+                img_str = str(image_path)
                 doc_type = vlm_caller(
-                    lambda: pipeline.classify(str(image_path)), label="classify"
+                    lambda p=img_str: pipeline.classify(p), label="classify"
                 )
                 agent = get_agent(doc_type)
                 extraction = vlm_caller(
-                    lambda: agent.build(pipeline.vlm).extract(str(image_path)).model_dump(),
+                    lambda a=agent, p=img_str: a.build(pipeline.vlm).extract(p).model_dump(),
                     label="extract",
                 )
                 vlm_result = {"doc_type": doc_type, "extraction": extraction}
                 stats["vlm_ok"] += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 errors["vlm"] = f"{type(e).__name__}: {e}"
                 stats["vlm_fail"] += 1
 
         if ocr_extractor is not None:
             try:
+                img_str = str(image_path)
                 ocr_text = ocr_caller(
-                    lambda: ocr_extractor.extract(str(image_path)).text, label="ocr"
+                    lambda p=img_str: ocr_extractor.extract(p).text, label="ocr"
                 )
                 stats["ocr_ok"] += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 errors["ocr"] = f"{type(e).__name__}: {e}"
                 stats["ocr_fail"] += 1
 

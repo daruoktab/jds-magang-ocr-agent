@@ -11,7 +11,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import requests
 from huggingface_hub import HfApi, hf_hub_download
 
 HF_REPO = "BEE-spoke-data/govdocs1-pdf-source"
@@ -60,7 +59,7 @@ def main() -> None:
             total_bytes += size
             downloaded += 1
             print(f"  [{total_bytes / 1024 / 1024:.1f} MB] {rel_path}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"  SKIP {rel_path}: {e}")
 
     print(f"\nDone: {downloaded} files, {total_bytes / 1024 / 1024:.1f} MB saved to {OUTPUT_DIR}")
