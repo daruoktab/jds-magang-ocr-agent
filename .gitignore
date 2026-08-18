@@ -20,6 +20,8 @@ logs/
 *.sqlite
 *.sqlite3
 output/
+vector_store_db/
+.chroma_db/
 
 # ============ Model & data lokal (jangan commit) ============
 models/

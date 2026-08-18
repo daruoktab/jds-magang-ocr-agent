@@ -10,6 +10,12 @@ Contoh:
     python main.py folder_gambar --report        # laporan markdown SEMUA gambar di folder
     python main.py gambar.png --report           # laporan markdown SATU gambar
     python main.py --list-agents                 # daftar jenis dokumen
+
+    # Manajemen Persistent Vector Store & Ingestion:
+    python main.py folder_dokumen/ --ingest      # Ingest dokumen teks/PDF/JSON ke vector store
+    python main.py --search "query pencarian"    # Cari dokumen di vector store
+    python main.py --index-count                 # Hitung jumlah item di vector store
+    python main.py --clear-index                 # Kosongkan database vector store
 """
 from __future__ import annotations
 
@@ -22,24 +28,38 @@ from typing import Optional
 from app.agents import AGENT_REGISTRY
 from app.config import get_settings
 from app.graph import VisionRAGPipeline
+from app.ingest import ingest_path
 from app.ocr import build_ocr_extractor
 from app.pdf import pdf_to_images
 from app.report import generate_report
+from app.vector_store import build_vision_index
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vision-rag",
-        description="Vision RAG agent: gambar -> JSON terstruktur + retrieval.",
+        description="Vision RAG agent: gambar -> JSON terstruktur + persistent retrieval.",
     )
-    p.add_argument("image", nargs="?", help="Path file gambar ATAU folder gambar")
-    p.add_argument("--query", default=None, help="Query retrieval opsional")
+    p.add_argument("image", nargs="?", help="Path file gambar / PDF / folder")
+    p.add_argument("--query", default=None, help="Query retrieval opsional untuk RAG")
     p.add_argument("--list-agents", action="store_true", help="Daftar jenis dokumen yang didukung")
     p.add_argument("--classify-only", action="store_true", help="Hanya klasifikasi jenis dokumen")
     p.add_argument("--ocr", action="store_true", help="OCR teks terstruktur (model OCR tuned)")
     p.add_argument("--pdf", action="store_true", help="Konversi PDF menjadi gambar per-halaman")
     p.add_argument("--dpi", type=int, default=200, help="DPI untuk konversi PDF (default 200)")
     p.add_argument("--out-dir", default="output", help="Direktori output (default: output/)")
+
+    # Fitur Ingestion & Persistent Vector Store
+    p.add_argument("--ingest", action="store_true",
+                   help="Ingest file atau folder dokumen teks/PDF/JSON ke dalam vector store persisten")
+    p.add_argument("--search", default=None,
+                   help="Cari dokumen di vector store berdasarkan query teks")
+    p.add_argument("--k", type=int, default=4,
+                   help="Jumlah dokumen relevan yang dikembalikan saat pencarian (default: 4)")
+    p.add_argument("--index-count", action="store_true",
+                   help="Tampilkan total item dokumen yang tersimpan di vector store")
+    p.add_argument("--clear-index", action="store_true",
+                   help="Hapus dan kosongkan isi vector store")
 
     # Mode laporan markdown (file atau folder gambar)
     p.add_argument("--report", action="store_true",
@@ -74,13 +94,66 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"- {name:16s} {agent.description}{marker}")
         return 0
 
+    settings = get_settings()
+
+    # --- Operasi Vector Store Mandiri ---
+    if args.index_count:
+        try:
+            idx = build_vision_index(settings)
+            print(f"Total item di vector store: {idx.count()} (persisten: {idx.is_persistent})")
+            return 0
+        except Exception as e:
+            print(f"ERROR membaca vector store: {e}", file=sys.stderr)
+            return 1
+
+    if args.clear_index:
+        try:
+            idx = build_vision_index(settings)
+            idx.clear()
+            print("Vector store berhasil dikosongkan.")
+            return 0
+        except Exception as e:
+            print(f"ERROR mengosongkan vector store: {e}", file=sys.stderr)
+            return 1
+
+    if args.search:
+        try:
+            idx = build_vision_index(settings)
+            results = idx.search_with_score(args.search, k=args.k)
+            print(f"\n=== Hasil Pencarian Vektor untuk: '{args.search}' ({len(results)} ditemukan) ===")
+            for i, (doc, score) in enumerate(results, start=1):
+                src = doc.metadata.get("filename", doc.metadata.get("source", "unknown"))
+                print(f"\n[{i}] Sumber: {src} (skor: {score:.4f})")
+                print("-" * 50)
+                print(doc.page_content.strip()[:400] + ("..." if len(doc.page_content) > 400 else ""))
+            return 0
+        except Exception as e:
+            print(f"ERROR saat pencarian vektor: {e}", file=sys.stderr)
+            return 1
+
+    if args.ingest:
+        if not args.image:
+            print("ERROR: tentukan path file atau folder yang akan di-ingest", file=sys.stderr)
+            return 1
+        try:
+            idx = build_vision_index(settings)
+            print(f"Memulai ingestion dari: {args.image} ...")
+            stats = ingest_path(args.image, idx)
+            print(f"\n[OK] Ingestion selesai!")
+            print(f"  - Total berkas diproses: {stats['total_files']}")
+            print(f"  - Total chunks vektor: {stats['total_chunks']}")
+            print(f"  - Status persistensi: {'Persisten ke disk' if stats['is_persistent'] else 'In-Memory'}")
+            print(f"  - Total sekarang di vector store: {idx.count()}")
+            return 0
+        except Exception as e:
+            print(f"ERROR saat ingestion: {e}", file=sys.stderr)
+            return 1
+
     if not args.image:
-        print("ERROR: argumen 'image' wajib diisi (atau --list-agents)", file=sys.stderr)
+        print("ERROR: argumen 'image' wajib diisi (atau gunakan --help)", file=sys.stderr)
         return 1
 
     try:
-        settings = get_settings()
-
         if args.pdf:
             images = pdf_to_images(args.image, output_dir=args.out_dir, dpi=args.dpi)
             for img in images:
@@ -121,8 +194,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             out_file.write_text(result, encoding="utf-8")
             print(result)
             print(f"\n-> {out_file}", file=sys.stderr)
-        elif args.out_json:
-            raise SystemExit(result)
         else:
             print(result)
     except Exception as e:

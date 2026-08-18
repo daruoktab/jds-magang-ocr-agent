@@ -20,8 +20,6 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import requests
-import torch
-import torch.nn.functional as F
 from langchain_core.embeddings import Embeddings
 
 from .config import Settings, get_settings
@@ -161,7 +159,7 @@ class HFTransformersEmbeddings(Embeddings):
         model_name_or_path: str,
         device: str = "auto",
         pooling: str = "last",
-        dtype: Any = torch.bfloat16,
+        dtype: Any = None,
         normalize: bool = True,
         max_length: int = 8192,
     ) -> None:
@@ -170,11 +168,7 @@ class HFTransformersEmbeddings(Embeddings):
         self.dtype = dtype
         self.normalize = normalize
         self.max_length = max_length
-        self._device = (
-            "cuda"
-            if device == "auto" and torch.cuda.is_available()
-            else ("cpu" if device == "auto" else device)
-        )
+        self._device = device
         self._model: Any = None
         self._processor: Any = None
 
@@ -182,10 +176,21 @@ class HFTransformersEmbeddings(Embeddings):
     def _ensure_loaded(self) -> None:
         if self._model is not None:
             return
-        from transformers import AutoModel, AutoProcessor
+        try:
+            import torch
+            from transformers import AutoModel, AutoProcessor
+        except ImportError as e:
+            raise ImportError(
+                "EMBEDDING_MODE=transformers butuh library 'torch' dan 'transformers'. "
+                "Install via: pip install torch transformers"
+            ) from e
 
+        if self._device == "auto":
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        dtype = self.dtype if self.dtype is not None else torch.bfloat16
         self._model = (
-            AutoModel.from_pretrained(self.model_name_or_path, trust_remote_code=True, dtype=self.dtype)
+            AutoModel.from_pretrained(self.model_name_or_path, trust_remote_code=True, dtype=dtype)
             .to(self._device)
             .eval()
         )
@@ -240,6 +245,9 @@ class HFTransformersEmbeddings(Embeddings):
     def _embed_batch(
         self, text_prompts: List[str], images: Optional[List[Any]]
     ) -> List[List[float]]:
+        import torch
+        import torch.nn.functional as F
+
         inputs = self._processor(
             text=text_prompts,
             images=images,

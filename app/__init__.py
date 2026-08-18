@@ -20,12 +20,13 @@ from .deep_agent import build_deep_agent
 from .embedding import LlamaServerEmbeddings, LlamaVLEmbeddings, VisionEmbedder, build_embeddings
 from .extractor import VisionExtractor
 from .graph import VisionRAGPipeline
+from .ingest import ingest_path, load_file_documents
 from .ocr import OCRExtractor, build_ocr_extractor
 from .pdf import pdf_to_images
 from .report import generate_report
 from .reranker import Qwen3VLReranker, build_reranker
 from .schemas import DocumentClassification, DocumentExtraction, OCRResult
-from .vector_store import VisionIndex
+from .vector_store import VisionIndex, build_vision_index
 
 __all__ = [
     "AGENT_REGISTRY",
@@ -36,6 +37,9 @@ __all__ = [
     "build_deep_agent",
     "build_embeddings",
     "build_ocr_extractor",
+    "build_vision_index",
+    "ingest_path",
+    "load_file_documents",
     "LlamaVLEmbeddings",
     "LlamaServerEmbeddings",
     "VisionEmbedder",

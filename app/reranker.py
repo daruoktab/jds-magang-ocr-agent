@@ -15,12 +15,8 @@ Mode backend:
 Penggunaan dua-stage (rekomendasi resmi Qwen):
   embedding (recall murah) -> reranker (refine presisi lintas-modalitas).
 """
-from __future__ import annotations
-
 import os
 from typing import Any, Dict, List, Optional, cast
-
-import torch
 
 from .config import Settings, get_settings
 
@@ -41,16 +37,12 @@ class Qwen3VLReranker:
         device: str = "auto",
         max_length: int = 8192,
         instruction: str = "Given a search query, retrieve relevant candidates that answer the query.",
-        dtype: Any = torch.bfloat16,
+        dtype: Any = None,
     ) -> None:
         self.model_name_or_path = model_name_or_path
         self.max_length = max_length
         self.instruction = instruction
-        self._device = (
-            "cuda"
-            if device == "auto" and torch.cuda.is_available()
-            else ("cpu" if device == "auto" else device)
-        )
+        self._device = device
         self._lm: Any = None      # Qwen3VLForConditionalGeneration
         self._model: Any = None   # .model bagian dalam (return last_hidden_state)
         self._processor: Any = None
@@ -61,11 +53,22 @@ class Qwen3VLReranker:
     def _ensure_loaded(self) -> None:
         if self._model is not None:
             return
-        from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
+        try:
+            import torch
+            from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
+        except ImportError as e:
+            raise ImportError(
+                "Reranker butuh library 'torch' dan 'transformers'. "
+                "Install via: pip install torch transformers"
+            ) from e
 
+        if self._device == "auto":
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        dtype = self._dtype if self._dtype is not None else torch.bfloat16
         model_path: str = self.model_name_or_path
         lm = cast(Any, AutoModelForImageTextToText).from_pretrained(
-            model_path, dtype=self._dtype
+            model_path, dtype=dtype
         ).to(self._device).eval()
         processor = AutoProcessor.from_pretrained(self.model_name_or_path)
         tokenizer = AutoTokenizer.from_pretrained(self.model_name_or_path)
@@ -132,6 +135,8 @@ class Qwen3VLReranker:
         text = self._processor.apply_chat_template(conv, tokenize=False, add_generation_prompt=False)
         inputs = self._processor(text=[text], images=pages or None, return_tensors="pt")
         inputs = {k: v.to(self._device) for k, v in inputs.items()}
+
+        import torch
 
         with torch.no_grad():
             hidden = self._model(**inputs).last_hidden_state[:, -1]

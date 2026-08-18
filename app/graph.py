@@ -34,7 +34,7 @@ from .schemas import (
     RetrievedChunk,
     VisionRAGResult,
 )
-from .vector_store import VisionIndex
+from .vector_store import VisionIndex, build_vision_index
 
 
 class VisionRAGState(TypedDict, total=False):
@@ -58,7 +58,7 @@ class VisionRAGPipeline:
     @cached_property
     def index(self) -> VisionIndex:
         # Malas: hanya butuh binary llama-vl-embedding saat retrieval dipakai.
-        return VisionIndex(build_embeddings(self.settings))
+        return build_vision_index(self.settings)
 
     # --- LangGraph -------------------------------------------------------
     def _build_graph(self):

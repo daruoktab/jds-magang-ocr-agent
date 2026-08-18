@@ -137,6 +137,19 @@ uv run --python .venv python main.py folder_gambar --report --ocr-interval 10 --
 
 # Daftar jenis dokumen yang didukung
 uv run --python .venv python main.py --list-agents
+
+# ---------------------------------------------------------
+# Persistent Vector Store & Ingestion Dokumen
+# ---------------------------------------------------------
+# Ingest dokumen teks / Markdown / PDF / JSON ke vector store persisten (ChromaDB)
+uv run --python .venv python main.py input/reference_docs --ingest
+
+# Cari dokumen di vector store
+uv run --python .venv python main.py --search "query kata kunci" --k 4
+
+# Cek jumlah item di vector store & kosongkan database
+uv run --python .venv python main.py --index-count
+uv run --python .venv python main.py --clear-index
 ```
 
 ### Evaluasi 100 gambar acak → laporan Markdown
@@ -193,4 +206,4 @@ Alternatif agentic: `build_deep_agent()` membungkus semua kemampuan (extract / O
 - [x] Dataset `form_understanding_in_noisy_scanned_documents_plus` (FiftyOne)
 - [x] Structured output (`with_structured_output`) terverifikasi jalan di server
 - [ ] Build `llama-vl-embedding` (Vulkan/CPU) untuk embedding teks+gambar
-- [ ] Vector store persisten (Chroma/FAISS) + ingestion dokumen
+- [x] Vector store persisten (Chroma/FAISS) + ingestion dokumen

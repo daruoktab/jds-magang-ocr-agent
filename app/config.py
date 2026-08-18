@@ -134,7 +134,11 @@ class Settings:
     embedding_context: int = field(default_factory=lambda: _int_env("EMBEDDING_CONTEXT", "4096"))
     embedding_ngl: str = field(default_factory=lambda: _env("EMBEDDING_NGL", "auto"))
 
-    # --- 4. Reranker (multimodal, refine hasil retrieval) ---
+    # --- 4. Vector Store Persisten (Chroma) ---
+    vector_store_dir: str = field(default_factory=lambda: _env("VECTOR_STORE_DIR", "vector_store_db"))
+    vector_store_collection: str = field(default_factory=lambda: _env("VECTOR_STORE_COLLECTION", "jds_documents"))
+
+    # --- 5. Reranker (multimodal, refine hasil retrieval) ---
     reranker_enabled: bool = field(default_factory=lambda: _bool_env("RERANKER_ENABLED", "false"))
     reranker_model: str | None = field(default_factory=lambda: os.environ.get("RERANKER_MODEL") or None)
     reranker_device: str = field(default_factory=lambda: _env("RERANKER_DEVICE", "auto"))

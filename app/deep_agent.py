@@ -17,7 +17,7 @@ from .embedding import build_embeddings
 from .extractor import VisionExtractor
 from .llm import build_vlm
 from .ocr import build_ocr_extractor
-from .vector_store import VisionIndex
+from .vector_store import VisionIndex, build_vision_index
 
 
 def build_deep_agent(settings: Optional[Settings] = None):
@@ -37,7 +37,7 @@ def build_deep_agent(settings: Optional[Settings] = None):
                 _index_cache["index"] = None
             else:
                 try:
-                    _index_cache["index"] = VisionIndex(build_embeddings(settings))
+                    _index_cache["index"] = build_vision_index(settings)
                 except Exception as e:  # noqa: BLE001 - binary belum dibuild, dll.
                     print(f"[warn] Embedding tidak tersedia: {e}")
                     _index_cache["index"] = None
