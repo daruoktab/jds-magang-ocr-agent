@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -57,6 +58,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                    help=f"Model id for SentenceTransformer (default: {MODEL_ID})")
     p.add_argument("--device", default="auto",
                    help="Device: auto (prefer GPU), cpu, cuda (default: auto)")
+    p.add_argument("--highlight", action="store_true",
+                   help="Generate highlighted HTML report instead of JSON")
     return p.parse_args(argv)
 
 
@@ -183,6 +186,98 @@ def cosine_similarity(a: Any, b: Any) -> Any:
     return a_norm @ b_norm.T
 
 
+def _extract_doc_type(vlm_json: str) -> str:
+    try:
+        return json.loads(vlm_json).get("doc_type", "")
+    except Exception:
+        return ""
+
+
+def _esc(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _make_rel(abs_path: str, output_path: Path) -> str:
+    """Return a forward-slash relative path from output_dir to abs_path."""
+    out_dir = str(output_path.parent).replace("\\", "/")
+    norm_path = abs_path.replace("\\", "/")
+    rel = os.path.relpath(norm_path, out_dir)
+    return rel.replace("\\", "/")
+
+
+_CSS = """\
+<style>
+body{font-family:system-ui,sans-serif;max-width:960px;margin:2em auto;padding:0 1em;background:#f8f9fa;color:#1a1a2e}
+h1{border-bottom:2px solid #16213e;padding-bottom:.3em}
+.sample{background:#fff;border-radius:8px;padding:1.2em;margin-bottom:1.5em;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.sample h3{margin-top:0}
+code,pre{background:#f0f0f5;padding:2px 6px;border-radius:4px;font-size:.85em}
+pre{padding:.8em;overflow-x:auto;max-height:300px;overflow-y:auto}
+.match{display:flex;align-items:center;gap:.8em;padding:.5em .8em;border-radius:6px;margin:.3em 0}
+.match.gt{background:#d4edda;border-left:4px solid #28a745}
+.match.near{background:#fff3cd;border-left:4px solid #ffc107}
+.match.other{background:#f8f9fa;border-left:4px solid #dee2e6}
+.match img{width:80px;height:60px;object-fit:cover;border-radius:4px;flex-shrink:0}
+.match-info{flex:1}
+.match-name{font-weight:600}
+.match-score{font-size:.85em;color:#555}
+.tag{display:inline-block;padding:2px 8px;border-radius:12px;font-size:.75em;font-weight:600;margin-left:.5em}
+.tag-form{background:#e3f2fd;color:#1565c0}.tag-invoice{background:#fce4ec;color:#c62828}
+.tag-receipt{background:#e8f5e9;color:#2e7d32}.tag-table{background:#f3e5f5;color:#6a1b9a}
+.tag-default{background:#eee;color:#333}
+.sec{font-size:.75em;text-transform:uppercase;letter-spacing:.05em;color:#888;margin:.5em 0 .2em}
+.gt-badge{color:#28a745;font-weight:700;font-size:.8em}
+</style>
+"""
+
+
+def build_html(samples_results: List[Dict[str, Any]], output_path: Path) -> str:
+    parts = [
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>",
+        "<title>Embed Search Report</title>", _CSS, "</head><body>",
+        "<h1>Embedding Search Report</h1>",
+        f"<p style='color:#555'>Generated: {__import__('datetime').datetime.now().isoformat()[:19]}</p><hr>",
+    ]
+    for sr in samples_results:
+        name = sr["sample_name"]
+        doc_type = sr.get("doc_type", "")
+        vlm_text = sr.get("vlm_text", "")
+        ocr_text = sr.get("ocr_text", "")
+        matches = sr.get("matches", [])
+
+        tag_cls = f"tag tag-{doc_type}" if doc_type else "tag tag-default"
+        tag_html = f"<span class='{tag_cls}'>{doc_type or 'unknown'}</span>"
+
+        parts.append(f"<div class='sample'>")
+        parts.append(f"<h3>{name} &nbsp;{tag_html}</h3>")
+
+        if vlm_text:
+            parts.append("<div class='sec'>VLM Extraction</div>")
+            parts.append(f"<pre>{_esc(vlm_text[:800])}</pre>")
+        if ocr_text:
+            parts.append("<div class='sec'>OCR Text</div>")
+            parts.append(f"<pre>{_esc(ocr_text[:600])}</pre>")
+
+        parts.append("<div class='sec'>Top Matches</div>")
+        for m in matches:
+            is_gt = m["is_ground_truth"]
+            cls = "gt" if is_gt else ("near" if m["similarity"] >= 0.25 else "other")
+            gt_lbl = f'<span class="gt-badge"> ★ GROUND TRUTH</span>' if is_gt else ""
+            img_src = _make_rel(m["image"], output_path)
+            title = ' title="Ground truth match"' if is_gt else ""
+            parts.append(
+                f"<div class='match {cls}'>"
+                f"<img src='{img_src}' alt='{m['name']}'{title} />"
+                f"<div class='match-info'>"
+                f"<span class='match-name'>{m['name']}</span>{gt_lbl}<br>"
+                f"<span class='match-score'>similarity: {m['similarity']:.4f}</span>"
+                f"</div></div>"
+            )
+        parts.append("</div>")
+    parts += ["</body></html>"]
+    return "\n".join(parts)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
     input_path = Path(args.input)
@@ -242,11 +337,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             score = float(sims[idx])
             matches.append({
                 "image": str(png_files[idx]),
+                "name": png_files[idx].name,
                 "similarity": round(score, 4),
+                "is_ground_truth": png_files[idx].name == sample["name"],
             })
 
         results.append({
             "sample_name": sample["name"],
+            "doc_type": _extract_doc_type(sample["vlm_text"]),
+            "vlm_text": sample["vlm_text"],
+            "ocr_text": sample["ocr_text"],
             "query_text_preview": combined[:200],
             "matches": matches,
         })
@@ -262,6 +362,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "top_k": top_k,
         "results": results,
     }
+
+    if args.highlight:
+        out_path = Path(args.output) if args.output else input_path.with_suffix(".html")
+        html = build_html(results, out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(html, encoding="utf-8")
+        print(f"HTML report → {out_path}", file=sys.stderr)
+        return 0
 
     output_str = json.dumps(output_data, indent=2, ensure_ascii=False)
 
