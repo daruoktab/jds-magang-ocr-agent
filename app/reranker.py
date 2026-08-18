@@ -57,7 +57,7 @@ class Qwen3VLReranker:
         self._score_linear: Any = None
         self._dtype = dtype
 
-    # --- malas: muat model saat pertama dipakai --------------------------
+    # --- Lazy loading: muat model saat pertama kali dipakai -------------
     def _ensure_loaded(self) -> None:
         if self._model is not None:
             return

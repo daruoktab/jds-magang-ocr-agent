@@ -25,7 +25,7 @@ def build_deep_agent(settings: Settings | None = None):
     extractor = VisionExtractor(vlm)
     ocr = build_ocr_extractor(settings)
 
-    # Indeks dibuat malas: hanya butuh binary llama-vl-embedding saat dipakai.
+    # Inisialisasi indeks secara lazy: hanya butuh binary llama-vl-embedding saat dipakai.
     # Kalau embedding dimatikan / binary belum ada -> None (tool menanganinya).
     _index_cache: dict[str, VisionIndex | None] = {}
 

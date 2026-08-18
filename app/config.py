@@ -149,7 +149,7 @@ _settings: Settings | None = None
 
 
 def get_settings() -> Settings:
-    """Kembalikan singleton Settings (malas, agar env bisa di-set sebelum dipakai)."""
+    """Kembalikan singleton Settings (diinisialisasi secara lazy saat pertama kali diakses)."""
     global _settings
     if _settings is None:
         _settings = Settings()

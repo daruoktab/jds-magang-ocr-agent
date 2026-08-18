@@ -57,7 +57,7 @@ class VisionRAGPipeline:
 
     @cached_property
     def index(self) -> VisionIndex:
-        # Malas: hanya butuh binary llama-vl-embedding saat retrieval dipakai.
+        # Inisialisasi secara lazy: hanya butuh binary llama-vl-embedding saat retrieval dipakai.
         return VisionIndex(build_embeddings(self.settings))
 
     # --- LangGraph -------------------------------------------------------

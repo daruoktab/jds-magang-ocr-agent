@@ -153,8 +153,8 @@ class HFTransformersEmbeddings(Embeddings):
     Embedding via transformers (safetensors lokal, GPU/CPU) - EMBEDDING_MODE=transformers.
 
     Dipakai untuk model Qwen3-VL-Embedding FP8/safetensors (mis. alexliap/
-    Qwen3-VL-Embedding-2B-FP8-DYNAMIC) tanpa binary llama.cpp. Model dimuat malas
-    (lazy) agar import ringan; dimuat sekali lalu di-cache.
+    Qwen3-VL-Embedding-2B-FP8-DYNAMIC) tanpa binary llama.cpp. Model dimuat secara
+    lazy agar import modul tetap ringan; dimuat sekali lalu di-cache.
 
     Catatan: embedding teks<->gambar model ini kurang sejajar tanpa vLLM
     (is_matryoshka). Untuk retrieval teks<->teks tetap valid.
@@ -184,7 +184,7 @@ class HFTransformersEmbeddings(Embeddings):
         self._model: Any = None
         self._processor: Any = None
 
-    # --- malas: muat model saat pertama kali dipakai --------------------
+    # --- Lazy loading: muat model saat pertama kali dipakai ----------------
     def _ensure_loaded(self) -> None:
         if self._model is not None:
             return
