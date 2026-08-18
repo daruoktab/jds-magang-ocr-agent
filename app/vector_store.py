@@ -126,7 +126,7 @@ class VisionIndex:
         # Stage 2: Refine presisi dengan Qwen3-VL-Reranker
         try:
             return self._reranker.rerank_documents(query=query, documents=candidates, top_k=k)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"[warn] Gagal melakukan reranking ({e}), fallback ke similarity search biasa.")
             return candidates[:k]
 
@@ -163,5 +163,5 @@ class VisionIndex:
                 docs = [Document(page_content=item["content"], metadata=item.get("metadata", {})) for item in payload]
                 self.add_documents(docs, auto_save=False)
                 print(f"[vector_store] Berhasil memuat {len(docs)} dokumen dari {self._persist_path}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"[warn] Gagal memuat indeks dari {self._persist_path}: {e}")

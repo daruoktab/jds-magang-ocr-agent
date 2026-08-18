@@ -164,7 +164,7 @@ class VisionRAGPipeline:
         try:
             proc = preprocess_image(image_path)
             return {"preprocessed_path": proc.processed_path}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             warnings.warn(f"Gagal melakukan preprocessing ({e}), menggunakan gambar asli.")
             return {"preprocessed_path": image_path}
 
@@ -173,7 +173,7 @@ class VisionRAGPipeline:
         try:
             ocr_res = self.ocr.extract(img_path)
             return {"ocr_text": ocr_res.text}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             warnings.warn(f"Panggilan OCR gagal/dilewati ({e}).")
             return {"ocr_text": ""}
 
@@ -233,7 +233,7 @@ class VisionRAGPipeline:
         try:
             docs = self.index.search(query, k=4, rerank=self.settings.reranker_enabled)
             return {"retrieved_docs": docs}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             warnings.warn(f"Retrieval gagal ({e}), node dilewati.")
             return {"retrieved_docs": []}
 

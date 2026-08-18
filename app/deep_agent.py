@@ -11,7 +11,6 @@ menjadi tools LangChain dan subagents spesialis di dalam `create_deep_agent`.
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from deepagents import SubAgent, create_deep_agent
 from langchain_core.tools import tool
@@ -81,7 +80,7 @@ def build_deep_agent(settings: Settings | None = None):
                 "issues": res.issues,
                 "critique": res.format_critique(),
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return {"is_valid": False, "score": 0.0, "issues": [str(e)], "critique": str(e)}
 
     @tool
@@ -94,7 +93,7 @@ def build_deep_agent(settings: Settings | None = None):
             meta = json.loads(metadata_json_str) if isinstance(metadata_json_str, str) else {}
             idx.add_texts([content_or_json], metadatas=[meta])
             return "Sukses mengindeks dokumen ke ruang vektor."
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return f"Gagal mengindeks: {e}"
 
     @tool
