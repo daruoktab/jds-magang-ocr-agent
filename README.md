@@ -7,7 +7,9 @@ Sistem ekstraksi dokumen multimodal (PDF, PPT/PPTX, Scan Gambar) menjadi **Markd
 
 ---
 
-## 🎯 4 Spesifikasi Karakteristik Dokumen
+## 🎯 4 Spesifikasi Karakteristik Dokumen (Mendukung Multi-Spesifikasi Komposit)
+
+Sistem mendukung ekstraksi dengan satu atau **beberapa spesifikasi sekaligus secara komposit** (*Composable Prompts*), misalnya jurnal ilmiah multi-halaman yang membutuhkan aturan 2-kolom sekaligus kontinuitas heading antar-halaman (`bilingual_journal` + `markdown_hierarchy`):
 
 | No | Spesifikasi Layout | Karakteristik & Perilaku Ekstraksi | Target Output |
 |:---:|:---|:---|:---|
@@ -28,9 +30,9 @@ flowchart TD
     ROUTE -- "PDF / Image" --> PRE["app/preprocess.py: Auto-rotate EXIF & Contrast"]
     
     PRE --> OCR["app/ocr.py: ocr-lighton Auxiliary Raw Text"]
-    PRE --> CLS["app/extractor.py: Layout Classifier (4 Spesifikasi)"]
+    PRE --> CLS["app/extractor.py: Multi-Spec Classifier"]
     
-    CLS --> VLM["app/extractor.py: VLM Markdown Extraction dengan Prompt Spesialisasi"]
+    CLS --> VLM["app/extractor.py: Composable Prompt VLM Extraction"]
     OCR --> VLM
     
     VLM --> MULTI["app/multi_page.py: Header Stitching & Page Boundary Cleanup"]
@@ -51,10 +53,10 @@ jds-magang/
 │   ├── preprocess.py      # Auto-orientasi EXIF & optimasi kontras dokumen
 │   ├── llm.py             # Builder ChatOpenAI & helper base64 image data URI
 │   ├── ocr.py             # Model OCR tuned (ocr-lighton) untuk pembacaan teks mentah
-│   ├── prompts.py         # Prompt spesialisasi 4 karakteristik dokumen
+│   ├── prompts.py         # Modul prompt modular berlapis (Composable Prompts)
 │   ├── schemas.py         # Pydantic schemas (ExtractedDocument, DocumentPage, ChunkItem)
-│   ├── extractor.py       # Ekstraksi multimodal VLM -> Markdown
-│   ├── agents.py          # Registry Agent untuk 4 spesifikasi tata letak
+│   ├── extractor.py       # Ekstraksi multimodal VLM -> Markdown (Multi-label)
+│   ├── agents.py          # Registry Agent komposit untuk kombinasi spesifikasi
 │   ├── ppt.py             # Parser presentasi PowerPoint (.pptx)
 │   ├── pdf.py             # Multi-page PDF renderer & stitcher
 │   ├── multi_page.py      # Penyambung halaman kontinu & simulasi chunking
@@ -83,7 +85,7 @@ uv pip install -U -r pyproject.toml
 Buat file `.env` (salin dari template bila perlu):
 ```env
 LLM_API_KEY=your_api_key_here
-LLM_BASE_URL=https://api.together.xyz/v1
+LLM_BASE_URL=http://localhost:1234/v1
 VLM_MODEL=qwen-35b-vision
 OCR_MODEL=ocr-lighton
 ```
@@ -119,36 +121,29 @@ Menampilkan bagaimana teks Markdown yang diekstrak akan dipecah oleh `MarkdownHe
 python main.py dokumen.pdf --preview-chunks --chunk-size 1000 --chunk-overlap 150
 ```
 
-### 4. Memilih Spesifikasi Tata Letak Tertentu (`-t` / `--type`)
+### 4. Memilih Spesifikasi Tunggal / Multi-Spesifikasi Komposit (`-t` / `--type`)
 
-Secara default, pipeline akan melakukan klasifikasi layout secara otomatis. Anda juga dapat memaksa spesifikasi tertentu:
+Secara default, pipeline akan melakukan klasifikasi multi-label secara otomatis. Anda juga dapat memaksa kombinasi spesifikasi tertentu:
 
 ```powershell
-# Mode 1: Dokumen biasa tanpa hierarki rumit
+# 1. Spesifikasi Tunggal: Dokumen biasa
 python main.py formulir.pdf --type plain
 
-# Mode 2: Dokumen ber-heading penting dengan kontinuitas antar halaman
+# 2. Spesifikasi Tunggal: Dokumen hierarki bab
 python main.py buku_panduan.pdf --type markdown_hierarchy
 
-# Mode 3: Jurnal ilmiah 2-kolom & 2-bahasa (urutan baca kolom kiri lalu kanan)
-python main.py jurnal_penelitian.pdf --type bilingual_journal
+# 3. Spesifikasi Tunggal: Jurnal ilmiah 2-kolom
+python main.py jurnal.pdf --type bilingual_journal
 
-# Mode 4: Slide presentasi
-python main.py presentasi.pdf --type presentation_slides
+# 4. Multi-Spesifikasi Komposit (Jurnal 2-Kolom + Hierarki Bab Kontinu):
+python main.py jurnal_lengkap.pdf --type journal,hierarchy
+
+# 5. Multi-Spesifikasi Komposit (Slide Presentasi + Hierarki):
+python main.py slide_modul.pdf --type slide,hierarchy
 ```
 
 ### 5. Melihat Daftar Spesifikasi yang Didukung
 
 ```powershell
 python main.py --list-types
-```
-
----
-
-## 🧪 Pengujian & Verifikasi
-
-Untuk menjalankan script pengujian unit test dan verifikasi chunking:
-
-```powershell
-.venv\Scripts\Activate.ps1 ; python test_extraction_specs.py
 ```

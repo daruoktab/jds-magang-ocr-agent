@@ -4,13 +4,13 @@ CLI Document Vision OCR & Text Extractor (Ready for Chunking).
 Ekstraksi dokumen (PDF, PPT/PPTX, Gambar) menjadi teks Markdown bersih
 yang siap langsung di-chunking.
 
-Contoh Penggunaan:
-    python main.py dokumen.pdf                        # Ekstrak PDF ke Markdown
+Mendukung spesifikasi tunggal maupun kombinasi multi-spesifikasi:
+    python main.py dokumen.pdf                        # Ekstrak PDF (auto-detect specs)
     python main.py presentasi.pptx                    # Ekstrak PPTX ke Markdown
     python main.py scan.jpg                           # Ekstrak gambar ke Markdown
     python main.py dokumen.pdf -o output.md           # Simpan output ke file Markdown
     python main.py dokumen.pdf --preview-chunks       # Lihat simulasi hasil chunking
-    python main.py jurnal.pdf --type bilingual_journal # Paksa mode jurnal 2-kolom
+    python main.py jurnal.pdf --type journal,hierarchy # Multi-spesifikasi komposit
     python main.py --list-types                       # Lihat daftar spesifikasi layout
 """
 from __future__ import annotations
@@ -27,13 +27,14 @@ from app.multi_page import preview_markdown_chunks
 from app.ocr import build_ocr_extractor
 from app.pdf import pdf_to_images, process_multipage_pdf
 from app.ppt import process_presentation
+from app.prompts import normalize_specs
 from app.schemas import ExtractedDocument
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vision-doc-extractor",
-        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking.",
+        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking (Multi-Spesifikasi).",
     )
     p.add_argument("document", nargs="?", help="Path file dokumen (PDF, PPTX, PPT, atau Gambar)")
     p.add_argument("-o", "--out", default=None, help="Path file output .md untuk menyimpan hasil ekstraksi")
@@ -41,9 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
         "-t",
         "--type",
         dest="doc_type",
-        choices=["plain", "markdown_hierarchy", "bilingual_journal", "presentation_slides"],
         default=None,
-        help="Paksa spesifikasi tata letak dokumen (opsional, default auto-detect)",
+        help="Paksa spesifikasi tata letak dokumen, bisa komposit dipisah koma (mis. 'journal,hierarchy', 'plain', 'presentation_slides')",
     )
     p.add_argument("--preview-chunks", action="store_true", help="Tampilkan simulasi pemecahan chunk")
     p.add_argument("--chunk-size", type=int, default=1000, help="Ukuran chunk karakter untuk preview (default 1000)")
@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.list_types:
-        print("Spesifikasi Tata Letak & Kemampuan Ekstraksi Dokumen:")
+        print("Spesifikasi Tata Letak & Kemampuan Ekstraksi Dokumen (Dapat Dikombinasikan):")
         for name, agent in AGENT_REGISTRY.items():
             print(f"- {name:22s} : {agent.description}")
         return 0
@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
             markdown_content = process_presentation(input_path)
             extracted_doc = ExtractedDocument(
                 file_path=str(input_path),
-                doc_type="presentation_slides",
+                specs=["presentation_slides"],
                 total_pages=1,
                 markdown_content=markdown_content,
                 metadata={"source_type": "presentation", "filename": input_path.name},
@@ -118,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
                 pdf_path=input_path,
                 pipeline=pipeline,
                 dpi=args.dpi,
-                forced_doc_type=args.doc_type,
+                forced_specs=args.doc_type,
             )
             markdown_content = extracted_doc.markdown_content
 
@@ -126,15 +126,16 @@ def main(argv: list[str] | None = None) -> int:
         else:
             pipeline = DocumentExtractionPipeline(settings)
             if args.classify_only:
-                doc_type = pipeline.extractor.classify(str(input_path))
-                print(json.dumps({"file": str(input_path), "doc_type": doc_type}, indent=2))
+                specs = pipeline.extractor.classify(str(input_path))
+                print(json.dumps({"file": str(input_path), "specs": specs}, indent=2))
                 return 0
 
-            res = pipeline.run(str(input_path), forced_doc_type=args.doc_type)
+            res = pipeline.run(str(input_path), forced_specs=args.doc_type)
             markdown_content = res["markdown_content"]
+            detected_specs = res.get("specs") or normalize_specs(args.doc_type)
             extracted_doc = ExtractedDocument(
                 file_path=str(input_path),
-                doc_type=res.get("doc_type", "plain"),
+                specs=detected_specs,
                 total_pages=1,
                 markdown_content=markdown_content,
                 metadata={"source_type": "image", "filename": input_path.name},
@@ -159,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print("\n" + "=" * 60, file=sys.stderr)
             print(f"--- PREVIEW CHUNKING ({len(chunks)} Potongan Chunk) ---", file=sys.stderr)
+            print(f"--- Spesifikasi Aktif: {extracted_doc.specs} ---", file=sys.stderr)
             print("=" * 60, file=sys.stderr)
             for ch in chunks:
                 print(f"\n[Chunk #{ch['chunk_index']} | {ch['char_count']} chars | Meta: {ch['metadata']}]", file=sys.stderr)

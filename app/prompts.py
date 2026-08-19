@@ -1,141 +1,158 @@
 """
-Template prompt untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking.
+Template prompt modular untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking.
 
-Mencakup 4 spesifikasi kemampuan ekstraksi dokumen:
-  1. Dokumen Standar / Biasa (plain text & tables)
-  2. Kontinuitas Hierarki Markdown (#, ##, ###)
-  3. Dokumen 2 Kolom & 2 Bahasa (Jurnal Ilmiah, column-aware reading order)
-  4. Dokumen Presentasi / PPT Slides (Slide headers, bullet points, deskripsi diagram/visual)
+Mendukung penyusunan prompt modular (Composable Prompting) untuk dokumen yang
+memiliki lebih dari 1 spesifikasi layout secara bersamaan:
+  1. `plain`                : Dokumen biasa / standar
+  2. `markdown_hierarchy`   : Kontinuitas hierarki heading (#, ##, ###)
+  3. `bilingual_journal`    : Jurnal ilmiah 2-kolom & 2-bahasa (column-aware reading order)
+  4. `presentation_slides`  : Slide presentasi (bullet points, deskripsi diagram/visual)
 """
 from __future__ import annotations
 
+import re
+
 # --- System Prompt Utama -----------------------------------------------------
-SYSTEM_DOCUMENT_EXTRACTOR = (
+SYSTEM_DOCUMENT_EXTRACTOR: str = (
     "Kamu adalah AI ahli ekstraksi dokumen multimodal berpresisi tinggi. "
     "Tugasmu adalah menganalisis gambar dokumen dan mengubah seluruh isinya "
     "menjadi format MARKDOWN BERSIH yang terstruktur dan siap langsung di-chunking "
     "oleh text splitter.\n\n"
-    "Aturan Umum:\n"
-    "1. Pertahankan ejaan, angka, istilah teknis, dan bahasa asli persis seperti di dokumen.\n"
-    "2. Gunakan sintaks Markdown standar (heading #, ##, ###; bullet list -, 1.; tabel GFM | Col | Col |; bold **text**).\n"
+    "Aturan Standar:\n"
+    "1. Pertahankan ejaan, angka, istilah teknis, rumus, dan bahasa asli persis seperti di dokumen.\n"
+    "2. Gunakan sintaks Markdown standar (heading #, ##, ###; bullet list -, 1.; tabel GFM | Col |; bold **text**).\n"
     "3. Jangan menambahkan penjelasan pengantar ('Berikut adalah hasil ekstraksi...') atau penutup. Outputkan HANYA konten dokumen dalam Markdown.\n"
-    "4. Jika ada tabel, konversi ke format Markdown Table yang valid.\n"
+    "4. Jika ada tabel, konversi ke format Markdown Table (GFM) yang valid.\n"
     "5. Jika ada teks OCR tambahan, gunakan sebagai referensi untuk memastikan akurasi ejaan/angka, namun gambar tetap acuan visual utama."
 )
 
-# --- 1. Prompt Dokumen Biasa / Standar ---------------------------------------
-_PROMPT_PLAIN_DOCUMENT = """Ekstrak seluruh teks dan isi dari gambar dokumen ini menjadi Markdown yang rapi dan terstruktur.
+# --- Modul Aturan Komposisional (Composable Rule Modules) --------------------
 
-Panduan:
-- Susun teks dalam paragraf yang rapi dan logis.
-- Jika ada judul atau subjudul, gunakan heading Markdown (`##`, `###`).
-- Jika ada daftar item, gunakan bullet points (`- `) atau penomoran (`1. `).
-- Jika ada formulir atau data atribut, gunakan format key-value tebal (mis. `**Nama:** Budi`).
-- Jika ada tabel, ubah menjadi format tabel Markdown.
+_RULE_BASE: str = """Ekstrak seluruh teks dan isi dari gambar dokumen ini menjadi Markdown yang bersih, rapi, dan terstruktur."""
 
-Outputkan HANYA teks Markdown dokumen.
-"""
+_RULE_COLUMN_AWARE: str = """### PANDUAN TATA LETAK 2-KOLOM & BILINGUAL (Column-Aware Reading Order):
+- URUTAN BACA KOLOM: Baca dan tuntaskan seluruh teks di KOLOM KIRI dari atas sampai bawah terlebih dahulu. Setelah kolom kiri selesai, baru lanjutkan membaca KOLOM KANAN dari atas sampai bawah. JANGAN membaca melintang horizontal memotong antar kolom!
+- STRUKTUR BILINGUAL: Judul, abstrak (Bahasa Indonesia & English), dan teks dwibahasa harus dipisahkan dengan heading yang jelas (mis. `### Abstrak`, `### Abstract`).
+- Rumus matematika dan sitasi dalam kolom ditulis dengan jelas dan rapi."""
 
-# --- 2. Prompt Kontinuitas Hierarki Markdown ---------------------------------
-_PROMPT_MARKDOWN_HIERARCHY = """Ekstrak dokumen ini dengan fokus utama menjaga HIERARKI HEADING MARKDOWN (#, ##, ###) yang runtut dan ketat.
-
-Panduan:
-- Identifikasi judul utama dokumen sebagai `# Judul Dokumen`.
-- Identifikasi bab / bagian utama sebagai `## Bagian Utama`.
+_RULE_MARKDOWN_HIERARCHY: str = """### PANDUAN HIERARKI HEADING MARKDOWN (#, ##, ###):
+- Identifikasi judul utama sebagai `# Judul Dokumen`.
+- Identifikasi bab/bagian utama sebagai `## Bagian Utama`.
 - Identifikasi sub-bab sebagai `### Sub-bagian` dan `#### Rincian`.
-- Pastikan urutan dan kedalaman heading tidak melompat sembarangan (mis. jangan langsung ### tanpa ada ##).
+- Pastikan urutan dan kedalaman heading runtut dan tidak melompat sembarangan (mis. jangan langsung ### tanpa ada ##).
 - Pertahankan daftar berpoin bertingkat dengan indentasi spasi yang konsisten.
-- Jika halaman ini merupakan kelanjutan dari bagian sebelumnya (tanpa judul baru), lanjutkan isi kontennya langsung dengan paragraf/poin yang sesuai.
+- Jika dokumen ini merupakan kelanjutan dari bagian sebelumnya (tanpa judul baru), lanjutkan isi kontennya langsung dengan paragraf/poin yang sesuai."""
 
-Outputkan HANYA teks Markdown dengan hierarki heading yang presisi.
-"""
+_RULE_PRESENTATION_SLIDES: str = """### PANDUAN SLIDE PRESENTASI & ELEMEN VISUAL:
+- Awali dengan judul slide: `## Slide: [Judul Slide]` (atau `## [Judul Slide]`).
+- Sajikan poin-poin presentasi menggunakan bullet points berjenjang (`- Poin utama`, `  - Sub-poin penjelasan`).
+- Jika terdapat visual, diagram alur, grafik angka, atau bagan: Deskripsikan informasi atau relasi bagan tersebut dalam blockquote: `> **[Diagram/Visual]:** [Penjelasan isi bagan, relasi panah, dan angka utama]`.
+- Konversi tabel ringkas atau perbandingan metrik ke tabel Markdown."""
 
-# --- 3. Prompt Jurnal 2 Kolom & 2 Bahasa -------------------------------------
-_PROMPT_BILINGUAL_JOURNAL = """Ekstrak dokumen ilmiah / artikel ini dengan membaca urutan KOLOM SECARA BENAR (Column-Aware Reading Order) dan menjaga struktur DUA BAHASA (Bilingual).
-
-Panduan Khusus Jurnal 2 Kolom & Bilingual:
-1. URUTAN BACA 2 KOLOM:
-   - Baca dan tuntaskan seluruh teks di KOLOM KIRI dari atas sampai bawah terlebih dahulu.
-   - Setelah kolom kiri selesai, baru lanjutkan membaca KOLOM KANAN dari atas sampai bawah.
-   - JANGAN membaca melintang horizontal memotong antar kolom!
-2. FORMAT DOKUMEN ILMIAH:
-   - Judul artikel, nama penulis, dan afiliasi diletakkan di bagian atas.
-   - Bagian Abstrak / Abstract (seringkali 2 bahasa, mis. Bahasa Indonesia & English) dipisahkan dengan heading yang jelas (`### Abstrak`, `### Abstract`).
-   - Bagian utama (Pendahuluan, Metode, Hasil, Pembahasan, Kesimpulan, Referensi) disusun dengan heading `##`.
-3. RUMUS & TABEL:
-   - Rumus matematika ditulis jelas (format LaTeX/teks bersih).
-   - Tabel dan grafik 2 kolom diposisikan secara logis sesuai alur teks.
-
-Outputkan HANYA teks Markdown jurnal yang runtut sesuai urutan baca kolom yang benar.
-"""
-
-# --- 4. Prompt Slide Presentasi / PPT ---------------------------------------
-_PROMPT_PRESENTATION_SLIDES = """Ekstrak slide presentasi ini menjadi Markdown terstruktur yang optimal untuk representasi slide.
-
-Panduan Slide:
-1. Awali dengan judul slide: `## Slide: [Judul Slide]` (atau `## [Judul Slide]`).
-2. Sajikan pesan utama dan poin-poin presentasi menggunakan bullet points berjenjang (`- Poin utama`, `  - Sub-poin penjelasan`).
-3. Jika terdapat visual, diagram alur, grafik angka, atau bagan:
-   - Deskripsikan informasi atau relasi bagan tersebut dalam blockquote: `> **[Diagram/Grafik]:** [Penjelasan isi bagan, relasi panah, dan angka utama]`.
-4. Jika ada tabel atau perbandingan metrik, representasikan dalam tabel Markdown.
-
-Outputkan HANYA teks Markdown slide presentasi.
-"""
+_RULE_PLAIN_DOCUMENT: str = """### PANDUAN DOKUMEN STANDAR:
+- Susun teks dalam paragraf yang rapi dan logis.
+- Jika ada formulir atau data atribut, gunakan format key-value tebal (mis. `**Nama:** Budi`).
+- Jika ada tabel data, ubah menjadi format tabel Markdown."""
 
 # --- Klasifikasi Karakteristik Dokumen --------------------------------------
-CLASSIFY_SYSTEM = (
-    "Kamu adalah pengklasifikasi layout dokumen. Tugasmu menentukan karakteristik "
-    "tata letak dokumen untuk memilih strategi ekstraksi Markdown yang paling tepat."
+CLASSIFY_SYSTEM: str = (
+    "Kamu adalah pengklasifikasi layout dokumen tingkat lanjut. Tugasmu menganalisis "
+    "gambar dokumen dan mendeteksi SEMUA karakteristik spesifikasi tata letak yang relevan "
+    "(bisa lebih dari satu / multi-label)."
 )
 
-CLASSIFY_PROMPT = """Analisis layout gambar dokumen berikut dan tentukan satu karakteristik utama dari pilihan berikut:
+CLASSIFY_PROMPT: str = """Analisis layout gambar dokumen berikut dan tentukan SEMUA karakteristik spesifikasi yang ada:
 
+Pilihan spesifikasi:
 - `plain`: Dokumen umum, surat, memo, formulir, atau teks standar biasa.
-- `markdown_hierarchy`: Dokumen berstruktur resmi, laporan teknis, buku, atau SOP dengan hierarki bab (#, ##, ###) yang ketat.
-- `bilingual_journal`: Jurnal ilmiah, makalah akademik, artikel 2 kolom, atau dokumen hukum 2 bahasa berdampingan.
-- `presentation_slides`: Slide presentasi (PowerPoint/Keynote/PDF landscape) berisi poin-poin dan diagram/visual.
+- `markdown_hierarchy`: Dokumen berstruktur resmi, laporan, buku, atau SOP dengan penomoran bab (#, ##, ###) yang bertingkat.
+- `bilingual_journal`: Jurnal ilmiah, makalah akademik, format 2 kolom, atau dokumen hukum 2 bahasa berdampingan.
+- `presentation_slides`: Slide presentasi (PowerPoint/PDF landscape), sarat bullet points, atau memiliki diagram/visual bagan.
 
-Pilih SATU nama di atas. Outputkan HANYA JSON:
-{{"doc_type": "<plain | markdown_hierarchy | bilingual_journal | presentation_slides>"}}
+Sebuah dokumen DAPAT memiliki lebih dari 1 spesifikasi (misal jurnal ilmiah multi-halaman memiliki `bilingual_journal` DAN `markdown_hierarchy`).
+
+Outputkan HANYA format JSON list:
+{{"specs": ["<spec1>", "<spec2>"]}}
 """
+
+
+def normalize_specs(specs: list[str] | str | None) -> list[str]:
+    """
+    Normalisasi input spesifikasi menjadi list of valid spec keys.
+    Mendukung input berupa list, string tunggal, atau string koma ('journal,hierarchy').
+    """
+    if not specs:
+        return ["plain"]
+
+    raw_items: list[str] = []
+    if isinstance(specs, str):
+        # Pisahkan jika ada koma atau spasi
+        raw_items = [s.strip() for s in re.split(r"[,|+]", specs) if s.strip()]
+    elif isinstance(specs, (list, tuple, set)):
+        for item in specs:
+            if isinstance(item, str):
+                raw_items.extend([s.strip() for s in re.split(r"[,|+]", item) if s.strip()])
+
+    matched_specs: list[str] = []
+    for item in raw_items:
+        key = item.lower()
+        if "journal" in key or "bilingual" in key or "2col" in key:
+            if "bilingual_journal" not in matched_specs:
+                matched_specs.append("bilingual_journal")
+        elif "hierarchy" in key or "markdown" in key or "report" in key:
+            if "markdown_hierarchy" not in matched_specs:
+                matched_specs.append("markdown_hierarchy")
+        elif "slide" in key or "ppt" in key or "presentation" in key:
+            if "presentation_slides" not in matched_specs:
+                matched_specs.append("presentation_slides")
+        elif "plain" in key or "generic" in key or "standard" in key:
+            if "plain" not in matched_specs:
+                matched_specs.append("plain")
+
+    return matched_specs or ["plain"]
 
 
 def build_extraction_prompt(
-    doc_type: str = "plain",
+    specs: list[str] | str | None = None,
     ocr_text: str | None = None,
     previous_page_context: str | None = None,
 ) -> str:
     """
-    Bangun user prompt ekstraksi berdasarkan karakteristik dokumen, OCR teks tambahan,
-    dan konteks heading dari halaman sebelumnya bila multi-halaman.
+    Bangun prompt ekstraksi komposit modular yang menggabungkan seluruh aturan spesifikasi aktif.
     """
-    doc_lower = (doc_type or "plain").lower()
+    active_specs = normalize_specs(specs)
+    prompt_blocks: list[str] = [_RULE_BASE]
 
-    if "journal" in doc_lower or "bilingual" in doc_lower or "2col" in doc_lower:
-        base_prompt = _PROMPT_BILINGUAL_JOURNAL
-    elif "hierarchy" in doc_lower or "markdown" in doc_lower or "report" in doc_lower:
-        base_prompt = _PROMPT_MARKDOWN_HIERARCHY
-    elif "slide" in doc_lower or "ppt" in doc_lower or "presentation" in doc_lower:
-        base_prompt = _PROMPT_PRESENTATION_SLIDES
-    else:
-        base_prompt = _PROMPT_PLAIN_DOCUMENT
+    # Gabungkan modul-modul aturan yang aktif
+    if "bilingual_journal" in active_specs:
+        prompt_blocks.append(_RULE_COLUMN_AWARE)
 
-    parts = [base_prompt.strip()]
+    if "markdown_hierarchy" in active_specs:
+        prompt_blocks.append(_RULE_MARKDOWN_HIERARCHY)
 
+    if "presentation_slides" in active_specs:
+        prompt_blocks.append(_RULE_PRESENTATION_SLIDES)
+
+    if "plain" in active_specs and len(active_specs) == 1:
+        prompt_blocks.append(_RULE_PLAIN_DOCUMENT)
+
+    # Sisipkan konteks heading halaman sebelumnya jika ada
     if previous_page_context and previous_page_context.strip():
-        parts.append(
-            "\n--- KONTEKS HALAMAN SEBELUMNYA (KONTINUITAS HEADING) ---\n"
-            f"Dokumen ini merupakan halaman lanjutan. Konteks akhir halaman sebelumnya adalah:\n"
+        prompt_blocks.append(
+            "### KONTEKS HALAMAN SEBELUMNYA (KONTINUITAS HEADING):\n"
+            "Dokumen ini merupakan halaman lanjutan. Konteks akhir halaman sebelumnya adalah:\n"
             f"```markdown\n{previous_page_context.strip()[-500:]}\n```\n"
-            "Pastikan level heading (#, ##, ###) dan kelanjutan kalimat pada halaman ini menyambung secara selaras."
+            "Pastikan level heading (#, ##, ###) dan kelanjutan kalimat pada halaman ini menyambung secara selaras dengan konteks di atas."
         )
 
+    # Sisipkan teks mentah OCR jika ada
     if ocr_text and ocr_text.strip():
-        parts.append(
-            "\n--- AUXILIARY OCR TEXT (REFERENSI TEKS TAMBAHAN) ---\n"
+        prompt_blocks.append(
+            "### AUXILIARY OCR TEXT (REFERENSI TEKS TAMBAHAN):\n"
             "Teks mentah berikut diekstrak dari gambar menggunakan model OCR beresolusi tinggi. "
-            "Gunakan untuk membantu memvalidasi ejaan, istilah teknis, atau angka kecil:\n"
+            "Gunakan untuk membantu memverifikasi ejaan, istilah teknis, simbol, atau angka kecil:\n"
             f"```\n{ocr_text.strip()}\n```"
         )
 
-    return "\n\n".join(parts)
+    prompt_blocks.append("Outputkan HANYA konten dokumen dalam format Markdown yang bersih dan terstruktur.")
+    return "\n\n".join(prompt_blocks)

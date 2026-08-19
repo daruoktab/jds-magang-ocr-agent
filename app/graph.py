@@ -1,5 +1,6 @@
 """
 Orkestrasi Pipeline Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking dengan LangGraph.
+Mendukung multi-spesifikasi komposit layout dokumen.
 
 Alur StateGraph:
     START -> preprocess -> ocr -> classify -> extract_markdown -> END
@@ -18,13 +19,16 @@ from .extractor import VisionExtractor
 from .llm import build_vlm
 from .ocr import build_ocr_extractor
 from .preprocess import preprocess_image
+from .prompts import normalize_specs
 
 
 class DocumentExtractionState(TypedDict, total=False):
     image_path: str
     preprocessed_path: str
+    forced_specs: list[str] | str | None
     forced_doc_type: str | None
     previous_page_context: str | None
+    specs: list[str]
     doc_type: str
     ocr_text: str
     markdown_content: str
@@ -62,12 +66,14 @@ class DocumentExtractionPipeline:
         self,
         image_path: str,
         *,
+        forced_specs: list[str] | str | None = None,
         forced_doc_type: str | None = None,
         previous_page_context: str | None = None,
     ) -> dict[str, Any]:
-        """Jalankan pipeline ekstraksi pada satu gambar dokumen."""
+        """Jalankan pipeline ekstraksi komposit pada satu gambar dokumen."""
         init_state: DocumentExtractionState = {
             "image_path": image_path,
+            "forced_specs": forced_specs or forced_doc_type,
             "forced_doc_type": forced_doc_type,
             "previous_page_context": previous_page_context,
         }
@@ -92,24 +98,26 @@ class DocumentExtractionPipeline:
             return {"ocr_text": ""}
 
     def _node_classify(self, state: DocumentExtractionState) -> dict[str, Any]:
-        if state.get("forced_doc_type"):
-            return {"doc_type": state["forced_doc_type"]}
+        forced = state.get("forced_specs") or state.get("forced_doc_type")
+        if forced:
+            specs = normalize_specs(forced)
+            return {"specs": specs, "doc_type": specs[0]}
 
         img_path = state.get("preprocessed_path") or state["image_path"]
         try:
-            doc_type = self.extractor.classify(img_path)
-            return {"doc_type": doc_type}
+            specs = self.extractor.classify(img_path)
+            return {"specs": specs, "doc_type": specs[0] if specs else "plain"}
         except Exception as e:  # noqa: BLE001
-            warnings.warn(f"Klasifikasi otomatis gagal ({e}), fallback ke 'plain'.")
-            return {"doc_type": "plain"}
+            warnings.warn(f"Klasifikasi otomatis gagal ({e}), fallback ke ['plain'].")
+            return {"specs": ["plain"], "doc_type": "plain"}
 
     def _node_extract_markdown(self, state: DocumentExtractionState) -> dict[str, Any]:
         img_path = state.get("preprocessed_path") or state["image_path"]
-        doc_type = state.get("doc_type") or "plain"
+        specs = state.get("specs") or ["plain"]
         ocr_text = state.get("ocr_text") or None
         previous_context = state.get("previous_page_context") or None
 
-        agent = get_agent(doc_type)
+        agent = get_agent(specs)
         md_text = agent.run(
             image_path=img_path,
             llm=self.vlm,

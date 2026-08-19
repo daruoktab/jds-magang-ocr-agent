@@ -1,5 +1,6 @@
 """
 Pipeline ekstraksi: gambar dokumen -> VLM (+ OCR Fusion) -> Markdown Bersih Siap Chunking.
+Mendukung multi-spesifikasi karakteristik tata letak dokumen secara komposit.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from .prompts import (
     CLASSIFY_SYSTEM,
     SYSTEM_DOCUMENT_EXTRACTOR,
     build_extraction_prompt,
+    normalize_specs,
 )
 
 
@@ -27,15 +29,15 @@ class VisionExtractor:
         llm: BaseChatModel,
         system_prompt: str = SYSTEM_DOCUMENT_EXTRACTOR,
     ) -> None:
-        self.llm = llm
-        self.system_prompt = system_prompt
+        self.llm: BaseChatModel = llm
+        self.system_prompt: str = system_prompt
 
-    def classify(self, image_path: str) -> str:
+    def classify(self, image_path: str) -> list[str]:
         """
-        Klasifikasikan karakteristik layout dokumen:
-        'plain', 'markdown_hierarchy', 'bilingual_journal', atau 'presentation_slides'.
+        Klasifikasikan satu atau lebih karakteristik layout dokumen yang ada pada gambar:
+        ['plain'], ['bilingual_journal', 'markdown_hierarchy'], dsb.
         """
-        content: list[dict] = [
+        content: list[dict[str, Any]] = [
             {"type": "text", "text": CLASSIFY_PROMPT},
             {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},
         ]
@@ -52,50 +54,50 @@ class VisionExtractor:
         if match:
             try:
                 data = json.loads(match.group(0))
-                doc_type = data.get("doc_type", "plain").lower()
-                if doc_type in ("plain", "markdown_hierarchy", "bilingual_journal", "presentation_slides"):
-                    return doc_type
+                raw_specs = data.get("specs") or [data.get("doc_type")]
+                return normalize_specs(raw_specs)
             except Exception:
                 pass
 
-        # Fallback string matching
+        # Fallback multi-matching via regex
         text_lower = text_resp.lower()
+        detected: list[str] = []
         if "journal" in text_lower or "bilingual" in text_lower or "2col" in text_lower:
-            return "bilingual_journal"
-        if "hierarchy" in text_lower or "markdown" in text_lower:
-            return "markdown_hierarchy"
+            detected.append("bilingual_journal")
+        if "hierarchy" in text_lower or "markdown" in text_lower or "heading" in text_lower:
+            detected.append("markdown_hierarchy")
         if "slide" in text_lower or "presentation" in text_lower or "ppt" in text_lower:
-            return "presentation_slides"
+            detected.append("presentation_slides")
 
-        return "plain"
+        return detected if detected else ["plain"]
 
     def extract_markdown(
         self,
         image_path: str,
         *,
-        doc_type: str = "plain",
+        specs: list[str] | str | None = None,
         ocr_text: str | None = None,
         previous_page_context: str | None = None,
     ) -> str:
         """
-        Ekstrak gambar dokumen menjadi teks Markdown bersih sesuai spesifikasi layout.
+        Ekstrak gambar dokumen menjadi teks Markdown bersih sesuai spesifikasi layout komposit.
 
         Args:
             image_path: Path ke file gambar dokumen.
-            doc_type: Karakteristik dokumen ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides').
+            specs: Satu atau daftar karakteristik dokumen ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides').
             ocr_text: Teks mentah OCR tambahan untuk grounding / fusion.
             previous_page_context: Konteks halaman sebelumnya untuk menjaga kontinuitas header.
 
         Returns:
-            Teks Markdown terstruktur.
+            Teks Markdown terstruktur siap chunking.
         """
         user_prompt = build_extraction_prompt(
-            doc_type=doc_type,
+            specs=specs,
             ocr_text=ocr_text,
             previous_page_context=previous_page_context,
         )
 
-        content: list[dict] = [
+        content: list[dict[str, Any]] = [
             {"type": "text", "text": user_prompt},
             {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},
         ]

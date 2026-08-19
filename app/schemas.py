@@ -1,9 +1,10 @@
 """
 Pydantic Schemas untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking.
+Mendukung multi-spesifikasi / karakteristik komposit pada satu dokumen.
 """
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 from pydantic import BaseModel, Field
 
 
@@ -13,12 +14,17 @@ class OCRResult(BaseModel):
 
 
 class ClassificationResult(BaseModel):
-    """Hasil klasifikasi karakteristik layout dokumen."""
-    doc_type: Literal["plain", "markdown_hierarchy", "bilingual_journal", "presentation_slides"] = Field(
-        default="plain",
-        description="Karakteristik dokumen: plain, markdown_hierarchy, bilingual_journal, presentation_slides",
+    """Hasil klasifikasi satu atau lebih karakteristik layout dokumen."""
+    specs: list[str] = Field(
+        default_factory=lambda: ["plain"],
+        description="Daftar karakteristik yang terdeteksi: plain, markdown_hierarchy, bilingual_journal, presentation_slides",
     )
     confidence: float = Field(default=1.0, description="Tingkat keyakinan klasifikasi")
+
+    @property
+    def primary_spec(self) -> str:
+        """Karakteristik utama dokumen."""
+        return self.specs[0] if self.specs else "plain"
 
 
 class DocumentSection(BaseModel):
@@ -31,6 +37,10 @@ class DocumentSection(BaseModel):
 class DocumentPage(BaseModel):
     """Hasil ekstraksi per-halaman dokumen."""
     page_number: int = Field(..., description="Nomor urut halaman (mulai 1)")
+    specs: list[str] = Field(
+        default_factory=lambda: ["plain"],
+        description="Daftar karakteristik layout pada halaman ini",
+    )
     markdown_content: str = Field(..., description="Teks Markdown yang diekstrak dari halaman ini")
     ocr_text: str | None = Field(default=None, description="Teks mentah hasil OCR tambahan")
     image_path: str | None = Field(default=None, description="Path gambar halaman bila ada")
@@ -41,11 +51,19 @@ class ExtractedDocument(BaseModel):
     Hasil ekstraksi lengkap seluruh dokumen dalam format Markdown utuh siap chunking.
     """
     file_path: str = Field(..., description="Path file input dokumen (PDF/PPTX/Image)")
-    doc_type: str = Field(default="plain", description="Karakteristik layout dokumen yang terdeteksi")
+    specs: list[str] = Field(
+        default_factory=lambda: ["plain"],
+        description="Daftar karakteristik layout dokumen yang terdeteksi",
+    )
     total_pages: int = Field(default=1, description="Jumlah total halaman / slide")
     markdown_content: str = Field(..., description="Teks Markdown utuh dari awal sampai akhir, siap di-chunking")
     pages: list[DocumentPage] = Field(default_factory=list, description="Detail ekstraksi per-halaman")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Metadata tambahan dokumen")
+
+    @property
+    def doc_type(self) -> str:
+        """String gabungan spesifikasi (kompatibilitas)."""
+        return ", ".join(self.specs) if self.specs else "plain"
 
 
 class ChunkItem(BaseModel):

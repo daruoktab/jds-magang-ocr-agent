@@ -1,5 +1,6 @@
 """
 Harness Deep Agents untuk ekstraksi dokumen multi-modal -> Markdown Siap Chunking.
+Mendukung multi-spesifikasi komposit.
 """
 from __future__ import annotations
 
@@ -27,12 +28,12 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
     @tool
     def extract_to_markdown(
         image_path: str,
-        doc_type: str = "plain",
+        specs: str = "plain",
         ocr_text: str | None = None,
     ) -> str:
-        """Ekstrak dokumen dari gambar menjadi teks Markdown bersih sesuai spesifikasi layout (plain, markdown_hierarchy, bilingual_journal, presentation_slides)."""
+        """Ekstrak dokumen dari gambar menjadi teks Markdown bersih sesuai satu atau kombinasi spesifikasi layout (mis. 'plain', 'bilingual_journal', 'markdown_hierarchy', 'presentation_slides', atau 'journal,hierarchy')."""
         proc = preprocess_image(image_path)
-        agent = get_agent(doc_type)
+        agent = get_agent(specs)
         return agent.run(
             proc.processed_path,
             llm=vlm,
@@ -58,7 +59,7 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
 
     doc_agent: SubAgent = {
         "name": "markdown-extractor",
-        "description": "Ekstrak teks Markdown terstruktur dari gambar dokumen.",
+        "description": "Ekstrak teks Markdown terstruktur dari gambar dokumen (mendukung kombinasi multi-spesifikasi).",
         "system_prompt": "Kamu spesialis ekstraksi Markdown dari gambar. Panggil tool extract_to_markdown.",
         "tools": [extract_to_markdown],
     }
