@@ -20,6 +20,7 @@ from .config import Settings, get_settings
 from .deep_agent import build_deep_agent
 from .extractor import VisionExtractor
 from .graph import DocumentExtractionPipeline, DocumentExtractionState, VisionRAGPipeline
+from .mcp_server import server as mcp_server
 from .multi_page import preview_markdown_chunks, stitch_pages_to_markdown
 from .ocr import OCRExtractor, build_ocr_extractor
 from .pdf import pdf_to_images, process_multipage_pdf

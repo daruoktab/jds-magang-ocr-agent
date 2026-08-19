@@ -1,4 +1,4 @@
-# jds-magang — Vision OCR & Document Extractor (Ready for Chunking)
+# jds-magang-ocr-agent — Vision OCR & Document Extractor (Ready for Chunking)
 
 Sistem ekstraksi dokumen multimodal (PDF, PPT/PPTX, Scan Gambar) menjadi **Markdown bersih dan terstruktur yang siap langsung di-chunking** untuk pipeline RAG downstream.
 
@@ -32,6 +32,42 @@ Proyek ini dilengkapi dengan **Master Agent dan 6 Sub-Agent Spesialis** ([app/de
 | `presentation-specialist` | Ekstraksi slide PowerPoint (.pptx) dengan hierarki bullet, tabel, dan notes | `extract_presentation_pptx` |
 | `pdf-orchestrator` | Orkestrasi pemrosesan PDF multi-halaman & penyambungan kontinuitas heading | `extract_pdf_document` |
 | `chunking-simulator` | Evaluasi kesiapan partisi Markdown dengan header splitter & recursive splitter | `preview_chunks` |
+
+---
+
+## 🔌 Model Context Protocol (MCP) Server
+
+Proyek ini menyediakan server MCP berstandar resmi **MCP Python SDK v2.0** ([app/mcp_server.py](file:///c:/Users/HYPE%20AMD/Documents/Coding/jds-magang/app/mcp_server.py)), mengekspos kapabilitas Vision OCR dan ekstrasi dokumen untuk AI Assistant (seperti Antigravity IDE, Claude Desktop, atau Cursor):
+
+### Daftar MCP Tools yang Disediakan:
+1. `extract_document_to_markdown`: Ekstraksi PDF, PPTX, gambar ke Markdown siap chunking.
+2. `ocr_image`: Grounding teks mentah presisi tinggi via model OCR.
+3. `classify_document_layout`: Deteksi multi-trait spesifikasi tata letak dokumen.
+4. `extract_presentation_pptx`: Parser file PowerPoint (.pptx/.ppt) ke Markdown.
+5. `preview_markdown_chunks`: Simulasi partisi teks Markdown dengan header metadata.
+6. `run_deep_reasoning_agent`: Eksekusi agen penalaran dokumen multimodal otonom.
+
+### Konfigurasi `mcp_config.json`:
+```json
+{
+  "mcpServers": {
+    "jds-magang-ocr-agent": {
+      "command": "c:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\.venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "app.mcp_server"
+      ],
+      "cwd": "c:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang",
+      "env": {
+        "LLM_BASE_URL": "http://localhost:1234/v1",
+        "LLM_API_KEY": "lm-studio",
+        "VLM_MODEL": "qwen-35b-vision",
+        "OCR_MODEL": "ocr-lighton"
+      }
+    }
+  }
+}
+```
 
 ---
 
@@ -76,8 +112,11 @@ jds-magang/
 │   ├── pdf.py             # Multi-page PDF renderer & stitcher
 │   ├── multi_page.py      # Penyambung halaman kontinu & simulasi chunking
 │   ├── graph.py           # Pipeline LangGraph DocumentExtractionPipeline
-│   └── deep_agent.py      # Harness Deep Agents dengan 6 subagents spesialis
+│   ├── deep_agent.py      # Harness Deep Agents dengan 6 subagents spesialis
+│   └── mcp_server.py      # Server MCP berstandar SDK v2.0
 ├── main.py                # Antarmuka CLI utama
+├── mcp_server.py          # Entrypoint runner MCP Server
+├── mcp_config.template.json # Template konfigurasi MCP JSON
 ├── pyproject.toml         # Konfigurasi dependensi
 └── README.md
 ```
@@ -109,7 +148,7 @@ OCR_MODEL=ocr-lighton
 
 ## 🚀 Panduan Penggunaan CLI
 
-### 1. Ekstraksi Dokumen ke Teks Markdown
+### 1. Ekstraksi Dokumen ke Teks Markdown (Default: Deep Reasoning Agent)
 
 ```powershell
 # Ekstrak PDF multi-halaman
@@ -122,50 +161,21 @@ python main.py presentasi.pptx
 python main.py scan_dokumen.jpg
 ```
 
-### 2. Menjalankan via Deep Agent Harness & Sub-Agents (`--agent`)
-
-```powershell
-# Eksekusi dengan delegasi otonom ke sub-agents
-python main.py dokumen.pdf --agent
-```
-
-### 3. Menyimpan Output ke File Markdown (`-o` / `--out`)
+### 2. Menyimpan Output ke File Markdown (`-o` / `--out`)
 
 ```powershell
 python main.py laporan_tahunan.pdf -o output/laporan.md
 ```
 
-### 4. Simulasi & Preview Chunking LangChain (`--preview-chunks`)
-
-Menampilkan bagaimana teks Markdown yang diekstrak akan dipecah oleh `MarkdownHeaderTextSplitter` dan `RecursiveCharacterTextSplitter`:
+### 3. Simulasi & Preview Chunking LangChain (`--preview-chunks`)
 
 ```powershell
 python main.py dokumen.pdf --preview-chunks --chunk-size 1000 --chunk-overlap 150
 ```
 
-### 5. Memilih Spesifikasi Tunggal / Multi-Spesifikasi Komposit (`-t` / `--type`)
-
-Secara default, pipeline akan melakukan klasifikasi multi-label secara otomatis. Anda juga dapat memaksa kombinasi spesifikasi tertentu:
+### 4. Memilih Spesifikasi Tunggal / Multi-Spesifikasi Komposit (`-t` / `--type`)
 
 ```powershell
-# 1. Spesifikasi Tunggal: Dokumen biasa
-python main.py formulir.pdf --type plain
-
-# 2. Spesifikasi Tunggal: Dokumen hierarki bab
-python main.py buku_panduan.pdf --type markdown_hierarchy
-
-# 3. Spesifikasi Tunggal: Jurnal ilmiah 2-kolom
-python main.py jurnal.pdf --type bilingual_journal
-
-# 4. Multi-Spesifikasi Komposit (Jurnal 2-Kolom + Hierarki Bab Kontinu):
+# Spesifikasi Komposit (Jurnal 2-Kolom + Hierarki Bab Kontinu):
 python main.py jurnal_lengkap.pdf --type journal,hierarchy
-
-# 5. Multi-Spesifikasi Komposit (Slide Presentasi + Hierarki):
-python main.py slide_modul.pdf --type slide,hierarchy
-```
-
-### 6. Melihat Daftar Spesifikasi yang Didukung
-
-```powershell
-python main.py --list-types
 ```
