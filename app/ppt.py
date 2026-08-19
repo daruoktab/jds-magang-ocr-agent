@@ -10,7 +10,6 @@ Mengekstrak slide presentasi menjadi teks Markdown terstruktur yang siap dichunk
 """
 from __future__ import annotations
 
-import io
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +17,9 @@ from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 
-def _table_to_markdown(table) -> str:
-    """Ubah tabel pptx menjadi Markdown table."""
-    rows = []
+def _table_to_markdown(table: Any) -> str:
+    """Ubah objek tabel python-pptx menjadi teks tabel Markdown (GFM)."""
+    rows: list[list[str]] = []
     for row in table.rows:
         cell_texts = [cell.text.replace("\n", " ").strip() for cell in row.cells]
         rows.append(cell_texts)
@@ -30,12 +29,11 @@ def _table_to_markdown(table) -> str:
 
     header = rows[0]
     separator = ["---"] * len(header)
-    md_lines = [
+    md_lines: list[str] = [
         "| " + " | ".join(header) + " |",
         "| " + " | ".join(separator) + " |",
     ]
     for row in rows[1:]:
-        # Sesuaikan panjang kolom
         padded = row + [""] * (len(header) - len(row))
         md_lines.append("| " + " | ".join(padded[:len(header)]) + " |")
 
@@ -49,30 +47,29 @@ def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
     Returns:
         list of dict: [{"slide_number": int, "title": str, "markdown": str, "notes": str, "image_count": int}]
     """
-    pptx_path = Path(pptx_path)
-    if not pptx_path.exists():
-        raise FileNotFoundError(f"File presentasi tidak ditemukan: {pptx_path}")
+    path_obj = Path(pptx_path)
+    if not path_obj.exists():
+        raise FileNotFoundError(f"File presentasi tidak ditemukan: {path_obj}")
 
-    prs = Presentation(str(pptx_path))
+    prs = Presentation(str(path_obj))
     slides_data: list[dict[str, Any]] = []
 
     for idx, slide in enumerate(prs.slides, start=1):
-        slide_title = ""
+        slide_title: str = ""
         body_lines: list[str] = []
-        notes_text = ""
-        image_count = 0
+        notes_text: str = ""
+        image_count: int = 0
 
-        # 1. Ambil title jika ada
+        # 1. Ambil judul slide jika ada
         if slide.shapes.title and slide.shapes.title.text.strip():
             slide_title = slide.shapes.title.text.strip()
 
         # 2. Iterasi shape dalam slide
         for shape in slide.shapes:
-            # Lewati title shape jika sudah diambil
             if shape == slide.shapes.title:
                 continue
 
-            # A. Gambar
+            # A. Gambar & Media
             if shape.shape_type in (MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.MEDIA):
                 image_count += 1
                 name = getattr(shape, "name", f"Image_{image_count}")
@@ -91,13 +88,12 @@ def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
                     text = p.text.strip()
                     if not text:
                         continue
-                    # Jika title belum ada dan ini baris pertama tebal/atas
                     if not slide_title and not body_lines:
                         slide_title = text
                         continue
 
-                    level = getattr(p, "level", 0)
-                    indent = "  " * level
+                    level: int = getattr(p, "level", 0)
+                    indent: str = "  " * level
                     body_lines.append(f"{indent}- {text}")
 
         # 3. Ambil speaker notes
@@ -134,7 +130,7 @@ def process_presentation(pptx_path: str | Path) -> str:
     slides = pptx_to_structured_text(pptx_path)
     file_stem = Path(pptx_path).stem.replace("_", " ").title()
 
-    doc_lines = [f"# {file_stem}\n"]
+    doc_lines: list[str] = [f"# {file_stem}\n"]
     for s in slides:
         doc_lines.append(s["markdown"])
         doc_lines.append("\n---\n")

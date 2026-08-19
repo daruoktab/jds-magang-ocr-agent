@@ -1,14 +1,12 @@
 """
-Ekstraksi OCR via model `ocr-lighton` (VLM kecil yang di-tuning untuk OCR).
+Ekstraksi OCR via model `ocr-lighton` (VLM kecil yang di-tuning khusus untuk OCR).
 
-Format request = chat biasa dengan `content` berupa ARRAY `[text, image_url]`
-(bukan string), persis seperti endpoint `curl` yang terdokumentasi. Outputnya
-TEKS biasa di `choices[0].message.content` (bukan structured JSON), sehingga
-TIDAK memakai `with_structured_output`.
+Format request = chat biasa dengan `content` berupa list `[{"type": "text", ...}, {"type": "image_url", ...}]`.
+Output teks biasa di `choices[0].message.content`.
 """
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
@@ -16,12 +14,14 @@ from langchain_core.messages import HumanMessage
 from .llm import image_data_uri
 from .schemas import OCRResult
 
-# Prompt ringkas untuk OCR (model kecil, cukup "extract all text").
-OCR_DEFAULT_PROMPT = "Extract all text from this image."
+if TYPE_CHECKING:
+    from .config import Settings
+
+OCR_DEFAULT_PROMPT: str = "Extract all text from this image."
 
 
 class OCRExtractor:
-    """OCR dokumen -> teks terstruktur (`OCRResult`)."""
+    """OCR dokumen -> teks mentah (`OCRResult`)."""
 
     def __init__(
         self,
@@ -32,23 +32,23 @@ class OCRExtractor:
         self.prompt = prompt
 
     def extract(self, image_path: str) -> OCRResult:
-        content: list[dict] = [
+        """Ekstrak seluruh teks mentah dari file gambar menggunakan model OCR."""
+        content: list[dict[str, Any]] = [
             {"type": "text", "text": self.prompt},
             {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},
         ]
 
-        # Catatan: `content` HARUS array (text + image_url), bukan string.
         message = HumanMessage(content=cast(Any, content))
         resp = self.llm.invoke([message])
 
-        # Keluaran model OCR = teks biasa.
         text = resp.content if isinstance(resp.content, str) else str(resp.content)
         return OCRResult(text=text.strip())
 
 
-def build_ocr_extractor(settings=None) -> OCRExtractor:
+def build_ocr_extractor(settings: Settings | None = None) -> OCRExtractor:
+    """Bangun instance OCRExtractor berdasarkan konfigurasi Settings."""
     from .config import get_settings
     from .llm import build_ocr
 
-    settings = settings or get_settings()
-    return OCRExtractor(build_ocr(settings))
+    resolved_settings = settings or get_settings()
+    return OCRExtractor(build_ocr(resolved_settings))

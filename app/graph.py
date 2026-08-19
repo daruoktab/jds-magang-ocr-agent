@@ -3,12 +3,6 @@ Orkestrasi Pipeline Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking denga
 
 Alur StateGraph:
     START -> preprocess -> ocr -> classify -> extract_markdown -> END
-
-Fitur:
-  - Preprocessing otomatis (EXIF auto-rotate & contrast enhancement).
-  - OCR Auxilary Text (ocr-lighton) untuk grounding teks resolusi tinggi.
-  - Klasifikasi tata letak (plain, markdown_hierarchy, bilingual_journal, presentation_slides).
-  - Ekstraksi teks Markdown bersih yang siap langsung dipotong oleh text chunkers.
 """
 from __future__ import annotations
 
@@ -16,6 +10,7 @@ import warnings
 from typing import Any, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from .agents import get_agent
 from .config import Settings, get_settings
@@ -39,13 +34,13 @@ class DocumentExtractionPipeline:
     """Pipeline LangGraph untuk mengekstrak dokumen gambar/scan ke Markdown siap chunking."""
 
     def __init__(self, settings: Settings | None = None) -> None:
-        self.settings = settings or get_settings()
+        self.settings: Settings = settings or get_settings()
         self.vlm = build_vlm(self.settings)
         self.ocr = build_ocr_extractor(self.settings)
         self.extractor = VisionExtractor(self.vlm)
-        self.graph = self._build_graph()
+        self.graph: CompiledStateGraph = self._build_graph()
 
-    def _build_graph(self):
+    def _build_graph(self) -> CompiledStateGraph:
         builder = StateGraph(cast(Any, DocumentExtractionState))
 
         # Node pipeline
@@ -76,7 +71,7 @@ class DocumentExtractionPipeline:
             "forced_doc_type": forced_doc_type,
             "previous_page_context": previous_page_context,
         }
-        return self.graph.invoke(init_state)
+        return cast(dict[str, Any], self.graph.invoke(init_state))
 
     def _node_preprocess(self, state: DocumentExtractionState) -> dict[str, Any]:
         image_path = state["image_path"]

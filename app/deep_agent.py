@@ -4,6 +4,8 @@ Harness Deep Agents untuk ekstraksi dokumen multi-modal -> Markdown Siap Chunkin
 from __future__ import annotations
 
 import json
+from typing import Any
+
 from deepagents import SubAgent, create_deep_agent
 from langchain_core.tools import tool
 
@@ -16,11 +18,11 @@ from .ppt import process_presentation
 from .preprocess import preprocess_image
 
 
-def build_deep_agent(settings: Settings | None = None):
+def build_deep_agent(settings: Settings | None = None) -> Any:
     """Bangun deep agent untuk ekstraksi dokumen ke Markdown siap chunking."""
-    settings = settings or get_settings()
-    vlm = build_vlm(settings)
-    ocr = build_ocr_extractor(settings)
+    resolved_settings = settings or get_settings()
+    vlm = build_vlm(resolved_settings)
+    ocr = build_ocr_extractor(resolved_settings)
 
     @tool
     def extract_to_markdown(

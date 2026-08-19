@@ -8,13 +8,7 @@ from dataclasses import dataclass
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .extractor import VisionExtractor
-from .prompts import (
-    SYSTEM_DOCUMENT_EXTRACTOR,
-    _PROMPT_BILINGUAL_JOURNAL,
-    _PROMPT_MARKDOWN_HIERARCHY,
-    _PROMPT_PLAIN_DOCUMENT,
-    _PROMPT_PRESENTATION_SLIDES,
-)
+from .prompts import SYSTEM_DOCUMENT_EXTRACTOR
 
 
 @dataclass
@@ -27,6 +21,7 @@ class DocumentExtractionAgent:
     system_prompt: str = SYSTEM_DOCUMENT_EXTRACTOR
 
     def build(self, llm: BaseChatModel) -> VisionExtractor:
+        """Bangun instance VisionExtractor yang dikonfigurasi dengan system prompt agent."""
         return VisionExtractor(
             llm=llm,
             system_prompt=self.system_prompt,
@@ -40,6 +35,7 @@ class DocumentExtractionAgent:
         ocr_text: str | None = None,
         previous_page_context: str | None = None,
     ) -> str:
+        """Jalankan ekstraksi Markdown pada gambar input."""
         extractor = self.build(llm)
         return extractor.extract_markdown(
             image_path=image_path,
@@ -74,7 +70,7 @@ AGENT_REGISTRY: dict[str, DocumentExtractionAgent] = {
 
 
 def get_agent(name: str) -> DocumentExtractionAgent:
-    """Ambil agent berdasarkan nama spesifikasi. Default -> 'plain'."""
+    """Ambil agent berdasarkan nama spesifikasi. Default fallback -> 'plain'."""
     key = name.lower()
     if key in AGENT_REGISTRY:
         return AGENT_REGISTRY[key]
