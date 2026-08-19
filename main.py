@@ -1,16 +1,22 @@
 """
 CLI Document Vision OCR & Text Extractor (Ready for Chunking).
 
-Ekstraksi dokumen (PDF, PPT/PPTX, Gambar) menjadi teks Markdown bersih
-yang siap langsung di-chunking.
+Secara default, mengeksekusi ekstraksi dokumen menggunakan Deep Reasoning Agent
+dengan armada 6 Sub-Agent spesialis:
+  - `ocr-specialist`           : Grounding teks mentah presisi tinggi (ocr-lighton)
+  - `layout-classifier`        : Analisis & klasifikasi multi-spesifikasi layout
+  - `markdown-extractor`       : Ekstraksi VLM multimodal dengan composable prompts
+  - `presentation-specialist`  : Parser file presentasi PowerPoint (.pptx / .ppt)
+  - `pdf-orchestrator`         : Orkestrasi multi-halaman PDF & kontinuitas heading
+  - `chunking-simulator`       : Simulasi partisi teks Markdown siap RAG
 
-Mendukung spesifikasi tunggal maupun kombinasi multi-spesifikasi:
-    python main.py dokumen.pdf                        # Ekstrak PDF (auto-detect specs)
+Contoh Penggunaan:
+    python main.py dokumen.pdf                        # Ekstrak PDF otomatis via Deep Reasoning Agent
     python main.py presentasi.pptx                    # Ekstrak PPTX ke Markdown
     python main.py scan.jpg                           # Ekstrak gambar ke Markdown
     python main.py dokumen.pdf -o output.md           # Simpan output ke file Markdown
     python main.py dokumen.pdf --preview-chunks       # Lihat simulasi hasil chunking
-    python main.py jurnal.pdf --type journal,hierarchy # Multi-spesifikasi komposit
+    python main.py jurnal.pdf --type journal,hierarchy # Paksa spesifikasi komposit
     python main.py --list-types                       # Lihat daftar spesifikasi layout
 """
 from __future__ import annotations
@@ -22,6 +28,7 @@ from pathlib import Path
 
 from app.agents import AGENT_REGISTRY
 from app.config import get_settings
+from app.deep_agent import build_deep_agent
 from app.graph import DocumentExtractionPipeline
 from app.multi_page import preview_markdown_chunks
 from app.ocr import build_ocr_extractor
@@ -34,7 +41,7 @@ from app.schemas import ExtractedDocument
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vision-doc-extractor",
-        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking (Multi-Spesifikasi).",
+        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking (Deep Reasoning Agent).",
     )
     p.add_argument("document", nargs="?", help="Path file dokumen (PDF, PPTX, PPT, atau Gambar)")
     p.add_argument("-o", "--out", default=None, help="Path file output .md untuk menyimpan hasil ekstraksi")
@@ -49,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--chunk-size", type=int, default=1000, help="Ukuran chunk karakter untuk preview (default 1000)")
     p.add_argument("--chunk-overlap", type=int, default=150, help="Overlap chunk karakter (default 150)")
     p.add_argument("--dpi", type=int, default=200, help="DPI render untuk PDF (default 200)")
+    p.add_argument("--direct-graph", action="store_true", help="Gunakan eksekusi grafik deterministik langsung (bypass agent reasoning)")
     p.add_argument("--ocr-only", action="store_true", help="Hanya jalankan model OCR tanpa VLM")
     p.add_argument("--classify-only", action="store_true", help="Hanya klasifikasi karakteristik dokumen")
     p.add_argument("--pdf-split-only", action="store_true", help="Hanya render PDF menjadi gambar per-halaman")
@@ -100,48 +108,53 @@ def main(argv: list[str] | None = None) -> int:
             print(res_text)
             return 0
 
-        # 3. File PowerPoint Presentasi (.pptx / .ppt)
-        if ext in (".pptx", ".ppt"):
-            markdown_content = process_presentation(input_path)
-            extracted_doc = ExtractedDocument(
-                file_path=str(input_path),
-                specs=["presentation_slides"],
-                total_pages=1,
-                markdown_content=markdown_content,
-                metadata={"source_type": "presentation", "filename": input_path.name},
-            )
-
-        # 4. File PDF Multi-halaman
-        elif ext == ".pdf":
+        # 3. Mode Klasifikasi Saja
+        if args.classify_only:
             pipeline = DocumentExtractionPipeline(settings)
-            extracted_doc = process_multipage_pdf(
-                pdf_path=input_path,
-                pipeline=pipeline,
-                dpi=args.dpi,
-                forced_specs=args.doc_type,
-            )
-            markdown_content = extracted_doc.markdown_content
+            specs = pipeline.extractor.classify(str(input_path))
+            print(json.dumps({"file": str(input_path), "specs": specs}, indent=2))
+            return 0
 
-        # 5. File Gambar Tunggal (PNG/JPG/WEBP)
+        # 4. Mode Eksekusi Utama: Otomatis via Deep Reasoning Agent & Subagents
+        if not args.direct_graph:
+            deep_agent = build_deep_agent(settings)
+            instruction_parts = [
+                f"Tolong proses dan ekstrak file dokumen berikut secara lengkap: '{input_path.resolve()}'.",
+                "Analisis tata letak dan delegasikan ke sub-agent spesialis yang sesuai.",
+            ]
+            if args.doc_type:
+                instruction_parts.append(f"Spesifikasi tata letak dokumen yang dipaksakan: {args.doc_type}.")
+            if args.preview_chunks:
+                instruction_parts.append(f"Sertakan simulasi preview chunking (chunk_size={args.chunk_size}, overlap={args.chunk_overlap}).")
+            instruction_parts.append("Pastikan hasil akhir berupa teks Markdown bersih siap chunking.")
+
+            user_instruction = " ".join(instruction_parts)
+            resp = deep_agent.invoke({
+                "messages": [{"role": "user", "content": user_instruction}]
+            })
+
+            messages = resp.get("messages", [])
+            markdown_content = messages[-1].content if messages else str(resp)
+
+        # 5. Mode Fallback: Eksekusi LangGraph Deterministik Langsung (--direct-graph)
         else:
-            pipeline = DocumentExtractionPipeline(settings)
-            if args.classify_only:
-                specs = pipeline.extractor.classify(str(input_path))
-                print(json.dumps({"file": str(input_path), "specs": specs}, indent=2))
-                return 0
+            if ext in (".pptx", ".ppt"):
+                markdown_content = process_presentation(input_path)
+            elif ext == ".pdf":
+                pipeline = DocumentExtractionPipeline(settings)
+                extracted_doc = process_multipage_pdf(
+                    pdf_path=input_path,
+                    pipeline=pipeline,
+                    dpi=args.dpi,
+                    forced_specs=args.doc_type,
+                )
+                markdown_content = extracted_doc.markdown_content
+            else:
+                pipeline = DocumentExtractionPipeline(settings)
+                res = pipeline.run(str(input_path), forced_specs=args.doc_type)
+                markdown_content = res["markdown_content"]
 
-            res = pipeline.run(str(input_path), forced_specs=args.doc_type)
-            markdown_content = res["markdown_content"]
-            detected_specs = res.get("specs") or normalize_specs(args.doc_type)
-            extracted_doc = ExtractedDocument(
-                file_path=str(input_path),
-                specs=detected_specs,
-                total_pages=1,
-                markdown_content=markdown_content,
-                metadata={"source_type": "image", "filename": input_path.name},
-            )
-
-        # Output Markdown
+        # Output Teks Markdown
         print(markdown_content)
 
         # Simpan ke file jika diminta (-o / --out)
@@ -151,8 +164,8 @@ def main(argv: list[str] | None = None) -> int:
             out_file.write_text(markdown_content, encoding="utf-8")
             print(f"\n[OK] Dokumen Markdown berhasil disimpan ke: {out_file}", file=sys.stderr)
 
-        # Preview Chunks jika diminta
-        if args.preview_chunks:
+        # Preview Chunks jika diminta (pada mode direct-graph atau ekstra tampilan)
+        if args.preview_chunks and args.direct_graph:
             chunks = preview_markdown_chunks(
                 markdown_content,
                 chunk_size=args.chunk_size,
@@ -160,7 +173,6 @@ def main(argv: list[str] | None = None) -> int:
             )
             print("\n" + "=" * 60, file=sys.stderr)
             print(f"--- PREVIEW CHUNKING ({len(chunks)} Potongan Chunk) ---", file=sys.stderr)
-            print(f"--- Spesifikasi Aktif: {extracted_doc.specs} ---", file=sys.stderr)
             print("=" * 60, file=sys.stderr)
             for ch in chunks:
                 print(f"\n[Chunk #{ch['chunk_index']} | {ch['char_count']} chars | Meta: {ch['metadata']}]", file=sys.stderr)

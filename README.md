@@ -20,6 +20,21 @@ Sistem mendukung ekstraksi dengan satu atau **beberapa spesifikasi sekaligus sec
 
 ---
 
+## 🤖 Arsitektur Sub-Agent (Deep Agents Harness)
+
+Proyek ini dilengkapi dengan **Master Agent dan 6 Sub-Agent Spesialis** ([app/deep_agent.py](file:///c:/Users/HYPE%20AMD/Documents/Coding/jds-magang/app/deep_agent.py)) yang mendelegasikan tugas secara otonom:
+
+| Nama Sub-Agent | Peran & Spesialisasi | Tool Utama |
+|:---|:---|:---|
+| `ocr-specialist` | Pembacaan teks mentah literal tingkat tinggi tanpa halusinasi | `ocr_document` (`ocr-lighton`) |
+| `layout-classifier` | Deteksi multi-trait tata letak dokumen (kolom, hierarki, slide, tabel) | `classify_layout` |
+| `markdown-extractor` | Ekstraksi gambar multimodal ke Markdown bersih berbasis spesifikasi komposit | `extract_to_markdown` |
+| `presentation-specialist` | Ekstraksi slide PowerPoint (.pptx) dengan hierarki bullet, tabel, dan notes | `extract_presentation_pptx` |
+| `pdf-orchestrator` | Orkestrasi pemrosesan PDF multi-halaman & penyambungan kontinuitas heading | `extract_pdf_document` |
+| `chunking-simulator` | Evaluasi kesiapan partisi Markdown dengan header splitter & recursive splitter | `preview_chunks` |
+
+---
+
 ## 🏗️ Alur Pipeline Ekstraksi
 
 ```mermaid
@@ -61,7 +76,7 @@ jds-magang/
 │   ├── pdf.py             # Multi-page PDF renderer & stitcher
 │   ├── multi_page.py      # Penyambung halaman kontinu & simulasi chunking
 │   ├── graph.py           # Pipeline LangGraph DocumentExtractionPipeline
-│   └── deep_agent.py      # Harness Deep Agents dengan subagents spesialis
+│   └── deep_agent.py      # Harness Deep Agents dengan 6 subagents spesialis
 ├── main.py                # Antarmuka CLI utama
 ├── pyproject.toml         # Konfigurasi dependensi
 └── README.md
@@ -107,13 +122,20 @@ python main.py presentasi.pptx
 python main.py scan_dokumen.jpg
 ```
 
-### 2. Menyimpan Output ke File Markdown (`-o` / `--out`)
+### 2. Menjalankan via Deep Agent Harness & Sub-Agents (`--agent`)
+
+```powershell
+# Eksekusi dengan delegasi otonom ke sub-agents
+python main.py dokumen.pdf --agent
+```
+
+### 3. Menyimpan Output ke File Markdown (`-o` / `--out`)
 
 ```powershell
 python main.py laporan_tahunan.pdf -o output/laporan.md
 ```
 
-### 3. Simulasi & Preview Chunking LangChain (`--preview-chunks`)
+### 4. Simulasi & Preview Chunking LangChain (`--preview-chunks`)
 
 Menampilkan bagaimana teks Markdown yang diekstrak akan dipecah oleh `MarkdownHeaderTextSplitter` dan `RecursiveCharacterTextSplitter`:
 
@@ -121,7 +143,7 @@ Menampilkan bagaimana teks Markdown yang diekstrak akan dipecah oleh `MarkdownHe
 python main.py dokumen.pdf --preview-chunks --chunk-size 1000 --chunk-overlap 150
 ```
 
-### 4. Memilih Spesifikasi Tunggal / Multi-Spesifikasi Komposit (`-t` / `--type`)
+### 5. Memilih Spesifikasi Tunggal / Multi-Spesifikasi Komposit (`-t` / `--type`)
 
 Secara default, pipeline akan melakukan klasifikasi multi-label secara otomatis. Anda juga dapat memaksa kombinasi spesifikasi tertentu:
 
@@ -142,7 +164,7 @@ python main.py jurnal_lengkap.pdf --type journal,hierarchy
 python main.py slide_modul.pdf --type slide,hierarchy
 ```
 
-### 5. Melihat Daftar Spesifikasi yang Didukung
+### 6. Melihat Daftar Spesifikasi yang Didukung
 
 ```powershell
 python main.py --list-types
