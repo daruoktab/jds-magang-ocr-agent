@@ -1,4 +1,4 @@
-# jds-magang — Vision OCR & Document Extractor (Ready for Chunking)
+# jds-magang-ocr-agent — Vision OCR & Document Extractor (Ready for Chunking)
 
 Sistem ekstraksi dokumen multimodal (PDF, PPT/PPTX, Scan Gambar) menjadi **Markdown bersih dan terstruktur yang siap langsung di-chunking** untuk pipeline RAG downstream.
 

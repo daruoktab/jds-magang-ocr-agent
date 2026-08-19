@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "jds-magang"
+name = "jds-magang-ocr-agent"
 version = "0.1.0"
 description = "Vision OCR & Document Text Extractor (Ready for Chunking): PDF, PPTX, Scan -> Markdown"
 requires-python = ">=3.12"
