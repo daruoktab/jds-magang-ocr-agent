@@ -24,6 +24,8 @@ output/
 # ============ Model & data lokal (jangan commit) ============
 models/
 data/
+dataset/download/
+dataset/downloaded/
 .zed/
 
 # ============ Input pribadi (jangan commit) ============
