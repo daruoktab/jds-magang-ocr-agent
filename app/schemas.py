@@ -1,93 +1,62 @@
 """
-Schema Pydantic untuk hasil ekstraksi dan klasifikasi dokumen.
-
-Prinsip: `DocumentExtraction` tetap generik (model bebas menentukan struktur),
-sehingga satu pipeline dapat menangani banyak jenis dokumen tanpa schema kaku.
-Untuk integrasi yang butuh schema ketat, teruskan model Pydantic sendiri ke
-`VisionExtractor` - alur tidak berubah.
+Pydantic Schemas untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking.
 """
-from typing import Any
+from __future__ import annotations
 
+from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-class DocumentClassification(BaseModel):
-    """Hasil klasifikasi jenis dokumen."""
-
-    doc_type: str = Field(
-        description="Jenis dokumen (mis. receipt, table, form, business_card, ...)"
-    )
-
-
-class DocumentExtraction(BaseModel):
-    """
-    Hasil ekstraksi generik.
-
-    - doc_type : jenis dokumen, diputuskan VLM.
-    - data     : struktur bebas hasil ekstraksi (dict bersarang, list, kombinasi).
-    """
-
-    doc_type: str = Field(description="Jenis dokumen yang diputuskan model")
-    data: dict[str, Any] = Field(
-        description="Struktur bebas hasil ekstraksi, ditentukan oleh model"
-    )
-
-
 class OCRResult(BaseModel):
+    """Hasil ekstraksi OCR teks mentah."""
+    text: str = Field(..., description="Teks mentah yang berhasil diekstrak model OCR")
+
+
+class ClassificationResult(BaseModel):
+    """Hasil klasifikasi karakteristik layout dokumen."""
+    doc_type: Literal["plain", "markdown_hierarchy", "bilingual_journal", "presentation_slides"] = Field(
+        default="plain",
+        description="Karakteristik dokumen: plain, markdown_hierarchy, bilingual_journal, presentation_slides",
+    )
+    confidence: float = Field(default=1.0, description="Tingkat keyakinan klasifikasi")
+
+
+class DocumentSection(BaseModel):
+    """Bagian dokumen berbasis heading."""
+    heading: str = Field(..., description="Judul heading (mis. '## Pendahuluan')")
+    level: int = Field(default=2, description="Level heading (1, 2, 3, dst.)")
+    content: str = Field(default="", description="Konten isi dalam heading ini")
+
+
+class DocumentPage(BaseModel):
+    """Hasil ekstraksi per-halaman dokumen."""
+    page_number: int = Field(..., description="Nomor urut halaman (mulai 1)")
+    markdown_content: str = Field(..., description="Teks Markdown yang diekstrak dari halaman ini")
+    ocr_text: str | None = Field(default=None, description="Teks mentah hasil OCR tambahan")
+    image_path: str | None = Field(default=None, description="Path gambar halaman bila ada")
+
+
+class ExtractedDocument(BaseModel):
     """
-    Hasil OCR terstruktur dari model `ocr-lighton` (VLM kecil tuned).
-
-    Model OCR mengembalikan teks biasa (bukan JSON), jadi text mentah
-    disimpan di `text`. Field lain opsional untuk normalisasi lanjutan.
+    Hasil ekstraksi lengkap seluruh dokumen dalam format Markdown utuh siap chunking.
     """
-
-    text: str = Field(description="Teks mentah hasil OCR (persis keluaran model)")
-    doc_type: str = Field(default="ocr", description="Jenis dokumen (default 'ocr')")
-
-
-class RetrievedChunk(BaseModel):
-    """Potongan konteks relevan hasil retrieval."""
-
-    content: str = Field(description="Isi potongan dokumen yang relevan")
-    metadata: dict[str, Any] = Field(default_factory=dict, description="Metadata dokumen")
+    file_path: str = Field(..., description="Path file input dokumen (PDF/PPTX/Image)")
+    doc_type: str = Field(default="plain", description="Karakteristik layout dokumen yang terdeteksi")
+    total_pages: int = Field(default=1, description="Jumlah total halaman / slide")
+    markdown_content: str = Field(..., description="Teks Markdown utuh dari awal sampai akhir, siap di-chunking")
+    pages: list[DocumentPage] = Field(default_factory=list, description="Detail ekstraksi per-halaman")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Metadata tambahan dokumen")
 
 
-class ValidationSummary(BaseModel):
-    """Ringkasan hasil validasi konsistensi & audit agentic reflection."""
-
-    is_valid: bool = Field(default=True, description="Apakah ekstraksi lolos validasi konsistensi")
-    score: float = Field(default=1.0, description="Skor validasi kualitas (0.0 - 1.0)")
-    issues: list[str] = Field(default_factory=list, description="Daftar kejanggalan/isu yang terdeteksi")
-    reflection_attempts: int = Field(default=0, description="Berapa kali VLM melakukan self-reflection retry")
-
-
-class VisionRAGResult(BaseModel):
-    """Hasil akhir vision RAG: klasifikasi + ekstraksi + konteks retrieval + validasi."""
-
-    doc_type: str = Field(description="Jenis dokumen yang terdeteksi")
-    extraction: DocumentExtraction = Field(description="Hasil ekstraksi terstruktur")
-    ocr_text: str | None = Field(default=None, description="Teks mentah hasil auxiliary OCR")
-    context: list[RetrievedChunk] = Field(
-        default_factory=list, description="Konteks relevan hasil retrieval"
-    )
-    validation: ValidationSummary = Field(
-        default_factory=ValidationSummary, description="Hasil validasi dan audit trail refleksi"
-    )
+class ChunkItem(BaseModel):
+    """Satu potongan chunk hasil text splitting."""
+    chunk_index: int = Field(..., description="Indeks urutan chunk")
+    char_count: int = Field(..., description="Jumlah karakter dalam chunk")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Metadata header/halaman dari chunk")
+    content: str = Field(..., description="Isi teks chunk")
 
 
-class MultiPageExtractionResult(BaseModel):
-    """Hasil ekstraksi gabungan untuk dokumen PDF multi-halaman."""
-
-    filename: str = Field(description="Nama file dokumen asli")
-    total_pages: int = Field(description="Total halaman yang diproses")
-    doc_type: str = Field(description="Jenis dokumen utama terdeteksi")
-    consolidated_data: dict[str, Any] = Field(
-        description="Hasil gabungan data terstruktur seluruh halaman"
-    )
-    pages: list[VisionRAGResult] = Field(
-        default_factory=list, description="Hasil ekstraksi per-halaman secara rinci"
-    )
-    validation: ValidationSummary = Field(
-        default_factory=ValidationSummary, description="Hasil validasi gabungan"
-    )
-
+class ChunkingPreview(BaseModel):
+    """Hasil simulasi chunking pada dokumen."""
+    total_chunks: int = Field(..., description="Jumlah total potongan chunk")
+    chunks: list[ChunkItem] = Field(default_factory=list, description="Daftar potongan chunk")

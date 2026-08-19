@@ -1,15 +1,17 @@
 """
-CLI vision RAG agent.
+CLI Document Vision OCR & Text Extractor (Ready for Chunking).
 
-Contoh:
-    python main.py gambar.png                    # pipeline agentik penuh -> JSON terstruktur
-    python main.py dokumen.pdf                   # proses PDF multi-halaman penuh -> JSON terpadu
-    python main.py gambar.png --query "..."      # + retrieval context
-    python main.py gambar.png --classify-only    # hanya klasifikasi jenis
-    python main.py gambar.png --ocr              # OCR teks terstruktur (model OCR)
-    python main.py dokumen.pdf --pdf             # hanya konversi PDF -> gambar per halaman
-    python main.py folder_gambar --report        # laporan markdown SEMUA gambar di folder
-    python main.py --list-agents                 # daftar jenis dokumen
+Ekstraksi dokumen (PDF, PPT/PPTX, Gambar) menjadi teks Markdown bersih
+yang siap langsung di-chunking.
+
+Contoh Penggunaan:
+    python main.py dokumen.pdf                        # Ekstrak PDF ke Markdown
+    python main.py presentasi.pptx                    # Ekstrak PPTX ke Markdown
+    python main.py scan.jpg                           # Ekstrak gambar ke Markdown
+    python main.py dokumen.pdf -o output.md           # Simpan output ke file Markdown
+    python main.py dokumen.pdf --preview-chunks       # Lihat simulasi hasil chunking
+    python main.py jurnal.pdf --type bilingual_journal # Paksa mode jurnal 2-kolom
+    python main.py --list-types                       # Lihat daftar spesifikasi layout
 """
 from __future__ import annotations
 
@@ -20,153 +22,148 @@ from pathlib import Path
 
 from app.agents import AGENT_REGISTRY
 from app.config import get_settings
-from app.graph import VisionRAGPipeline
+from app.graph import DocumentExtractionPipeline
+from app.multi_page import preview_markdown_chunks
 from app.ocr import build_ocr_extractor
 from app.pdf import pdf_to_images, process_multipage_pdf
-from app.report import generate_report
+from app.ppt import process_presentation
+from app.schemas import ExtractedDocument
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="vision-rag",
-        description="Vision RAG agent: gambar/PDF -> JSON terstruktur + validasi + retrieval.",
+        prog="vision-doc-extractor",
+        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking.",
     )
-    p.add_argument("image", nargs="?", help="Path file gambar/PDF ATAU folder gambar")
-    p.add_argument("--query", default=None, help="Query retrieval opsional")
-    p.add_argument("--retries", type=int, default=2, help="Maksimal self-reflection retry (default 2)")
-    p.add_argument("--list-agents", action="store_true", help="Daftar jenis dokumen yang didukung")
-    p.add_argument("--classify-only", action="store_true", help="Hanya klasifikasi jenis dokumen")
-    p.add_argument("--ocr", action="store_true", help="OCR teks terstruktur (model OCR tuned)")
-    p.add_argument("--pdf", action="store_true", help="Hanya konversi PDF menjadi gambar per-halaman")
-    p.add_argument("--dpi", type=int, default=200, help="DPI untuk konversi PDF (default 200)")
-    p.add_argument("--out-dir", default="output", help="Direktori output (default: output/)")
-
-    # Ingestion RAG opsional
-    p.add_argument("--ingest", default=None, help="Path file JSON/teks untuk diindeks ke vector store sebelum query")
-
-    # Mode laporan markdown (file atau folder gambar)
-    p.add_argument("--report", action="store_true",
-                   help="Tulis laporan markdown (gambar dirender + hasil VLM/OCR)")
-    p.add_argument("--skip-vlm", action="store_true", help="(report) lewati VLM")
-    p.add_argument("--skip-ocr", action="store_true", help="(report) lewati OCR")
-    p.add_argument("--vlm-interval", type=float, default=2.0,
-                   help="(report) pacing VLM dalam detik (default 2.0)")
-    p.add_argument("--ocr-interval", type=float, default=10.0,
-                   help="(report) pacing OCR dalam detik (default 10.0)")
-    p.add_argument("--max-retries", type=int, default=3,
-                   help="(report) retry per request saat gagal/429")
+    p.add_argument("document", nargs="?", help="Path file dokumen (PDF, PPTX, PPT, atau Gambar)")
+    p.add_argument("-o", "--out", default=None, help="Path file output .md untuk menyimpan hasil ekstraksi")
+    p.add_argument(
+        "-t",
+        "--type",
+        dest="doc_type",
+        choices=["plain", "markdown_hierarchy", "bilingual_journal", "presentation_slides"],
+        default=None,
+        help="Paksa spesifikasi tata letak dokumen (opsional, default auto-detect)",
+    )
+    p.add_argument("--preview-chunks", action="store_true", help="Tampilkan simulasi pemecahan chunk")
+    p.add_argument("--chunk-size", type=int, default=1000, help="Ukuran chunk karakter untuk preview (default 1000)")
+    p.add_argument("--chunk-overlap", type=int, default=150, help="Overlap chunk karakter (default 150)")
+    p.add_argument("--dpi", type=int, default=200, help="DPI render untuk PDF (default 200)")
+    p.add_argument("--ocr-only", action="store_true", help="Hanya jalankan model OCR tanpa VLM")
+    p.add_argument("--classify-only", action="store_true", help="Hanya klasifikasi karakteristik dokumen")
+    p.add_argument("--pdf-split-only", action="store_true", help="Hanya render PDF menjadi gambar per-halaman")
+    p.add_argument("--list-types", action="store_true", help="Daftar spesifikasi karakteristik dokumen yang didukung")
     return p
-
-
-def _output_json(text: str, out_dir: str | None, image: str, log_file=None) -> str:
-    if out_dir:
-        out_file = Path(out_dir) / f"{Path(image).stem}.json"
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        out_file.write_text(text, encoding="utf-8")
-        if log_file:
-            print(f"\n-> {out_file}", file=log_file)
-    return text
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    if args.list_agents:
+    if args.list_types:
+        print("Spesifikasi Tata Letak & Kemampuan Ekstraksi Dokumen:")
         for name, agent in AGENT_REGISTRY.items():
-            marker = "  <- fallback" if name == "generic" else ""
-            print(f"- {name:16s} {agent.description}{marker}")
+            print(f"- {name:22s} : {agent.description}")
         return 0
 
-    if not args.image:
-        print("ERROR: argumen 'image' wajib diisi (atau --list-agents)", file=sys.stderr)
+    if not args.document:
+        print("ERROR: argumen file 'document' wajib diisi (atau --list-types)", file=sys.stderr)
         return 1
 
+    input_path = Path(args.document)
+    if not input_path.exists():
+        print(f"ERROR: File tidak ditemukan: {input_path}", file=sys.stderr)
+        return 1
+
+    ext = input_path.suffix.lower()
+    settings = get_settings()
+
     try:
-        settings = get_settings()
-        input_path = Path(args.image)
-
-        # 1. Mode Konversi PDF saja
-        if args.pdf:
-            images = pdf_to_images(input_path, output_dir=args.out_dir, dpi=args.dpi)
-            for img in images:
-                print(img)
+        # 1. Mode Render PDF Halaman saja
+        if args.pdf_split_only and ext == ".pdf":
+            out_pages = pdf_to_images(input_path, dpi=args.dpi)
+            for p in out_pages:
+                print(str(p))
             return 0
 
-        # 2. Mode Laporan Evaluasi
-        if args.report:
-            out_file = Path(args.out_dir) / "report.md"
-            generate_report(
-                input_path=input_path,
-                output_path=out_file,
-                settings=settings,
-                skip_vlm=args.skip_vlm,
-                skip_ocr=args.skip_ocr,
-                vlm_interval=args.vlm_interval,
-                ocr_interval=args.ocr_interval,
-                max_retries=args.max_retries,
+        # 2. Mode OCR Teks Mentah saja
+        if args.ocr_only:
+            ocr = build_ocr_extractor(settings)
+            if ext == ".pdf":
+                pages = pdf_to_images(input_path, dpi=args.dpi)
+                full_ocr = []
+                for idx, pg in enumerate(pages, 1):
+                    full_ocr.append(f"--- Halaman {idx} ---\n{ocr.extract(str(pg)).text}")
+                res_text = "\n\n".join(full_ocr)
+            else:
+                res_text = ocr.extract(str(input_path)).text
+
+            print(res_text)
+            return 0
+
+        # 3. File PowerPoint Presentasi (.pptx / .ppt)
+        if ext in (".pptx", ".ppt"):
+            markdown_content = process_presentation(input_path)
+            extracted_doc = ExtractedDocument(
+                file_path=str(input_path),
+                doc_type="presentation_slides",
+                total_pages=1,
+                markdown_content=markdown_content,
+                metadata={"source_type": "presentation", "filename": input_path.name},
             )
-            return 0
 
-        # 3. Mode OCR langsung
-        if args.ocr:
-            out = _output_json(
-                json.dumps(build_ocr_extractor(settings).extract(str(input_path)).model_dump(), indent=2),
-                args.out_dir,
-                str(input_path),
-                sys.stderr,
-            )
-            print(out)
-            return 0
-
-        pipeline = VisionRAGPipeline(settings, max_retries=args.retries)
-
-        # Opsional: Ingest pengetahuan ke vector store
-        if args.ingest:
-            ingest_count = pipeline.index.ingest_knowledge(args.ingest)
-            print(f"[RAG] Berhasil mengindeks {ingest_count} item dari {args.ingest}", file=sys.stderr)
-
-        # 4. Mode Klasifikasi saja
-        if args.classify_only:
-            out = _output_json(
-                json.dumps({"doc_type": pipeline.classify(str(input_path))}, indent=2),
-                args.out_dir,
-                str(input_path),
-                sys.stderr,
-            )
-            print(out)
-            return 0
-
-        # 5. Dokumen PDF Multi-halaman
-        if input_path.suffix.lower() == ".pdf":
-            multi_res = process_multipage_pdf(
+        # 4. File PDF Multi-halaman
+        elif ext == ".pdf":
+            pipeline = DocumentExtractionPipeline(settings)
+            extracted_doc = process_multipage_pdf(
                 pdf_path=input_path,
                 pipeline=pipeline,
-                output_dir=args.out_dir,
                 dpi=args.dpi,
-                query=args.query,
+                forced_doc_type=args.doc_type,
             )
-            result = json.dumps(multi_res.model_dump(), indent=2, ensure_ascii=False)
-            if args.out_dir:
-                out_file = Path(args.out_dir) / f"{input_path.stem}.json"
-                out_file.parent.mkdir(parents=True, exist_ok=True)
-                out_file.write_text(result, encoding="utf-8")
-                print(result)
-                print(f"\n-> {out_file}", file=sys.stderr)
-            else:
-                print(result)
-            return 0
+            markdown_content = extracted_doc.markdown_content
 
-        # 6. Gambar Tunggal (Pipeline Agentik Lengkap)
-        state = pipeline.run(str(input_path), query=args.query, max_retries=args.retries)
-        result = json.dumps(state["final_result"], indent=2, ensure_ascii=False)
-        if args.out_dir:
-            out_file = Path(args.out_dir) / f"{input_path.stem}.json"
-            out_file.parent.mkdir(parents=True, exist_ok=True)
-            out_file.write_text(result, encoding="utf-8")
-            print(result)
-            print(f"\n-> {out_file}", file=sys.stderr)
+        # 5. File Gambar Tunggal (PNG/JPG/WEBP)
         else:
-            print(result)
+            pipeline = DocumentExtractionPipeline(settings)
+            if args.classify_only:
+                doc_type = pipeline.extractor.classify(str(input_path))
+                print(json.dumps({"file": str(input_path), "doc_type": doc_type}, indent=2))
+                return 0
+
+            res = pipeline.run(str(input_path), forced_doc_type=args.doc_type)
+            markdown_content = res["markdown_content"]
+            extracted_doc = ExtractedDocument(
+                file_path=str(input_path),
+                doc_type=res.get("doc_type", "plain"),
+                total_pages=1,
+                markdown_content=markdown_content,
+                metadata={"source_type": "image", "filename": input_path.name},
+            )
+
+        # Output Markdown
+        print(markdown_content)
+
+        # Simpan ke file jika diminta (-o / --out)
+        if args.out:
+            out_file = Path(args.out)
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(markdown_content, encoding="utf-8")
+            print(f"\n[OK] Dokumen Markdown berhasil disimpan ke: {out_file}", file=sys.stderr)
+
+        # Preview Chunks jika diminta
+        if args.preview_chunks:
+            chunks = preview_markdown_chunks(
+                markdown_content,
+                chunk_size=args.chunk_size,
+                chunk_overlap=args.chunk_overlap,
+            )
+            print("\n" + "=" * 60, file=sys.stderr)
+            print(f"--- PREVIEW CHUNKING ({len(chunks)} Potongan Chunk) ---", file=sys.stderr)
+            print("=" * 60, file=sys.stderr)
+            for ch in chunks:
+                print(f"\n[Chunk #{ch['chunk_index']} | {ch['char_count']} chars | Meta: {ch['metadata']}]", file=sys.stderr)
+                print(ch["content"], file=sys.stderr)
+                print("-" * 40, file=sys.stderr)
 
     except Exception as e:  # noqa: BLE001
         print(f"ERROR: {e}", file=sys.stderr)

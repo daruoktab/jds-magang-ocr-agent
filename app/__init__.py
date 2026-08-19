@@ -1,79 +1,65 @@
 """
-Vision RAG Agent Multimodal & Agentic Document Extraction.
+Vision OCR & Document Text Extractor (Ready for Chunking).
 
-Arsitektur:
-  - config.py        : Settings (VLM, OCR, embedding, reranker) via .env
-  - preprocess.py    : Image preprocessing (auto-rotate EXIF, contrast enhancement)
-  - embedding.py     : VisionEmbedder & adapter LangChain Embeddings
-  - reranker.py      : Qwen3VLReranker multimodal scoring & document reranking
-  - llm.py           : builder ChatOpenAI (VLM normal + OCR) ke endpoint OpenAI-compatible
-  - schemas.py       : schema Pydantic (klasifikasi, ekstraksi, validasi, multi-page)
-  - validation.py    : validasi konsistensi matematika & kelengkapan data
-  - prompts.py       : prompt general + per jenis dokumen + fusion & reflection
-  - extractor.py     : pipeline gambar -> VLM -> structured output (Pydantic)
-  - ocr.py           : pipeline gambar -> OCR tuned -> teks terstruktur (OCRResult)
-  - agents.py        : registry agent ekstraksi per jenis dokumen
-  - vector_store.py  : indeks RAG (Two-Stage Retrieval + persistensi lokal)
-  - graph.py         : orkestrasi LangGraph Agentik (VLM+OCR Fusion + Self-Reflection)
-  - pdf.py           : konversi PDF -> gambar & pemrosesan multi-halaman
-  - deep_agent.py    : harness Deep Agents (create_deep_agent + subagents)
+Modul:
+  - config.py        : Pengaturan lingkungan & model via .env
+  - preprocess.py    : Preprocessing gambar (auto-rotate EXIF, contrast enhancement)
+  - ocr.py           : Model OCR tuned untuk referensi teks resolusi tinggi
+  - prompts.py       : Prompt spesialisasi 4 spesifikasi tata letak dokumen
+  - extractor.py     : Ekstraktor VLM multimodal -> Markdown
+  - agents.py        : Registry agent untuk 4 spesifikasi dokumen
+  - ppt.py           : Ekstraktor presentasi PowerPoint (.pptx / .ppt)
+  - pdf.py           : Konversi & ekstraksi PDF multi-halaman
+  - multi_page.py    : Penyambung halaman (header continuity & chunking simulation)
+  - graph.py         : Pipeline LangGraph orkestrasi ekstraksi dokumen
+  - deep_agent.py    : Harness Deep Agents untuk ekstraksi dokumen
+  - schemas.py       : Schema data (ExtractedDocument, DocumentPage, ChunkingPreview)
 """
-from .agents import AGENT_REGISTRY, ExtractionAgent, get_agent
+from .agents import AGENT_REGISTRY, DocumentExtractionAgent, get_agent
 from .config import Settings, get_settings
 from .deep_agent import build_deep_agent
-from .embedding import (
-    LlamaServerEmbeddings,
-    LlamaVLEmbeddings,
-    VisionEmbedder,
-    build_embeddings,
-)
 from .extractor import VisionExtractor
-from .graph import VisionRAGPipeline, VisionRAGState
+from .graph import DocumentExtractionPipeline, DocumentExtractionState, VisionRAGPipeline
+from .multi_page import preview_markdown_chunks, stitch_pages_to_markdown
 from .ocr import OCRExtractor, build_ocr_extractor
 from .pdf import pdf_to_images, process_multipage_pdf
+from .ppt import pptx_to_structured_text, process_presentation
 from .preprocess import preprocess_image
-from .report import generate_report
-from .reranker import Qwen3VLReranker, build_reranker
 from .schemas import (
-    DocumentClassification,
-    DocumentExtraction,
-    MultiPageExtractionResult,
+    ChunkItem,
+    ChunkingPreview,
+    ClassificationResult,
+    DocumentPage,
+    DocumentSection,
+    ExtractedDocument,
     OCRResult,
-    ValidationSummary,
-    VisionRAGResult,
 )
-from .validation import ValidationResult, validate_extraction
-from .vector_store import VisionIndex
 
 __all__ = [
     "AGENT_REGISTRY",
-    "DocumentClassification",
-    "DocumentExtraction",
-    "ExtractionAgent",
-    "LlamaServerEmbeddings",
-    "LlamaVLEmbeddings",
-    "MultiPageExtractionResult",
+    "ChunkItem",
+    "ChunkingPreview",
+    "ClassificationResult",
+    "DocumentExtractionAgent",
+    "DocumentExtractionPipeline",
+    "DocumentExtractionState",
+    "DocumentPage",
+    "DocumentSection",
+    "ExtractedDocument",
     "OCRExtractor",
     "OCRResult",
-    "Qwen3VLReranker",
     "Settings",
-    "ValidationResult",
-    "ValidationSummary",
-    "VisionEmbedder",
     "VisionExtractor",
-    "VisionIndex",
     "VisionRAGPipeline",
-    "VisionRAGResult",
-    "VisionRAGState",
     "build_deep_agent",
-    "build_embeddings",
     "build_ocr_extractor",
-    "build_reranker",
-    "generate_report",
     "get_agent",
     "get_settings",
     "pdf_to_images",
+    "pptx_to_structured_text",
     "preprocess_image",
+    "preview_markdown_chunks",
     "process_multipage_pdf",
-    "validate_extraction",
+    "process_presentation",
+    "stitch_pages_to_markdown",
 ]

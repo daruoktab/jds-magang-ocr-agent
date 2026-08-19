@@ -1,49 +1,34 @@
 """
-Registry agent ekstraksi - SATU agent untuk SATU JENIS DOKUMEN.
-
-Setiap `ExtractionAgent` punya prompt tuning untuk jenis dokumennya, plus opsi
-model dan schema Pydantic sendiri. Menambah jenis baru = tambah satu entri di
-`AGENT_REGISTRY`; tidak ada kode lain yang perlu berubah.
+Registry agent spesialis ekstraksi dokumen ke Markdown siap chunking.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from pydantic import BaseModel
 
 from .extractor import VisionExtractor
 from .prompts import (
-    _PROMPT_BANK_STATEMENT,
-    _PROMPT_BUSINESS_CARD,
-    _PROMPT_FORM,
-    _PROMPT_INVOICE,
-    _PROMPT_LABEL,
-    _PROMPT_RECEIPT,
-    _PROMPT_SCREENSHOT,
-    _PROMPT_TABLE,
-    GENERAL_USER_PROMPT,
-    SYSTEM_EXTRACTOR,
+    SYSTEM_DOCUMENT_EXTRACTOR,
+    _PROMPT_BILINGUAL_JOURNAL,
+    _PROMPT_MARKDOWN_HIERARCHY,
+    _PROMPT_PLAIN_DOCUMENT,
+    _PROMPT_PRESENTATION_SLIDES,
 )
-from .schemas import DocumentExtraction
 
 
 @dataclass
-class ExtractionAgent:
-    """Agent ekstraksi untuk satu jenis dokumen."""
+class DocumentExtractionAgent:
+    """Agent ekstraksi untuk satu spesifikasi layout dokumen."""
 
     name: str
     description: str
-    user_prompt: str
-    model: str | None = None
-    schema: type[BaseModel] = DocumentExtraction
-    system_prompt: str = SYSTEM_EXTRACTOR
+    doc_type: str
+    system_prompt: str = SYSTEM_DOCUMENT_EXTRACTOR
 
     def build(self, llm: BaseChatModel) -> VisionExtractor:
         return VisionExtractor(
             llm=llm,
-            schema=self.schema,
-            user_prompt=self.user_prompt,
             system_prompt=self.system_prompt,
         )
 
@@ -53,63 +38,50 @@ class ExtractionAgent:
         llm: BaseChatModel,
         *,
         ocr_text: str | None = None,
-        critique: str | None = None,
-    ) -> BaseModel:
-        return self.build(llm).extract(
-            image_path, ocr_text=ocr_text, critique=critique
+        previous_page_context: str | None = None,
+    ) -> str:
+        extractor = self.build(llm)
+        return extractor.extract_markdown(
+            image_path=image_path,
+            doc_type=self.doc_type,
+            ocr_text=ocr_text,
+            previous_page_context=previous_page_context,
         )
 
 
-
-AGENT_REGISTRY: dict[str, ExtractionAgent] = {
-    "receipt": ExtractionAgent(
-        name="receipt",
-        description="Struk belanja / nota kasir (daftar item + total bayar)",
-        user_prompt=_PROMPT_RECEIPT,
+AGENT_REGISTRY: dict[str, DocumentExtractionAgent] = {
+    "plain": DocumentExtractionAgent(
+        name="plain",
+        description="Dokumen standar / biasa (surat, formulir, memo, teks umum)",
+        doc_type="plain",
     ),
-    "invoice": ExtractionAgent(
-        name="invoice",
-        description="Faktur / invoice (tagihan penjualan, item, pajak)",
-        user_prompt=_PROMPT_INVOICE,
+    "markdown_hierarchy": DocumentExtractionAgent(
+        name="markdown_hierarchy",
+        description="Dokumen hierarki Markdown (#, ##, ### yang runtut dan tidak putus)",
+        doc_type="markdown_hierarchy",
     ),
-    "table": ExtractionAgent(
-        name="table",
-        description="Tabel data murni (baris dan kolom)",
-        user_prompt=_PROMPT_TABLE,
+    "bilingual_journal": DocumentExtractionAgent(
+        name="bilingual_journal",
+        description="Jurnal ilmiah / dokumen 2-kolom & 2-bahasa (column-aware reading order)",
+        doc_type="bilingual_journal",
     ),
-    "form": ExtractionAgent(
-        name="form",
-        description="Formulir isian (field + nilai, checkbox)",
-        user_prompt=_PROMPT_FORM,
-    ),
-    "business_card": ExtractionAgent(
-        name="business_card",
-        description="Kartu nama (nama, jabatan, perusahaan, kontak)",
-        user_prompt=_PROMPT_BUSINESS_CARD,
-    ),
-    "bank_statement": ExtractionAgent(
-        name="bank_statement",
-        description="Lembaran mutasi rekening bank (daftar transaksi)",
-        user_prompt=_PROMPT_BANK_STATEMENT,
-    ),
-    "label": ExtractionAgent(
-        name="label",
-        description="Label produk / kemasan (nama, bahan, kadaluarsa, barcode)",
-        user_prompt=_PROMPT_LABEL,
-    ),
-    "screenshot": ExtractionAgent(
-        name="screenshot",
-        description="Tangkapan layar aplikasi/web/chat",
-        user_prompt=_PROMPT_SCREENSHOT,
-    ),
-    "generic": ExtractionAgent(
-        name="generic",
-        description="Dokumen lain / tidak termasuk kategori di atas",
-        user_prompt=GENERAL_USER_PROMPT,
+    "presentation_slides": DocumentExtractionAgent(
+        name="presentation_slides",
+        description="Dokumen slide presentasi PPT / PDF (bullet points, diagram & visual)",
+        doc_type="presentation_slides",
     ),
 }
 
 
-def get_agent(name: str) -> ExtractionAgent:
-    """Ambil agent berdasarkan nama jenis. Tak dikenal -> agent generic."""
-    return AGENT_REGISTRY.get(name, AGENT_REGISTRY["generic"])
+def get_agent(name: str) -> DocumentExtractionAgent:
+    """Ambil agent berdasarkan nama spesifikasi. Default -> 'plain'."""
+    key = name.lower()
+    if key in AGENT_REGISTRY:
+        return AGENT_REGISTRY[key]
+    if "journal" in key or "bilingual" in key or "2col" in key:
+        return AGENT_REGISTRY["bilingual_journal"]
+    if "hierarchy" in key or "markdown" in key:
+        return AGENT_REGISTRY["markdown_hierarchy"]
+    if "slide" in key or "ppt" in key or "presentation" in key:
+        return AGENT_REGISTRY["presentation_slides"]
+    return AGENT_REGISTRY["plain"]

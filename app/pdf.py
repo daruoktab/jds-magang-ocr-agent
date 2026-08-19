@@ -3,29 +3,24 @@ Konversi PDF menjadi gambar per-halaman & pemrosesan dokumen PDF multi-halaman.
 
 Menyediakan:
   - `pdf_to_images`: Konversi PDF menjadi gambar beresolusi optimal (~200 DPI).
-  - `process_multipage_pdf`: Menjalankan pipeline agentik pada seluruh halaman PDF
-    dan mengagregasikannya menjadi satu objek `MultiPageExtractionResult` yang utuh.
+  - `process_multipage_pdf`: Mengekstrak seluruh halaman PDF, menjaga kontinuitas header,
+    dan menyatukannya menjadi `ExtractedDocument` Markdown yang siap di-chunking.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pymupdf
 
-from .schemas import (
-    DocumentExtraction,
-    MultiPageExtractionResult,
-    ValidationSummary,
-    VisionRAGResult,
-)
+from .multi_page import stitch_pages_to_markdown
+from .schemas import DocumentPage, ExtractedDocument
 
 if TYPE_CHECKING:
-    from .graph import VisionRAGPipeline
+    from .graph import DocumentExtractionPipeline
 
 # 200 DPI adalah titik seimbang: cukup tajam untuk teks/OCR, wajar ukurannya.
 DEFAULT_DPI = 200
-# Format gambar output (JPEG cocok untuk dokumen; PNG lebih berat tapi lossless).
 DEFAULT_IMAGE_EXT = ".jpg"
 
 
@@ -70,75 +65,65 @@ def pdf_to_images(
 
 def process_multipage_pdf(
     pdf_path: str | Path,
-    pipeline: VisionRAGPipeline,
+    pipeline: DocumentExtractionPipeline,
     output_dir: str | Path | None = None,
     dpi: int = DEFAULT_DPI,
-    query: str | None = None,
-) -> MultiPageExtractionResult:
+    forced_doc_type: str | None = None,
+) -> ExtractedDocument:
     """
-    Proses seluruh halaman PDF dan gabungkan hasil ekstraksi menjadi satu struktur terpadu.
+    Proses seluruh halaman PDF dan gabungkan hasil ekstraksi menjadi teks Markdown utuh siap chunking.
     """
     pdf_path = Path(pdf_path)
     page_images = pdf_to_images(pdf_path, output_dir=output_dir, dpi=dpi)
 
-    page_results: list[VisionRAGResult] = []
+    pages: list[DocumentPage] = []
+    pages_md: list[str] = []
     doc_types: list[str] = []
-    consolidated_data: dict[str, Any] = {}
-    all_issues: list[str] = []
-    total_reflection_attempts = 0
+    previous_context: str | None = None
 
-    # Kumpulkan daftar list per-kategori untuk digabung
-    aggregated_lists: dict[str, list[Any]] = {}
-
-    for idx, img_path in enumerate(page_images, 1):
-        state = pipeline.run(str(img_path), query=query)
-        final_dict = state["final_result"]
-        res = VisionRAGResult(
-            doc_type=final_dict["doc_type"],
-            extraction=DocumentExtraction(**final_dict["extraction"]),
-            ocr_text=final_dict.get("ocr_text"),
-            context=final_dict.get("context", []),
-            validation=ValidationSummary(**final_dict.get("validation", {})),
+    for idx, img_path in enumerate(page_images, start=1):
+        # Jalankan pipeline per halaman dengan membawa konteks halaman sebelumnya
+        res = pipeline.run(
+            str(img_path),
+            forced_doc_type=forced_doc_type,
+            previous_page_context=previous_context,
         )
-        page_results.append(res)
-        doc_types.append(res.doc_type)
 
-        if not res.validation.is_valid:
-            for issue in res.validation.issues:
-                all_issues.append(f"Halaman {idx}: {issue}")
-        total_reflection_attempts += res.validation.reflection_attempts
+        page_md = res["markdown_content"]
+        ocr_txt = res.get("ocr_text")
+        detected_type = res.get("doc_type", "plain")
 
-        # Agregasi data key-value & array
-        page_data = res.extraction.data or {}
-        for k, v in page_data.items():
-            if isinstance(v, list):
-                if k not in aggregated_lists:
-                    aggregated_lists[k] = []
-                aggregated_lists[k].extend(v)
-            else:
-                # Timpa nilai skalar jika sebelumnya belum ada atau diisi nilai baru
-                if k not in consolidated_data or v:
-                    consolidated_data[k] = v
+        pages_md.append(page_md)
+        doc_types.append(detected_type)
+        previous_context = page_md[-400:] if len(page_md) > 400 else page_md
 
-    # Masukkan seluruh list yang telah diagregasi ke consolidated_data
-    for k, v in aggregated_lists.items():
-        consolidated_data[k] = v
+        pages.append(
+            DocumentPage(
+                page_number=idx,
+                markdown_content=page_md,
+                ocr_text=ocr_txt,
+                image_path=str(img_path),
+            )
+        )
 
     # Tentukan doc_type dominan
-    primary_doc_type = max(set(doc_types), key=doc_types.count) if doc_types else "generic"
-
-    combined_validation = ValidationSummary(
-        is_valid=len(all_issues) == 0,
-        score=max(0.0, 1.0 - (0.2 * len(all_issues))),
-        issues=all_issues,
-        reflection_attempts=total_reflection_attempts,
+    primary_doc_type = (
+        forced_doc_type
+        or (max(set(doc_types), key=doc_types.count) if doc_types else "plain")
     )
 
-    return MultiPageExtractionResult(
-        filename=pdf_path.name,
-        total_pages=len(page_images),
+    # Gabungkan halaman dengan kontinuitas heading
+    stitched_markdown = stitch_pages_to_markdown(pages_md)
+
+    return ExtractedDocument(
+        file_path=str(pdf_path),
         doc_type=primary_doc_type,
-        consolidated_data=consolidated_data,
-        pages=page_results,
-        validation=combined_validation,
+        total_pages=len(page_images),
+        markdown_content=stitched_markdown,
+        pages=pages,
+        metadata={
+            "source_type": "pdf",
+            "dpi": dpi,
+            "filename": pdf_path.name,
+        },
     )
