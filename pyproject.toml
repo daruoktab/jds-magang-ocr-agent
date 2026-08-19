@@ -19,6 +19,7 @@ dependencies = [
     "pymupdf>=1.24",
     "python-pptx>=1.0.2",
     "requests>=2",
+    "mcp>=2.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
