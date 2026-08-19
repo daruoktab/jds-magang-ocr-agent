@@ -35,17 +35,19 @@ Proyek ini dilengkapi dengan **Master Agent dan 6 Sub-Agent Spesialis** ([app/de
 
 ---
 
-## 🔌 Model Context Protocol (MCP) Server
+## 🔌 Model Context Protocol (MCP) Server & Batch Document Discovery
 
-Proyek ini menyediakan server MCP berstandar resmi **MCP Python SDK v2.0** ([app/mcp_server.py](file:///c:/Users/HYPE%20AMD/Documents/Coding/jds-magang/app/mcp_server.py)), mengekspos kapabilitas Vision OCR dan ekstrasi dokumen untuk AI Assistant (seperti Antigravity IDE, Claude Desktop, atau Cursor):
+Server MCP berstandar resmi **MCP Python SDK v2.0** ([app/mcp_server.py](file:///c:/Users/HYPE%20AMD/Documents/Coding/jds-magang/app/mcp_server.py)) menyediakan 8 MCP Tools untuk AI Assistant:
 
-### Daftar MCP Tools yang Disediakan:
-1. `extract_document_to_markdown`: Ekstraksi PDF, PPTX, gambar ke Markdown siap chunking.
-2. `ocr_image`: Grounding teks mentah presisi tinggi via model OCR.
-3. `classify_document_layout`: Deteksi multi-trait spesifikasi tata letak dokumen.
-4. `extract_presentation_pptx`: Parser file PowerPoint (.pptx/.ppt) ke Markdown.
-5. `preview_markdown_chunks`: Simulasi partisi teks Markdown dengan header metadata.
-6. `run_deep_reasoning_agent`: Eksekusi agen penalaran dokumen multimodal otonom.
+### Daftar MCP Tools:
+1. **`scan_document_folders`**: Pindai direktori (mis. `dataset`, `input`, `output`) dan seluruh subfolder untuk mendeteksi folder yang berisi dokumen, jumlah file per ekstensi, dan sample file.
+2. **`batch_extract_documents`**: Ekstraksi dokumen massal dari satu/banyak folder terpilih dengan opsi kuota batas jumlah data (`limit` / `limit_per_folder`).
+3. **`extract_document_to_markdown`**: Ekstraksi file dokumen tunggal (PDF, PPTX, gambar) ke Markdown siap chunking.
+4. **`ocr_image`**: Grounding teks mentah presisi tinggi via model OCR `ocr-lighton`.
+5. **`classify_document_layout`**: Deteksi multi-trait spesifikasi tata letak dokumen.
+6. **`extract_presentation_pptx`**: Parser file PowerPoint (.pptx/.ppt) ke Markdown terstruktur.
+7. **`preview_markdown_chunks`**: Simulasi partisi teks Markdown dengan header metadata.
+8. **`run_deep_reasoning_agent`**: Eksekusi agen penalaran dokumen multimodal otonom.
 
 ### Konfigurasi `mcp_config.json`:
 ```json
@@ -59,6 +61,7 @@ Proyek ini menyediakan server MCP berstandar resmi **MCP Python SDK v2.0** ([app
       ],
       "cwd": "c:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang",
       "env": {
+        "PYTHONPATH": "c:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang",
         "LLM_BASE_URL": "http://localhost:1234/v1",
         "LLM_API_KEY": "lm-studio",
         "VLM_MODEL": "qwen-35b-vision",
@@ -113,7 +116,8 @@ jds-magang/
 │   ├── multi_page.py      # Penyambung halaman kontinu & simulasi chunking
 │   ├── graph.py           # Pipeline LangGraph DocumentExtractionPipeline
 │   ├── deep_agent.py      # Harness Deep Agents dengan 6 subagents spesialis
-│   └── mcp_server.py      # Server MCP berstandar SDK v2.0
+│   ├── batch.py           # Pemindaian folder dataset & ekstraksi massal
+│   └── mcp_server.py      # Server MCP berstandar SDK v2.0 (8 Tools)
 ├── main.py                # Antarmuka CLI utama
 ├── mcp_server.py          # Entrypoint runner MCP Server
 ├── mcp_config.template.json # Template konfigurasi MCP JSON
@@ -123,59 +127,23 @@ jds-magang/
 
 ---
 
-## ⚙️ Instalasi & Persiapan
-
-Gunakan `uv` untuk instalasi paket:
-
-```powershell
-# 1. Buat virtual environment
-uv venv --prompt magang-jds .venv
-
-# 2. Aktifkan venv & install dependensi
-.venv\Scripts\Activate.ps1
-uv pip install -U -r pyproject.toml
-```
-
-Buat file `.env` (salin dari template bila perlu):
-```env
-LLM_API_KEY=your_api_key_here
-LLM_BASE_URL=http://localhost:1234/v1
-VLM_MODEL=qwen-35b-vision
-OCR_MODEL=ocr-lighton
-```
-
----
-
 ## 🚀 Panduan Penggunaan CLI
 
-### 1. Ekstraksi Dokumen ke Teks Markdown (Default: Deep Reasoning Agent)
+### 1. Ekstraksi Dokumen Tunggal (Default: Deep Reasoning Agent)
 
 ```powershell
-# Ekstrak PDF multi-halaman
 python main.py dokumen.pdf
-
-# Ekstrak file presentasi PowerPoint
 python main.py presentasi.pptx
-
-# Ekstrak gambar hasil scan / foto dokumen
-python main.py scan_dokumen.jpg
 ```
 
-### 2. Menyimpan Output ke File Markdown (`-o` / `--out`)
+### 2. Memindai Folder Dokumen / Dataset
 
 ```powershell
-python main.py laporan_tahunan.pdf -o output/laporan.md
+python main.py --scan-folders input
 ```
 
-### 3. Simulasi & Preview Chunking LangChain (`--preview-chunks`)
+### 3. Ekstraksi Massal (Batch Processing dengan Limit Data)
 
 ```powershell
-python main.py dokumen.pdf --preview-chunks --chunk-size 1000 --chunk-overlap 150
-```
-
-### 4. Memilih Spesifikasi Tunggal / Multi-Spesifikasi Komposit (`-t` / `--type`)
-
-```powershell
-# Spesifikasi Komposit (Jurnal 2-Kolom + Hierarki Bab Kontinu):
-python main.py jurnal_lengkap.pdf --type journal,hierarchy
+python main.py --batch-folders input/ppt/indonesian,input/ppt/english --limit 10 -o output/extracted_md
 ```

@@ -16,6 +16,7 @@ Modul:
   - schemas.py       : Schema data (ExtractedDocument, DocumentPage, ChunkingPreview)
 """
 from .agents import AGENT_REGISTRY, DocumentExtractionAgent, get_agent
+from .batch import batch_extract_documents, scan_document_directories
 from .config import Settings, get_settings
 from .deep_agent import build_deep_agent
 from .extractor import VisionExtractor

@@ -2,7 +2,7 @@
 MCP (Model Context Protocol) Server untuk jds-magang-ocr-agent.
 
 Mengekspos alat-alat ekstraksi Vision OCR, PowerPoint parser, multi-page PDF stitcher,
-dan simulasi chunking sebagai MCP Tools berstandar SDK v2.
+pemindaian direktori dataset, ekstraksi massal, dan simulasi chunking sebagai MCP Tools berstandar SDK v2.
 
 Menjalankan server:
     python -m app.mcp_server
@@ -13,9 +13,11 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
+from .batch import batch_extract_documents as run_batch_extract, scan_document_directories
 from .config import get_settings
 from .deep_agent import build_deep_agent
 from .extractor import VisionExtractor
@@ -36,9 +38,82 @@ server = MCPServer(
 
 
 @server.tool(
+    name="scan_document_folders",
+    description=(
+        "Pindai direktori (misal 'dataset', 'output', 'input', atau path khusus) dan sub-subfoldernya "
+        "untuk mendeteksi keberadaan folder yang berisi file dokumen (PDF, PPTX, PPT, Gambar). "
+        "Mengembalikan daftar folder yang tersedia, jumlah file per ekstensi, dan contoh nama file."
+    ),
+)
+def scan_document_folders(
+    root_dir: str = ".",
+) -> str:
+    """
+    Pindai root_dir untuk menemukan folder-folder yang berisi file dokumen.
+    """
+    try:
+        found_folders = scan_document_directories(root_dir)
+        return json.dumps(
+            {
+                "root_scanned": str(Path(root_dir).resolve()),
+                "total_folders_found": len(found_folders),
+                "folders": found_folders,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat memindai folder: {e}"
+
+
+@server.tool(
+    name="batch_extract_documents",
+    description=(
+        "Ekstrak dokumen secara massal dari satu atau banyak folder yang dipilih oleh user. "
+        "Mendukung pemilihan multi-folder (list atau koma), pembatasan kuota jumlah data (total limit atau limit per folder), "
+        "pemilihan spesifikasi layout dokumen, dan penyimpanan hasil ke direktori output."
+    ),
+)
+def batch_extract_documents(
+    folders: str,
+    limit: int | None = None,
+    limit_per_folder: int | None = None,
+    specs: str = "plain",
+    output_dir: str = "output/extracted_md",
+    preview_chunks: bool = False,
+    chunk_size: int = 1000,
+) -> str:
+    """
+    Ekstrak dokumen dari folder-folder terpilih dengan kuota data tertentu.
+
+    Args:
+        folders: Path folder atau daftar folder dipisah koma (mis. 'dataset/download/indonesian,dataset/download/english').
+        limit: Batas total file yang diproses.
+        limit_per_folder: Batas file per folder.
+        specs: Spesifikasi layout ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides', atau komposit).
+        output_dir: Folder tujuan penyimpanan hasil Markdown.
+        preview_chunks: Sertakan simulasi chunking.
+        chunk_size: Ukuran chunk karakter.
+    """
+    try:
+        result = run_batch_extract(
+            folders=folders,
+            limit=limit,
+            limit_per_folder=limit_per_folder,
+            specs=specs,
+            output_dir=output_dir,
+            preview_chunks=preview_chunks,
+            chunk_size=chunk_size,
+        )
+        return json.dumps(result, indent=2, ensure_ascii=False)
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat batch ekstraksi dokumen: {e}"
+
+
+@server.tool(
     name="extract_document_to_markdown",
     description=(
-        "Ekstrak file dokumen (PDF, PPTX, JPG, PNG, WEBP) menjadi teks Markdown bersih yang siap langsung di-chunking. "
+        "Ekstrak file dokumen tunggal (PDF, PPTX, JPG, PNG, WEBP) menjadi teks Markdown bersih yang siap langsung di-chunking. "
         "Mendukung spesifikasi tunggal maupun komposit: 'plain', 'markdown_hierarchy', 'bilingual_journal', "
         "'presentation_slides', atau kombinasi seperti 'journal,hierarchy'."
     ),

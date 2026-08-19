@@ -17,6 +17,8 @@ Contoh Penggunaan:
     python main.py dokumen.pdf -o output.md           # Simpan output ke file Markdown
     python main.py dokumen.pdf --preview-chunks       # Lihat simulasi hasil chunking
     python main.py jurnal.pdf --type journal,hierarchy # Paksa spesifikasi komposit
+    python main.py --scan-folders dataset             # Pindai folder-folder yang berisi dokumen
+    python main.py --batch-folders dataset/indonesian,dataset/english --limit 10 # Ekstraksi massal
     python main.py --list-types                       # Lihat daftar spesifikasi layout
 """
 from __future__ import annotations
@@ -27,6 +29,7 @@ import sys
 from pathlib import Path
 
 from app.agents import AGENT_REGISTRY
+from app.batch import batch_extract_documents, scan_document_directories
 from app.config import get_settings
 from app.deep_agent import build_deep_agent
 from app.graph import DocumentExtractionPipeline
@@ -44,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking (Deep Reasoning Agent).",
     )
     p.add_argument("document", nargs="?", help="Path file dokumen (PDF, PPTX, PPT, atau Gambar)")
-    p.add_argument("-o", "--out", default=None, help="Path file output .md untuk menyimpan hasil ekstraksi")
+    p.add_argument("-o", "--out", default=None, help="Path file output .md untuk menyimpan hasil ekstraksi (atau direktori output batch)")
     p.add_argument(
         "-t",
         "--type",
@@ -61,6 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--classify-only", action="store_true", help="Hanya klasifikasi karakteristik dokumen")
     p.add_argument("--pdf-split-only", action="store_true", help="Hanya render PDF menjadi gambar per-halaman")
     p.add_argument("--list-types", action="store_true", help="Daftar spesifikasi karakteristik dokumen yang didukung")
+    
+    # Batch & Folder Scanning Options
+    p.add_argument("--scan-folders", nargs="?", const=".", help="Pindai direktori untuk mendeteksi folder-folder dokumen")
+    p.add_argument("--batch-folders", dest="batch_folders", help="Ekstrak batch dokumen dari folder-folder yang dipisah koma (mis. 'dataset/indonesian,dataset/english')")
+    p.add_argument("--limit", type=int, default=None, help="Batas total dokumen yang diproses pada batch")
+    p.add_argument("--limit-per-folder", type=int, default=None, help="Batas dokumen per-folder pada batch")
     return p
 
 
@@ -73,8 +82,50 @@ def main(argv: list[str] | None = None) -> int:
             print(f"- {name:22s} : {agent.description}")
         return 0
 
+    settings = get_settings()
+
+    # 1. Mode Pemindaian Folder Dokumen (--scan-folders)
+    if args.scan_folders is not None:
+        scan_root = args.scan_folders if args.scan_folders else "."
+        try:
+            folders = scan_document_directories(scan_root)
+            print(f"Hasil Pemindaian Direktori Dokumen di '{Path(scan_root).resolve()}':")
+            print(f"Ditemukan {len(folders)} folder berisi file dokumen:\n")
+            for idx, f_info in enumerate(folders, 1):
+                ext_str = ", ".join(f"{k}: {v}" for k, v in f_info["extension_counts"].items())
+                print(f"[{idx}] {f_info['relative_path']}")
+                print(f"    Path Penuh: {f_info['folder_path']}")
+                print(f"    Total Dokumen: {f_info['total_documents']} ({ext_str})")
+                print(f"    Contoh File: {', '.join(f_info['sample_files'][:3])}\n")
+            return 0
+        except Exception as e:  # noqa: BLE001
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 1
+
+    # 2. Mode Batch Ekstraksi dari Folder Terpilih (--batch-folders)
+    if args.batch_folders:
+        out_target = args.out or "output/extracted_md"
+        print(f"Menjalankan Batch Ekstraksi Dokumen dari: {args.batch_folders}")
+        print(f"Kuota: total_limit={args.limit}, limit_per_folder={args.limit_per_folder}")
+        print(f"Folder Output: {out_target}\n")
+        
+        batch_res = batch_extract_documents(
+            folders=args.batch_folders,
+            limit=args.limit,
+            limit_per_folder=args.limit_per_folder,
+            specs=args.doc_type or "plain",
+            output_dir=out_target,
+            preview_chunks=args.preview_chunks,
+            chunk_size=args.chunk_size,
+            chunk_overlap=args.chunk_overlap,
+            settings=settings,
+        )
+
+        print(json.dumps(batch_res, indent=2, ensure_ascii=False))
+        return 0
+
     if not args.document:
-        print("ERROR: argumen file 'document' wajib diisi (atau --list-types)", file=sys.stderr)
+        print("ERROR: argumen file 'document' wajib diisi (atau gunakan --scan-folders / --batch-folders)", file=sys.stderr)
         return 1
 
     input_path = Path(args.document)
@@ -83,17 +134,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     ext = input_path.suffix.lower()
-    settings = get_settings()
 
     try:
-        # 1. Mode Render PDF Halaman saja
+        # 3. Mode Render PDF Halaman saja
         if args.pdf_split_only and ext == ".pdf":
             out_pages = pdf_to_images(input_path, dpi=args.dpi)
             for p in out_pages:
                 print(str(p))
             return 0
 
-        # 2. Mode OCR Teks Mentah saja
+        # 4. Mode OCR Teks Mentah saja
         if args.ocr_only:
             ocr = build_ocr_extractor(settings)
             if ext == ".pdf":
@@ -108,14 +158,14 @@ def main(argv: list[str] | None = None) -> int:
             print(res_text)
             return 0
 
-        # 3. Mode Klasifikasi Saja
+        # 5. Mode Klasifikasi Saja
         if args.classify_only:
             pipeline = DocumentExtractionPipeline(settings)
             specs = pipeline.extractor.classify(str(input_path))
             print(json.dumps({"file": str(input_path), "specs": specs}, indent=2))
             return 0
 
-        # 4. Mode Eksekusi Utama: Otomatis via Deep Reasoning Agent & Subagents
+        # 6. Mode Eksekusi Utama: Otomatis via Deep Reasoning Agent & Subagents
         if not args.direct_graph:
             deep_agent = build_deep_agent(settings)
             instruction_parts = [
@@ -136,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
             messages = resp.get("messages", [])
             markdown_content = messages[-1].content if messages else str(resp)
 
-        # 5. Mode Fallback: Eksekusi LangGraph Deterministik Langsung (--direct-graph)
+        # 7. Mode Fallback: Eksekusi LangGraph Deterministik Langsung (--direct-graph)
         else:
             if ext in (".pptx", ".ppt"):
                 markdown_content = process_presentation(input_path)
