@@ -37,3 +37,6 @@ input/*
 .idea/
 Thumbs.db
 .DS_Store
+
+# opencode
+opencode.json
