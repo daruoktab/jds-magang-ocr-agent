@@ -1,0 +1,44 @@
+{
+    "$schema": "https://opencode.ai/config.json",
+    "provider": {
+        "zenmux": {
+            "npm": "@ai-sdk/openai-compatible",
+            "options": {
+                "baseURL": "https://zenmux.ai/api/v1",
+                "apiKey": "sk-ai-v1-6b04b44c02c6cd920b768addee5dcd578c849a4d63a79d5383909ea50523873f"
+            },
+            "models": {
+                "dots-studio/dots3-note-prev": {
+                    "limit": {
+                        "context": 390000,
+                        "output": 32000
+                    },
+                    "attachment": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    }
+                },
+                "z-ai/glm-5.3-free": {
+                    "limit": {
+                        "context": 1000000,
+                        "output": 128000
+                    },
+                    "modalities": {
+                        "input": [
+                            "text"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    }
+                }
+            }
+        }
+    }
+}

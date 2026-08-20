@@ -7,6 +7,7 @@ Kategori model yang digunakan:
   1. VLM NORMAL : Ekstraksi dokumen & layout reasoning multimodal ke Markdown
   2. OCR        : VLM kecil yang di-tuning khusus untuk grounding teks beresolusi tinggi
 """
+
 from __future__ import annotations
 
 import os
@@ -67,24 +68,46 @@ class Settings:
     """Pengaturan konfigurasi LLM, VLM, dan OCR."""
 
     # --- Global Fallback ---
-    llm_base_url: str = field(default_factory=lambda: _env("LLM_BASE_URL", "http://localhost:1234/v1"))
+    llm_base_url: str = field(
+        default_factory=lambda: _env("LLM_BASE_URL", "http://localhost:1234/v1")
+    )
     llm_api_key: str = field(default_factory=lambda: _env("LLM_API_KEY", "lm-studio"))
 
     # --- 1. VLM Normal (Ekstraksi Markdown + Layout Classifier) ---
     vlm_model: str = field(default_factory=lambda: _env("VLM_MODEL", "qwen-35b-vision"))
-    vlm_base_url: str = field(default_factory=lambda: _env_or("VLM_BASE_URL", "LLM_BASE_URL", "http://localhost:1234/v1"))
-    vlm_api_key: str = field(default_factory=lambda: _env_or("VLM_API_KEY", "LLM_API_KEY", "lm-studio"))
-    vlm_temperature: float = field(default_factory=lambda: _float_env("VLM_TEMPERATURE", "0.1"))
+    vlm_base_url: str = field(
+        default_factory=lambda: _env_or(
+            "VLM_BASE_URL", "LLM_BASE_URL", "http://localhost:1234/v1"
+        )
+    )
+    vlm_api_key: str = field(
+        default_factory=lambda: _env_or("VLM_API_KEY", "LLM_API_KEY", "lm-studio")
+    )
+    vlm_temperature: float = field(
+        default_factory=lambda: _float_env("VLM_TEMPERATURE", "0.1")
+    )
     vlm_timeout: float = field(default_factory=lambda: _float_env("VLM_TIMEOUT", "300"))
-    vlm_enable_thinking: bool = field(default_factory=lambda: _bool_env("VLM_ENABLE_THINKING", "false"))
+    vlm_enable_thinking: bool = field(
+        default_factory=lambda: _bool_env("VLM_ENABLE_THINKING", "false")
+    )
 
     # --- 2. OCR (Grounding Teks Resolusi Tinggi) ---
     ocr_model: str = field(default_factory=lambda: _env("OCR_MODEL", "ocr-lighton"))
-    ocr_base_url: str = field(default_factory=lambda: _env_or("OCR_BASE_URL", "LLM_BASE_URL", "http://localhost:1234/v1"))
-    ocr_api_key: str = field(default_factory=lambda: _env_or("OCR_API_KEY", "LLM_API_KEY", "lm-studio"))
-    ocr_temperature: float = field(default_factory=lambda: _float_env("OCR_TEMPERATURE", "0.0"))
+    ocr_base_url: str = field(
+        default_factory=lambda: _env_or(
+            "OCR_BASE_URL", "LLM_BASE_URL", "http://localhost:1234/v1"
+        )
+    )
+    ocr_api_key: str = field(
+        default_factory=lambda: _env_or("OCR_API_KEY", "LLM_API_KEY", "lm-studio")
+    )
+    ocr_temperature: float = field(
+        default_factory=lambda: _float_env("OCR_TEMPERATURE", "0.0")
+    )
     ocr_timeout: float = field(default_factory=lambda: _float_env("OCR_TIMEOUT", "300"))
-    ocr_max_tokens: int = field(default_factory=lambda: _int_env("OCR_MAX_TOKENS", "500"))
+    ocr_max_tokens: int = field(
+        default_factory=lambda: _int_env("OCR_MAX_TOKENS", "500")
+    )
 
 
 _settings: Settings | None = None

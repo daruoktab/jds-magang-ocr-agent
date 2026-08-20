@@ -6,8 +6,9 @@ Mengekstrak slide presentasi menjadi teks Markdown terstruktur yang siap dichunk
   - Menjaga hierarki bullet points (poin-poin bertingkat)
   - Mengonversi tabel presentasi ke format Markdown Table (GFM)
   - Mengekstrak catatan pembicara (*speaker notes*)
-  - Mencatat diagram/gambar visual yang ada pada slide
+  - Merender slide presentasi ke gambar resolusi tinggi untuk analisis VLM
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -35,17 +36,51 @@ def _table_to_markdown(table: Any) -> str:
     ]
     for row in rows[1:]:
         padded = row + [""] * (len(header) - len(row))
-        md_lines.append("| " + " | ".join(padded[:len(header)]) + " |")
+        md_lines.append("| " + " | ".join(padded[: len(header)]) + " |")
 
     return "\n".join(md_lines)
+
+
+def render_presentation_slides_to_images(
+    pptx_path: str | Path,
+    output_dir: str | Path | None = None,
+) -> list[Path]:
+    """
+    Render seluruh kanvas slide PowerPoint menjadi file gambar PNG (satu gambar per slide kanvas).
+    Menggunakan Spire.Presentation untuk Python (standalone, cross-platform, tanpa perlu Microsoft Office/LibreOffice).
+    """
+    from spire.presentation import Presentation
+
+    path_obj = Path(pptx_path).resolve()
+    if not path_obj.exists():
+        raise FileNotFoundError(f"File presentasi tidak ditemukan: {path_obj}")
+
+    out_dir = (
+        Path(output_dir).resolve()
+        if output_dir
+        else (path_obj.parent / f"{path_obj.stem}_slides").resolve()
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    prs = Presentation()
+    try:
+        prs.LoadFromFile(str(path_obj))
+        generated_images: list[Path] = []
+        for i in range(prs.Slides.Count):
+            slide = prs.Slides[i]
+            image = slide.SaveAsImage()
+            out_img = (out_dir / f"slide_{i + 1}.png").resolve()
+            image.Save(str(out_img))
+            if out_img.exists():
+                generated_images.append(out_img)
+        return generated_images
+    finally:
+        prs.Dispose()
 
 
 def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
     """
     Ekstrak presentasi PPTX menjadi list struktur per slide.
-
-    Returns:
-        list of dict: [{"slide_number": int, "title": str, "markdown": str, "notes": str, "image_count": int}]
     """
     path_obj = Path(pptx_path)
     if not path_obj.exists():
@@ -112,13 +147,15 @@ def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
 
         slide_markdown = "\n".join(md_content_lines)
 
-        slides_data.append({
-            "slide_number": idx,
-            "title": title_display,
-            "markdown": slide_markdown,
-            "notes": notes_text,
-            "image_count": image_count,
-        })
+        slides_data.append(
+            {
+                "slide_number": idx,
+                "title": title_display,
+                "markdown": slide_markdown,
+                "notes": notes_text,
+                "image_count": image_count,
+            }
+        )
 
     return slides_data
 

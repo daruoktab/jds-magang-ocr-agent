@@ -6,6 +6,7 @@ Menyediakan fungsi untuk:
   - Meningkatkan kontras dokumen (AutoContrast) untuk teks pudar / scan gelap.
   - Memastikan gambar dalam format RGB standar tanpa merusak resolusi teks.
 """
+
 from __future__ import annotations
 
 import tempfile

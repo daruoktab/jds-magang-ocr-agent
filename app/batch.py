@@ -5,13 +5,13 @@ Menyediakan:
   - `scan_document_directories`: Mendeteksi folder & sub-folder yang berisi dokumen (PDF, PPTX, Scan/Gambar).
   - `batch_extract_documents`: Memproses dokumen dari satu atau banyak folder terpilih dengan batas kuota data.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
 from .config import Settings, get_settings
-from .deep_agent import build_deep_agent
 from .graph import DocumentExtractionPipeline
 from .multi_page import preview_markdown_chunks
 from .pdf import process_multipage_pdf
@@ -53,7 +53,14 @@ def scan_document_directories(
     folder_map: dict[Path, list[Path]] = {}
 
     # Abaikan folder sistem/venv/git
-    ignored_patterns = {".git", ".venv", "__pycache__", ".ruff_cache", ".vscode", ".agents"}
+    ignored_patterns = {
+        ".git",
+        ".venv",
+        "__pycache__",
+        ".ruff_cache",
+        ".vscode",
+        ".agents",
+    }
 
     for p in root_path.rglob("*"):
         if any(part in ignored_patterns for part in p.parts):
@@ -78,13 +85,15 @@ def scan_document_directories(
             ext = f.suffix.lower()
             counts[ext] = counts.get(ext, 0) + 1
 
-        results.append({
-            "folder_path": str(folder),
-            "relative_path": rel,
-            "total_documents": len(files),
-            "extension_counts": counts,
-            "sample_files": [f.name for f in files[:5]],
-        })
+        results.append(
+            {
+                "folder_path": str(folder),
+                "relative_path": rel,
+                "total_documents": len(files),
+                "extension_counts": counts,
+                "sample_files": [f.name for f in files[:5]],
+            }
+        )
 
     return results
 
@@ -140,7 +149,8 @@ def batch_extract_documents(
     files_to_process: list[Path] = []
     for f_dir in target_folders:
         dir_files = [
-            f for f in f_dir.iterdir()
+            f
+            for f in f_dir.iterdir()
             if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
         ]
         dir_files.sort()
@@ -207,14 +217,16 @@ def batch_extract_documents(
             processed_results.append(item_info)
 
         except Exception as e:  # noqa: BLE001
-            processed_results.append({
-                "index": idx,
-                "filename": doc_file.name,
-                "source_path": str(doc_file),
-                "output_markdown_path": None,
-                "status": "error",
-                "error": str(e),
-            })
+            processed_results.append(
+                {
+                    "index": idx,
+                    "filename": doc_file.name,
+                    "source_path": str(doc_file),
+                    "output_markdown_path": None,
+                    "status": "error",
+                    "error": str(e),
+                }
+            )
 
     successful_count = sum(1 for r in processed_results if r["status"] == "success")
     return {

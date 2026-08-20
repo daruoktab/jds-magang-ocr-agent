@@ -1,23 +1,24 @@
 """
 MCP (Model Context Protocol) Server untuk jds-magang-ocr-agent.
 
-Mengekspos alat-alat ekstraksi Vision OCR, PowerPoint parser, multi-page PDF stitcher,
-pemindaian direktori dataset, ekstraksi massal, dan simulasi chunking sebagai MCP Tools berstandar SDK v2.
+Mengekspos alat-alat ekstraksi Vision OCR, PowerPoint parser, rendering slide ke gambar,
+multi-page PDF stitcher, pemindaian direktori dataset, ekstraksi massal, dan simulasi chunking
+sebagai MCP Tools berstandar SDK v2.
 
 Menjalankan server:
     python -m app.mcp_server
     python mcp_server.py
 """
+
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
-from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from .batch import batch_extract_documents as run_batch_extract, scan_document_directories
+from .batch import batch_extract_documents as run_batch_extract
+from .batch import scan_document_directories
 from .config import get_settings
 from .deep_agent import build_deep_agent
 from .extractor import VisionExtractor
@@ -35,6 +36,54 @@ server = MCPServer(
     description="Vision OCR & Document Extractor MCP Server: PDF, PPTX, Scan -> Markdown Siap Chunking",
     version="0.1.0",
 )
+
+
+@server.tool(
+    name="render_presentation_slides",
+    description=(
+        "Render seluruh halaman/slide file presentasi PowerPoint (.pptx / .ppt) menjadi file gambar JPG beresolusi tinggi "
+        "agar dapat dilihat dan dianalisis secara visual langsung oleh AI Multimodal / VLM."
+    ),
+)
+def render_presentation_slides(
+    pptx_path: str,
+    output_dir: str | None = None,
+) -> str:
+    """
+    Render slide PPTX ke file gambar JPG per slide.
+    """
+    path_obj = Path(pptx_path).resolve()
+    if not path_obj.exists():
+        return f"ERROR: File presentasi tidak ditemukan: {path_obj}"
+
+    out_dir = Path(output_dir or f"output/rendered_slides/{path_obj.stem}").resolve()
+    if out_dir.exists():
+        for old_f in out_dir.glob("slide_*_img_*.*"):
+            try:
+                old_f.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    try:
+        import importlib
+
+        import app.ppt
+
+        importlib.reload(app.ppt)
+        images = app.ppt.render_presentation_slides_to_images(
+            path_obj, output_dir=out_dir
+        )
+        return json.dumps(
+            {
+                "pptx_file": str(path_obj),
+                "total_slides_rendered": len(images),
+                "rendered_image_paths": [str(p) for p in images],
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat merender slide presentasi: {e}"
 
 
 @server.tool(
@@ -192,7 +241,9 @@ def classify_document_layout(image_path: str) -> str:
         vlm = build_vlm(settings)
         extractor = VisionExtractor(vlm)
         specs = extractor.classify(proc.processed_path)
-        return json.dumps({"file": str(path_obj), "specs": specs}, indent=2, ensure_ascii=False)
+        return json.dumps(
+            {"file": str(path_obj), "specs": specs}, indent=2, ensure_ascii=False
+        )
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat klasifikasi: {e}"
 

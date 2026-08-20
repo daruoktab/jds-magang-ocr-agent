@@ -6,10 +6,11 @@ Menyediakan:
   - `process_multipage_pdf`: Mengekstrak seluruh halaman PDF, menjaga kontinuitas header,
     dan menyatukannya menjadi `ExtractedDocument` Markdown yang siap di-chunking.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pymupdf
 
@@ -62,6 +63,61 @@ def pdf_to_images(
             outputs.append(out_path)
 
     return outputs
+
+
+def extract_pdf_with_pymupdf4llm(
+    pdf_path: str | Path,
+    page_chunks: bool = True,
+    write_images: bool = False,
+    image_path: str | Path | None = None,
+) -> list[dict[str, Any]] | str:
+    """
+    Ekstrak dokumen PDF digital langsung menjadi Markdown menggunakan pymupdf4llm.
+    Mendukung deteksi tabel GFM, urutan baca multi-kolom, dan chunking per halaman.
+
+    Args:
+        pdf_path: Path file PDF.
+        page_chunks: Jika True, mengembalikan list chunk per-halaman lengkap dengan metadata.
+        write_images: Jika True, simpan gambar/grafik yang diekstrak dari PDF ke image_path.
+        image_path: Direktori penyimpanan gambar jika write_images=True.
+
+    Returns:
+        List dictionary per-halaman jika page_chunks=True, atau string Markdown utuh jika False.
+    """
+    import pymupdf4llm
+
+    path_obj = Path(pdf_path).resolve()
+    if not path_obj.exists():
+        raise FileNotFoundError(f"PDF tidak ditemukan: {path_obj}")
+
+    img_dir_str = str(Path(image_path).resolve()) if image_path else None
+    if write_images and img_dir_str:
+        Path(img_dir_str).mkdir(parents=True, exist_ok=True)
+
+    result = pymupdf4llm.to_markdown(
+        str(path_obj),
+        page_chunks=page_chunks,
+        write_images=write_images,
+        image_path=img_dir_str,
+    )
+
+    if page_chunks and isinstance(result, list):
+        formatted_pages: list[dict[str, Any]] = []
+        for item in result:
+            meta = item.get("metadata", {})
+            page_num = meta.get("page", 1)
+            formatted_pages.append(
+                {
+                    "page_number": page_num,
+                    "text": item.get("text", ""),
+                    "metadata": meta,
+                    "tables": item.get("tables", []),
+                    "images": item.get("images", []),
+                }
+            )
+        return formatted_pages
+
+    return result
 
 
 def process_multipage_pdf(

@@ -37,8 +37,6 @@ from app.multi_page import preview_markdown_chunks
 from app.ocr import build_ocr_extractor
 from app.pdf import pdf_to_images, process_multipage_pdf
 from app.ppt import process_presentation
-from app.prompts import normalize_specs
-from app.schemas import ExtractedDocument
 
 
 def build_parser() -> argparse.ArgumentParser:

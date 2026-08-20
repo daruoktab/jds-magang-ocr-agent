@@ -2,6 +2,7 @@
 Registry agent spesialis ekstraksi dokumen ke Markdown siap chunking.
 Mendukung multi-spesifikasi komposit layout dokumen.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -89,8 +90,7 @@ def get_agent(specs: list[str] | str | None = None) -> DocumentExtractionAgent:
     # Jika kombinasi multi-spesifikasi
     combo_name = "+".join(normalized)
     desc = " + ".join(
-        AGENT_REGISTRY[s].description if s in AGENT_REGISTRY else s
-        for s in normalized
+        AGENT_REGISTRY[s].description if s in AGENT_REGISTRY else s for s in normalized
     )
     return DocumentExtractionAgent(
         name=combo_name,

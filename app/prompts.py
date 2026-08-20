@@ -8,6 +8,7 @@ memiliki lebih dari 1 spesifikasi layout secara bersamaan:
   3. `bilingual_journal`    : Jurnal ilmiah 2-kolom & 2-bahasa (column-aware reading order)
   4. `presentation_slides`  : Slide presentasi (bullet points, deskripsi diagram/visual)
 """
+
 from __future__ import annotations
 
 import re
@@ -44,7 +45,7 @@ _RULE_MARKDOWN_HIERARCHY: str = """### PANDUAN HIERARKI HEADING MARKDOWN (#, ##,
 - Jika dokumen ini merupakan kelanjutan dari bagian sebelumnya (tanpa judul baru), lanjutkan isi kontennya langsung dengan paragraf/poin yang sesuai."""
 
 _RULE_PRESENTATION_SLIDES: str = """### PANDUAN SLIDE PRESENTASI & ELEMEN VISUAL:
-- Awali dengan judul slide: `## Slide: [Judul Slide]` (atau `## [Judul Slide]`).
+- Untuk setiap slide, awali dengan penanda slide standar sistem: `<!-- SLIDE: <nomor_slide> -->` diikuti judul slide: `## [Judul Slide]`.
 - Sajikan poin-poin presentasi menggunakan bullet points berjenjang (`- Poin utama`, `  - Sub-poin penjelasan`).
 - Jika terdapat visual, diagram alur, grafik angka, atau bagan: Deskripsikan informasi atau relasi bagan tersebut dalam blockquote: `> **[Diagram/Visual]:** [Penjelasan isi bagan, relasi panah, dan angka utama]`.
 - Konversi tabel ringkas atau perbandingan metrik ke tabel Markdown."""
@@ -91,23 +92,29 @@ def normalize_specs(specs: list[str] | str | None) -> list[str]:
     elif isinstance(specs, (list, tuple, set)):
         for item in specs:
             if isinstance(item, str):
-                raw_items.extend([s.strip() for s in re.split(r"[,|+]", item) if s.strip()])
+                raw_items.extend(
+                    [s.strip() for s in re.split(r"[,|+]", item) if s.strip()]
+                )
 
     matched_specs: list[str] = []
     for item in raw_items:
         key = item.lower()
-        if "journal" in key or "bilingual" in key or "2col" in key:
-            if "bilingual_journal" not in matched_specs:
-                matched_specs.append("bilingual_journal")
-        elif "hierarchy" in key or "markdown" in key or "report" in key:
-            if "markdown_hierarchy" not in matched_specs:
-                matched_specs.append("markdown_hierarchy")
-        elif "slide" in key or "ppt" in key or "presentation" in key:
-            if "presentation_slides" not in matched_specs:
-                matched_specs.append("presentation_slides")
-        elif "plain" in key or "generic" in key or "standard" in key:
-            if "plain" not in matched_specs:
-                matched_specs.append("plain")
+        if (
+            "bilingual" in key or "journal" in key or "academic" in key
+        ) and "bilingual_journal" not in matched_specs:
+            matched_specs.append("bilingual_journal")
+        elif (
+            "hierarchy" in key or "markdown" in key or "report" in key
+        ) and "markdown_hierarchy" not in matched_specs:
+            matched_specs.append("markdown_hierarchy")
+        elif (
+            "slide" in key or "ppt" in key or "presentation" in key
+        ) and "presentation_slides" not in matched_specs:
+            matched_specs.append("presentation_slides")
+        elif (
+            "plain" in key or "generic" in key or "standard" in key
+        ) and "plain" not in matched_specs:
+            matched_specs.append("plain")
 
     return matched_specs or ["plain"]
 
@@ -154,5 +161,7 @@ def build_extraction_prompt(
             f"```\n{ocr_text.strip()}\n```"
         )
 
-    prompt_blocks.append("Outputkan HANYA konten dokumen dalam format Markdown yang bersih dan terstruktur.")
+    prompt_blocks.append(
+        "Outputkan HANYA konten dokumen dalam format Markdown yang bersih dan terstruktur."
+    )
     return "\n\n".join(prompt_blocks)

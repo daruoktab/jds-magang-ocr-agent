@@ -5,6 +5,7 @@ This script downloads the top candidate PPTX presentations identified during
 Stage 1 metadata screening (Indonesian and English).
 It checks local storage first and skips files that are already present.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -13,7 +14,6 @@ import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from huggingface_hub import HfApi, hf_hub_download
 
@@ -23,7 +23,7 @@ DEFAULT_INPUT_DIR = _PROJECT_ROOT / "dataset" / "metadata"
 DEFAULT_OUTPUT_DIR = _PROJECT_ROOT / "dataset" / "download"
 
 
-def get_target_filename(candidate: Dict[str, str], use_rank_prefix: bool = True) -> str:
+def get_target_filename(candidate: dict[str, str], use_rank_prefix: bool = True) -> str:
     """Generate the standardized local filename for a candidate."""
     filename = candidate.get("filename", "").strip()
     rank_str = candidate.get("candidate_rank", "").strip()
@@ -36,7 +36,9 @@ def get_target_filename(candidate: Dict[str, str], use_rank_prefix: bool = True)
     return filename
 
 
-def check_local_file_exists(target_dir: Path, candidate: Dict[str, str], use_rank_prefix: bool = True) -> Tuple[bool, Optional[Path], int]:
+def check_local_file_exists(
+    target_dir: Path, candidate: dict[str, str], use_rank_prefix: bool = True
+) -> tuple[bool, Path | None, int]:
     """
     Check if the candidate file already exists locally.
     Checks both prefixed name (e.g. 01_file.pptx) and plain name (file.pptx).
@@ -49,7 +51,11 @@ def check_local_file_exists(target_dir: Path, candidate: Dict[str, str], use_ran
     # 1. Check preferred destination path
     primary_name = prefixed_filename if use_rank_prefix else plain_filename
     primary_path = target_dir / primary_name
-    if primary_path.exists() and primary_path.is_file() and primary_path.stat().st_size > 0:
+    if (
+        primary_path.exists()
+        and primary_path.is_file()
+        and primary_path.stat().st_size > 0
+    ):
         return True, primary_path, primary_path.stat().st_size
 
     # 2. Check alternative name if previously downloaded without prefix
@@ -66,14 +72,14 @@ def check_local_file_exists(target_dir: Path, candidate: Dict[str, str], use_ran
     return False, None, 0
 
 
-def load_candidates_csv(csv_path: Path, top_n: int) -> List[Dict[str, str]]:
+def load_candidates_csv(csv_path: Path, top_n: int) -> list[dict[str, str]]:
     """Load top N candidate records from a candidate CSV file."""
     csv_path = Path(csv_path)
     if not csv_path.exists():
         print(f"Warning: Candidate CSV not found at {csv_path}")
         return []
 
-    records: List[Dict[str, str]] = []
+    records: list[dict[str, str]] = []
     with open(csv_path, "r", encoding="utf-8-sig") as f:
         sample = f.read(4096)
         f.seek(0)
@@ -100,7 +106,7 @@ def load_candidates_csv(csv_path: Path, top_n: int) -> List[Dict[str, str]]:
     return records
 
 
-def build_repo_file_index(repo_id: str) -> Dict[str, str]:
+def build_repo_file_index(repo_id: str) -> dict[str, str]:
     """
     Fetch repo file tree and create an index from filename to full repo path.
     Example repo path: pptx/cc-by-2.0/2020/0a0c7478080d6346c27a1c6c556feb29-ppt_penulisan artikel RJI.pptx
@@ -109,7 +115,7 @@ def build_repo_file_index(repo_id: str) -> Dict[str, str]:
     api = HfApi()
     all_files = api.list_repo_files(repo_id, repo_type="dataset")
 
-    index: Dict[str, str] = {}
+    index: dict[str, str] = {}
     for path in all_files:
         if not path.lower().endswith(".pptx"):
             continue
@@ -127,7 +133,7 @@ def build_repo_file_index(repo_id: str) -> Dict[str, str]:
     return index
 
 
-def resolve_repo_path(filename: str, repo_index: Dict[str, str]) -> Optional[str]:
+def resolve_repo_path(filename: str, repo_index: dict[str, str]) -> str | None:
     """Find the full repository path for a given candidate filename."""
     if filename in repo_index:
         return repo_index[filename]
@@ -141,14 +147,14 @@ def resolve_repo_path(filename: str, repo_index: Dict[str, str]) -> Optional[str
 
 
 def download_single_candidate(
-    candidate: Dict[str, str],
+    candidate: dict[str, str],
     language: str,
     repo_id: str,
-    repo_index: Dict[str, str],
+    repo_index: dict[str, str],
     target_dir: Path,
     use_rank_prefix: bool = True,
     force: bool = False,
-) -> Tuple[bool, str, str]:
+) -> tuple[bool, str, str]:
     """
     Download a single candidate PPTX.
     Returns (success: bool, filename: str, message: str).
@@ -167,11 +173,19 @@ def download_single_candidate(
             target_dir, candidate, use_rank_prefix=use_rank_prefix
         )
         if exists:
-            return True, save_name, f"Already exists locally ({size_bytes / (1024 * 1024):.2f} MB) - skipped"
+            return (
+                True,
+                save_name,
+                f"Already exists locally ({size_bytes / (1024 * 1024):.2f} MB) - skipped",
+            )
 
     repo_path = resolve_repo_path(filename, repo_index)
     if not repo_path:
-        return False, save_name, f"File not found in Hugging Face repository '{repo_id}'"
+        return (
+            False,
+            save_name,
+            f"File not found in Hugging Face repository '{repo_id}'",
+        )
 
     try:
         downloaded_file = hf_hub_download(
@@ -182,14 +196,18 @@ def download_single_candidate(
         target_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(downloaded_file, target_path)
         actual_size = target_path.stat().st_size
-        return True, save_name, f"Downloaded successfully ({actual_size / (1024 * 1024):.2f} MB)"
+        return (
+            True,
+            save_name,
+            f"Downloaded successfully ({actual_size / (1024 * 1024):.2f} MB)",
+        )
     except Exception as e:
         return False, save_name, f"Download failed: {e}"
 
 
 def run_download(
     top_n: int = 50,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     input_dir: Path = DEFAULT_INPUT_DIR,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     repo_id: str = DEFAULT_REPO_ID,
@@ -205,7 +223,7 @@ def run_download(
     indo_candidates = load_candidates_csv(indo_csv, top_n=top_n)
     eng_candidates = load_candidates_csv(eng_csv, top_n=top_n)
 
-    tasks: List[Tuple[Dict[str, str], str, Path]] = []
+    tasks: list[tuple[dict[str, str], str, Path]] = []
     indo_dir = output_dir / "indonesian"
     eng_dir = output_dir / "english"
 
@@ -226,8 +244,8 @@ def run_download(
         return
 
     # Check local availability status for all tasks
-    already_existing: List[Tuple[Dict[str, str], str, Path, int]] = []
-    need_download: List[Tuple[Dict[str, str], str, Path]] = []
+    already_existing: list[tuple[dict[str, str], str, Path, int]] = []
+    need_download: list[tuple[dict[str, str], str, Path]] = []
 
     for task in tasks:
         cand, lang, dest_dir = task
@@ -291,13 +309,19 @@ def run_download(
                 else:
                     fail_count += 1
                     status = "[FAIL]"
-                print(f"[{idx}/{len(need_download)}] {status} [{lang} #{rank}] {fname} -> {msg}")
+                print(
+                    f"[{idx}/{len(need_download)}] {status} [{lang} #{rank}] {fname} -> {msg}"
+                )
             except Exception as exc:
                 fail_count += 1
-                print(f"[{idx}/{len(need_download)}] [ERROR] [{lang} #{rank}] {filename} -> Exception: {exc}")
+                print(
+                    f"[{idx}/{len(need_download)}] [ERROR] [{lang} #{rank}] {filename} -> Exception: {exc}"
+                )
 
     print("=" * 60)
-    print(f"Summary: {success_count} ready locally ({len(already_existing)} cached, {success_count - len(already_existing)} newly downloaded), {fail_count} failed out of {total_tasks} total.")
+    print(
+        f"Summary: {success_count} ready locally ({len(already_existing)} cached, {success_count - len(already_existing)} newly downloaded), {fail_count} failed out of {total_tasks} total."
+    )
     print(f"Output directories:\n  - {indo_dir}\n  - {eng_dir}")
 
 

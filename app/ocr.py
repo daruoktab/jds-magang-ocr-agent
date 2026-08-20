@@ -4,6 +4,7 @@ Ekstraksi OCR via model `ocr-lighton` (VLM kecil yang di-tuning khusus untuk OCR
 Format request = chat biasa dengan `content` berupa list `[{"type": "text", ...}, {"type": "image_url", ...}]`.
 Output teks biasa di `choices[0].message.content`.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast

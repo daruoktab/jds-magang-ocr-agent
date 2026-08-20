@@ -5,6 +5,7 @@ Mendukung multi-spesifikasi komposit layout dokumen.
 Alur StateGraph:
     START -> preprocess -> ocr -> classify -> extract_markdown -> END
 """
+
 from __future__ import annotations
 
 import warnings
@@ -85,7 +86,9 @@ class DocumentExtractionPipeline:
             proc = preprocess_image(image_path)
             return {"preprocessed_path": proc.processed_path}
         except Exception as e:  # noqa: BLE001
-            warnings.warn(f"Gagal melakukan preprocessing ({e}), menggunakan gambar asli.")
+            warnings.warn(
+                f"Gagal melakukan preprocessing ({e}), menggunakan gambar asli."
+            )
             return {"preprocessed_path": image_path}
 
     def _node_ocr(self, state: DocumentExtractionState) -> dict[str, Any]:

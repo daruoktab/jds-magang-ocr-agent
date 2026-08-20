@@ -2,6 +2,7 @@
 Pipeline ekstraksi: gambar dokumen -> VLM (+ OCR Fusion) -> Markdown Bersih Siap Chunking.
 Mendukung multi-spesifikasi karakteristik tata letak dokumen secara komposit.
 """
+
 from __future__ import annotations
 
 import json
@@ -56,7 +57,7 @@ class VisionExtractor:
                 data = json.loads(match.group(0))
                 raw_specs = data.get("specs") or [data.get("doc_type")]
                 return normalize_specs(raw_specs)
-            except Exception:
+            except (json.JSONDecodeError, TypeError, ValueError, KeyError):
                 pass
 
         # Fallback multi-matching via regex
@@ -64,7 +65,11 @@ class VisionExtractor:
         detected: list[str] = []
         if "journal" in text_lower or "bilingual" in text_lower or "2col" in text_lower:
             detected.append("bilingual_journal")
-        if "hierarchy" in text_lower or "markdown" in text_lower or "heading" in text_lower:
+        if (
+            "hierarchy" in text_lower
+            or "markdown" in text_lower
+            or "heading" in text_lower
+        ):
             detected.append("markdown_hierarchy")
         if "slide" in text_lower or "presentation" in text_lower or "ppt" in text_lower:
             detected.append("presentation_slides")
@@ -112,9 +117,9 @@ class VisionExtractor:
 
         # Bersihkan pembungkus markdown block ```markdown ... ``` jika VLM membungkusnya
         if md_text.startswith("```markdown") and md_text.endswith("```"):
-            md_text = md_text[len("```markdown"):-3].strip()
+            md_text = md_text[len("```markdown") : -3].strip()
         elif md_text.startswith("```md") and md_text.endswith("```"):
-            md_text = md_text[len("```md"):-3].strip()
+            md_text = md_text[len("```md") : -3].strip()
         elif md_text.startswith("```") and md_text.endswith("```"):
             md_text = md_text[3:-3].strip()
 

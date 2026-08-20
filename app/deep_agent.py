@@ -2,6 +2,7 @@
 Harness Deep Reasoning Agents untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking.
 Menggunakan arsitektur Master Orchestrator dengan 6 Sub-Agent terspesialisasi.
 """
+
 from __future__ import annotations
 
 import json
@@ -231,13 +232,15 @@ def run_deep_reasoning_agent(
     if forced_specs:
         prompt_parts.append(f"Gunakan spesifikasi layout: {forced_specs}.")
     if preview_chunks:
-        prompt_parts.append(f"Lakukan simulasi preview chunking (chunk_size={chunk_size}, overlap={chunk_overlap}).")
-    prompt_parts.append("Pastikan output akhir berupa teks Markdown utuh yang siap langsung di-chunking.")
+        prompt_parts.append(
+            f"Lakukan simulasi preview chunking (chunk_size={chunk_size}, overlap={chunk_overlap})."
+        )
+    prompt_parts.append(
+        "Pastikan output akhir berupa teks Markdown utuh yang siap langsung di-chunking."
+    )
 
     user_prompt = " ".join(prompt_parts)
-    resp = agent.invoke({
-        "messages": [{"role": "user", "content": user_prompt}]
-    })
+    resp = agent.invoke({"messages": [{"role": "user", "content": user_prompt}]})
 
     messages = resp.get("messages", [])
     final_text = messages[-1].content if messages else str(resp)
