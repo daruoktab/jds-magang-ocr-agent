@@ -9,11 +9,14 @@ Menyediakan fungsi untuk:
 
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
 from PIL import Image, ImageEnhance, ImageOps
+
+logger = logging.getLogger(__name__)
 
 
 class PreprocessedImage(NamedTuple):
@@ -58,8 +61,8 @@ def preprocess_image(
             if transposed is not None:
                 img = transposed
                 modified = True
-        except Exception:
-            pass  # Lewati jika gambar tidak memiliki metadata EXIF yang valid
+        except (OSError, ValueError, TypeError) as exc:
+            logger.debug("Lewati penyesuaian orientasi EXIF: %s", exc)
 
     # 2. Pastikan RGB (bukan RGBA / Grayscale / P)
     if img.mode != "RGB":
@@ -75,8 +78,8 @@ def preprocess_image(
                 enhancer = ImageEnhance.Contrast(img)
                 img = enhancer.enhance(contrast_factor)
             modified = True
-        except Exception:
-            pass
+        except (OSError, ValueError, TypeError) as exc:
+            logger.debug("Lewati penyesuaian kontras dokumen: %s", exc)
 
     dimensions = (img.width, img.height)
 
@@ -87,11 +90,10 @@ def preprocess_image(
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / f"proc_{orig_path.stem}.jpg"
         else:
-            temp_file = tempfile.NamedTemporaryFile(
+            with tempfile.NamedTemporaryFile(
                 prefix=f"proc_{orig_path.stem}_", suffix=".jpg", delete=False
-            )
-            out_path = Path(temp_file.name)
-            temp_file.close()
+            ) as temp_file:
+                out_path = Path(temp_file.name)
 
         img.save(str(out_path), format="JPEG", quality=95)
         return PreprocessedImage(

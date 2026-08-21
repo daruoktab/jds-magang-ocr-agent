@@ -86,7 +86,11 @@ def pdf_to_images(
         if pages is not None:
             target_indices = [idx for idx in pages if 0 <= idx < total_in_doc]
         else:
-            limit = min(max_pages, total_in_doc) if (max_pages and max_pages > 0) else total_in_doc
+            limit = (
+                min(max_pages, total_in_doc)
+                if (max_pages and max_pages > 0)
+                else total_in_doc
+            )
             target_indices = list(range(limit))
 
         for idx in target_indices:

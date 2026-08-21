@@ -519,14 +519,18 @@ def render_presentation_slides(
 
     # Ukuran batch: default 10 (batas lisensi Spire Free), maksimal 10 per panggilan.
     batch_size = (
-        DEFAULT_MAX_IMAGES if (max_images is None or max_images <= 0) else min(max_images, DEFAULT_MAX_IMAGES)
+        DEFAULT_MAX_IMAGES
+        if (max_images is None or max_images <= 0)
+        else min(max_images, DEFAULT_MAX_IMAGES)
     )
 
     # Window slide 1-based yang akan diproses dalam batch ini.
     first = max(1, start_slide)
     last = min(first + batch_size - 1, total_slides)
     if first > total_slides:
-        return f"ERROR: start_slide={start_slide} melebihi total slide ({total_slides})."
+        return (
+            f"ERROR: start_slide={start_slide} melebihi total slide ({total_slides})."
+        )
 
     window_indices = list(range(first - 1, last))
 
@@ -621,7 +625,9 @@ def convert_pdf_to_images(
 
     # Ukuran batch: default 10 per panggilan.
     batch_size = (
-        DEFAULT_MAX_IMAGES if (max_images is None or max_images <= 0) else min(max_images, DEFAULT_MAX_IMAGES)
+        DEFAULT_MAX_IMAGES
+        if (max_images is None or max_images <= 0)
+        else min(max_images, DEFAULT_MAX_IMAGES)
     )
 
     first = max(1, start_page)

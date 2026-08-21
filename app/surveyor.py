@@ -208,7 +208,9 @@ def _estimate_skew(ink: np.ndarray) -> float:
     small = Image.fromarray((ink[::4, ::4] * 255).astype(np.uint8))
     best_deg, best_score = 0.0, -1.0
     for deg in np.arange(-SKEW_MAX_DEG, SKEW_MAX_DEG + 1e-9, SKEW_STEP_DEG):
-        rot = np.array(small.rotate(float(deg), resample=Image.NEAREST, fillcolor=0))
+        rot = np.array(
+            small.rotate(float(deg), resample=Image.Resampling.NEAREST, fillcolor=0)
+        )
         score = float((rot > 127).sum(axis=1).max())
         if score > best_score:
             best_score, best_deg = score, float(deg)
@@ -218,7 +220,9 @@ def _estimate_skew(ink: np.ndarray) -> float:
 def _deskew(ink: np.ndarray, deg: float) -> np.ndarray:
     """Putar peta tinta sebesar `deg` derajat."""
     im = Image.fromarray((ink * 255).astype(np.uint8))
-    return np.array(im.rotate(deg, resample=Image.BILINEAR, fillcolor=0)) > 127
+    return (
+        np.array(im.rotate(deg, resample=Image.Resampling.BILINEAR, fillcolor=0)) > 127
+    )
 
 
 def _has_long_h_lines(ink: np.ndarray) -> bool:
@@ -227,7 +231,7 @@ def _has_long_h_lines(ink: np.ndarray) -> bool:
     Dipakai sebagai penjaga murah sebelum koreksi kemiringan: halaman tanpa
     satu pun garis panjang jelas bukan tabel bergaris, jadi tidak perlu diputar.
     """
-    height, width = ink.shape
+    _height, width = ink.shape
     return bool((ink.sum(axis=1) > H_LINE_FRAC * width).any())
 
 
@@ -271,7 +275,11 @@ def _detect_grid(ink: np.ndarray) -> ColumnGrid | None:
     header = ink[header_top:header_bottom, :]
     v_lines = _group(np.where(header.sum(axis=0) > V_LINE_FRAC * header.shape[0])[0])
     # Buang tepi hitam hasil scan: garis di batas citra bukan sekat kolom.
-    v_lines = [v for v in v_lines if EDGE_MARGIN_FRAC * width < v < (1 - EDGE_MARGIN_FRAC) * width]
+    v_lines = [
+        v
+        for v in v_lines
+        if EDGE_MARGIN_FRAC * width < v < (1 - EDGE_MARGIN_FRAC) * width
+    ]
     if len(v_lines) < 2:
         return None
 
@@ -383,7 +391,9 @@ def survey_page(
             grid = _detect_grid(ink)
             result.skew_deg = deg
             if grid is not None:
-                result.warnings.append(f"grid ditemukan setelah koreksi miring {deg} derajat")
+                result.warnings.append(
+                    f"grid ditemukan setelah koreksi miring {deg} derajat"
+                )
 
     if grid is None and inherited_grid is not None:
         grid = inherited_grid.model_copy(update={"source": "warisan"})
@@ -420,7 +430,10 @@ def _signature_matches(page: PageSurvey, n_cols: int, sep_rel: Sequence[float]) 
         return False
     if len(page.grid.separators_rel) != len(sep_rel):
         return False
-    return max(abs(x - y) for x, y in zip(page.grid.separators_rel, sep_rel)) <= SIGNATURE_TOL
+    return (
+        max(abs(x - y) for x, y in zip(page.grid.separators_rel, sep_rel))
+        <= SIGNATURE_TOL
+    )
 
 
 def segment_spans(pages: Sequence[PageSurvey]) -> list[Span]:
@@ -438,7 +451,9 @@ def segment_spans(pages: Sequence[PageSurvey]) -> list[Span]:
         if current is not None:
             same_mode = page.mode == current.mode
             same_schema = page.mode != "tabel" or _signature_matches(
-                page, current.n_cols if current.n_cols is not None else -1, current.separators_rel
+                page,
+                current.n_cols if current.n_cols is not None else -1,
+                current.separators_rel,
             )
             if same_mode and same_schema:
                 current.page_end = page.page_no
@@ -598,11 +613,21 @@ def _cli(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("pdf", help="Path file PDF")
     parser.add_argument("--pages", default=None, help="Rentang halaman, mis. 384-425")
-    parser.add_argument("--batch-size", type=int, default=10, help="Ukuran batch nominal")
-    parser.add_argument("--snap", type=int, default=2, help="Toleransi geser batas batch")
-    parser.add_argument("--no-deskew", action="store_true", help="Matikan koreksi kemiringan")
-    parser.add_argument("--out", default=None, help="Simpan laporan lengkap ke file JSON")
-    parser.add_argument("--detail", action="store_true", help="Cetak rincian per halaman")
+    parser.add_argument(
+        "--batch-size", type=int, default=10, help="Ukuran batch nominal"
+    )
+    parser.add_argument(
+        "--snap", type=int, default=2, help="Toleransi geser batas batch"
+    )
+    parser.add_argument(
+        "--no-deskew", action="store_true", help="Matikan koreksi kemiringan"
+    )
+    parser.add_argument(
+        "--out", default=None, help="Simpan laporan lengkap ke file JSON"
+    )
+    parser.add_argument(
+        "--detail", action="store_true", help="Cetak rincian per halaman"
+    )
     args = parser.parse_args(argv)
 
     page_range = None

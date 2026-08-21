@@ -23,7 +23,7 @@ tertentu tunggal. Begitu ada dua kemungkinan, ia mengeskalasi, tidak menebak.
 from __future__ import annotations
 
 import re
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -64,7 +64,15 @@ ORDINAL_KIND: dict[str, str] = {
 }
 
 #: Level yang penomorannya dimulai ulang di dalam tiap induk.
-RESETS_INSIDE_PARENT = {"ayat", "huruf", "angka", "huruf2", "angka2", "paragraf", "bagian"}
+RESETS_INSIDE_PARENT = {
+    "ayat",
+    "huruf",
+    "angka",
+    "huruf2",
+    "angka2",
+    "paragraf",
+    "bagian",
+}
 
 #: Scope yang tidak boleh menampung level tertentu, walau levelnya lebih rendah.
 #: Pembukaan (Menimbang/Mengingat/MEMUTUSKAN) adalah saudara batang tubuh, bukan
@@ -77,13 +85,32 @@ BLOCKED_CHILDREN: dict[str, set[str]] = {
 MAX_RINCIAN_DEPTH = 4
 
 _KATA_BILANGAN = [
-    "kesatu", "kedua", "ketiga", "keempat", "kelima", "keenam",
-    "ketujuh", "kedelapan", "kesembilan", "kesepuluh",
+    "kesatu",
+    "kedua",
+    "ketiga",
+    "keempat",
+    "kelima",
+    "keenam",
+    "ketujuh",
+    "kedelapan",
+    "kesembilan",
+    "kesepuluh",
 ]
 
 _ROMAN_VALUES = [
-    (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
-    (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+    (1000, "M"),
+    (900, "CM"),
+    (500, "D"),
+    (400, "CD"),
+    (100, "C"),
+    (90, "XC"),
+    (50, "L"),
+    (40, "XL"),
+    (10, "X"),
+    (9, "IX"),
+    (5, "V"),
+    (4, "IV"),
+    (1, "I"),
 ]
 
 
@@ -94,7 +121,9 @@ class Event(BaseModel):
     """Satu pengamatan mentah dari VLM agent. Tidak memuat kedalaman."""
 
     kind: str = Field(..., description="Salah satu nilai di LEVEL_ORDER, atau 'teks'")
-    ordinal: str | None = Field(default=None, description="Nomor apa adanya: 'I', '30', 'a', 'Kesatu'")
+    ordinal: str | None = Field(
+        default=None, description="Nomor apa adanya: 'I', '30', 'a', 'Kesatu'"
+    )
     label: str | None = Field(default=None, description="Judul, mis. 'KETENTUAN UMUM'")
     text: str | None = Field(default=None, description="Isi tekstual")
     page: int = Field(..., description="Halaman tempat event terlihat")
@@ -109,7 +138,7 @@ class Node(BaseModel):
     text: str = ""
     page_start: int = 0
     page_end: int = 0
-    children: list["Node"] = Field(default_factory=list)
+    children: list[Node] = Field(default_factory=list)
 
 
 class ScopeRef(BaseModel):
@@ -133,24 +162,32 @@ class Cursor(BaseModel):
     doc_id: str = ""
     open_path: list[ScopeRef] = Field(default_factory=list)
     last_seen: dict[str, str] = Field(default_factory=dict)
-    tail: str = Field(default="", description="Ekor teks halaman terakhir, untuk menyambung kalimat")
-    catchword: str = Field(default="", description="Kata penyambung di kaki halaman terakhir")
+    tail: str = Field(
+        default="", description="Ekor teks halaman terakhir, untuk menyambung kalimat"
+    )
+    catchword: str = Field(
+        default="", description="Kata penyambung di kaki halaman terakhir"
+    )
 
 
 class Violation(BaseModel):
     """Temuan Auditor."""
 
-    severity: str = Field(..., description="'perbaiki' bila nilainya tunggal, 'eskalasi' bila ambigu")
+    severity: str = Field(
+        ..., description="'perbaiki' bila nilainya tunggal, 'eskalasi' bila ambigu"
+    )
     kind: str
     page: int
     message: str
-    proposed: str | None = Field(default=None, description="Nilai perbaikan bila tertentu tunggal")
+    proposed: str | None = Field(
+        default=None, description="Nilai perbaikan bila tertentu tunggal"
+    )
 
 
 # --- Utilitas ordinal -------------------------------------------------------
 
 
-def to_int(ordinal: str | None, kind: str) -> int | None:
+def to_int(ordinal: str | None, kind: str) -> float | None:
     """Ubah ordinal apa pun menjadi bilangan urut, atau None bila tak terbaca."""
     if not ordinal:
         return None
@@ -202,7 +239,11 @@ def from_int(value: int, kind: str) -> str:
     if style == "romawi":
         return _int_to_roman(value)
     if style == "kata":
-        return _KATA_BILANGAN[value - 1].capitalize() if 1 <= value <= len(_KATA_BILANGAN) else str(value)
+        return (
+            _KATA_BILANGAN[value - 1].capitalize()
+            if 1 <= value <= len(_KATA_BILANGAN)
+            else str(value)
+        )
     if style == "alfabet":
         return chr(ord("a") + value - 1)
     return str(value)
@@ -336,7 +377,7 @@ def audit(events: Sequence[Event], cursor: Cursor | None = None) -> list[Violati
     misalnya "11, L2, 13" yang hanya bisa berarti 12. Selebihnya dieskalasi.
     """
     violations: list[Violation] = []
-    last: dict[str, int] = {}
+    last: dict[str, float] = {}
     if cursor:
         for kind, raw in cursor.last_seen.items():
             value = to_int(raw, kind)
@@ -449,7 +490,9 @@ def check_catchword(cursor: Cursor, first_events: Sequence[Event]) -> Violation 
     """
     if not cursor.catchword:
         return None
-    head = " ".join((e.text or e.label or e.ordinal or "") for e in first_events[:3]).lower()
+    head = " ".join(
+        (e.text or e.label or e.ordinal or "") for e in first_events[:3]
+    ).lower()
     needle = re.sub(r"[^\w\s]", " ", cursor.catchword.lower()).split()
     if not needle:
         return None
@@ -481,7 +524,9 @@ _LIST_LEVEL = {"ayat": 0, "huruf": 1, "angka": 2, "huruf2": 3, "angka2": 4}
 def _heading_text(node: Node) -> str:
     parts = [node.kind.capitalize() if node.kind != "bab" else "BAB"]
     if node.ordinal:
-        parts.append(node.ordinal.upper() if node.kind in {"bab", "buku"} else node.ordinal)
+        parts.append(
+            node.ordinal.upper() if node.kind in {"bab", "buku"} else node.ordinal
+        )
     line = " ".join(parts)
     if node.label:
         line += f" — {node.label}"
@@ -641,8 +686,14 @@ def count_amount_checks(root: Node) -> int:
         for child in node.children:
             next_pasal = child.ordinal if child.kind == "pasal" else pasal
             if child.kind in {"pasal", "ayat"} and child.text:
-                has_ref = bool(_REF_PASAL.search(child.text) or _REF_AYAT.search(child.text))
-                amounts = [g for g in child.children if g.kind == "huruf" and parse_rupiah(g.text) is not None]
+                has_ref = bool(
+                    _REF_PASAL.search(child.text) or _REF_AYAT.search(child.text)
+                )
+                amounts = [
+                    g
+                    for g in child.children
+                    if g.kind == "huruf" and parse_rupiah(g.text) is not None
+                ]
                 if has_ref and len(amounts) >= 2:
                     total += 1
             walk(child, next_pasal)
