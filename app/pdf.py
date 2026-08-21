@@ -22,8 +22,23 @@ if TYPE_CHECKING:
     from .graph import DocumentExtractionPipeline
 
 # 200 DPI adalah titik seimbang: cukup tajam untuk teks/OCR, wajar ukurannya.
-DEFAULT_DPI: int = 400
+DEFAULT_DPI: int = 200
 DEFAULT_IMAGE_EXT: str = ".jpg"
+
+# Ukuran batch halaman per pemrosesan (dipertahankan 10 agar konsisten dengan
+# strategi bertahap "proses per 10 slide/pages" dan meminimalkan beban memori/disk).
+PDF_PAGE_BATCH: int = 10
+
+
+def pdf_page_count(pdf_path: str | Path) -> int:
+    """
+    Hitung jumlah halaman file PDF menggunakan PyMuPDF.
+    """
+    path_obj = Path(pdf_path)
+    if not path_obj.exists():
+        raise FileNotFoundError(f"PDF tidak ditemukan: {path_obj}")
+    with pymupdf.open(path_obj) as doc:
+        return doc.page_count
 
 
 def pdf_to_images(
@@ -31,9 +46,19 @@ def pdf_to_images(
     output_dir: str | Path | None = None,
     dpi: int = DEFAULT_DPI,
     image_ext: str = DEFAULT_IMAGE_EXT,
+    max_pages: int | None = None,
+    pages: list[int] | None = None,
 ) -> list[Path]:
     """
-    Ubah seluruh halaman PDF menjadi gambar, satu file per halaman.
+    Ubah halaman PDF menjadi gambar, satu file per halaman.
+
+    Args:
+        pdf_path: Path file PDF.
+        output_dir: Direktori penyimpanan gambar.
+        dpi: Resolusi gambar (default 200 DPI).
+        image_ext: Format ekstensi gambar (.jpg / .png).
+        max_pages: Batas maksimal halaman yang dirender dari awal.
+        pages: Daftar nomor halaman spesifik (0-indexed) yang ingin dirender.
 
     Nama file: `<nama_pdf>_page<N>.<ext>` (N mulai dari 1).
     Mengembalikan daftar path gambar yang dihasilkan (berurutan).
@@ -53,12 +78,22 @@ def pdf_to_images(
 
     outputs: list[Path] = []
     with pymupdf.open(pdf_path) as doc:
-        if doc.page_count == 0:
+        total_in_doc = doc.page_count
+        if total_in_doc == 0:
             raise ValueError(f"PDF tidak memiliki halaman: {pdf_path}")
 
-        for i, page in enumerate(doc, start=1):
+        # Tentukan halaman mana saja yang akan diproses
+        if pages is not None:
+            target_indices = [idx for idx in pages if 0 <= idx < total_in_doc]
+        else:
+            limit = min(max_pages, total_in_doc) if (max_pages and max_pages > 0) else total_in_doc
+            target_indices = list(range(limit))
+
+        for idx in target_indices:
+            page = doc[idx]
+            page_num = idx + 1
             pix = page.get_pixmap(matrix=matrix, alpha=False)
-            out_path = output_dir / f"{stem}_page{i}{image_ext}"
+            out_path = output_dir / f"{stem}_page{page_num}{image_ext}"
             pix.save(str(out_path))
             outputs.append(out_path)
 
@@ -70,6 +105,7 @@ def extract_pdf_with_pymupdf4llm(
     page_chunks: bool = True,
     write_images: bool = False,
     image_path: str | Path | None = None,
+    pages: list[int] | None = None,
 ) -> list[dict[str, Any]] | str:
     """
     Ekstrak dokumen PDF digital langsung menjadi Markdown menggunakan pymupdf4llm.
@@ -80,6 +116,7 @@ def extract_pdf_with_pymupdf4llm(
         page_chunks: Jika True, mengembalikan list chunk per-halaman lengkap dengan metadata.
         write_images: Jika True, simpan gambar/grafik yang diekstrak dari PDF ke image_path.
         image_path: Direktori penyimpanan gambar jika write_images=True.
+        pages: Daftar indeks halaman (0-indexed) yang ingin diekstrak.
 
     Returns:
         List dictionary per-halaman jika page_chunks=True, atau string Markdown utuh jika False.
@@ -96,6 +133,7 @@ def extract_pdf_with_pymupdf4llm(
 
     result = pymupdf4llm.to_markdown(
         str(path_obj),
+        pages=pages,
         page_chunks=page_chunks,
         write_images=write_images,
         image_path=img_dir_str,
@@ -133,7 +171,7 @@ def process_multipage_pdf(
     Mendukung multi-spesifikasi komposit per-halaman.
     """
     pdf_path = Path(pdf_path)
-    page_images = pdf_to_images(pdf_path, output_dir=output_dir, dpi=dpi)
+    total_pages = pdf_page_count(pdf_path)
 
     pages: list[DocumentPage] = []
     pages_md: list[str] = []
@@ -142,31 +180,42 @@ def process_multipage_pdf(
 
     active_forced = forced_specs or forced_doc_type
 
-    for idx, img_path in enumerate(page_images, start=1):
-        # Jalankan pipeline per halaman dengan membawa konteks halaman sebelumnya
-        res = pipeline.run(
-            str(img_path),
-            forced_specs=active_forced,
-            previous_page_context=previous_context,
+    # Proses BERTAHAP per batch 10 halaman: render batch -> ekstrak batch -> lanjut.
+    # Konsisten dengan strategi "proses per 10 pages" dan meminimalkan beban memori/disk.
+    for b_start in range(0, total_pages, PDF_PAGE_BATCH):
+        b_end = min(b_start + PDF_PAGE_BATCH, total_pages)
+        page_images = pdf_to_images(
+            pdf_path,
+            output_dir=output_dir,
+            dpi=dpi,
+            pages=list(range(b_start, b_end)),
         )
 
-        page_md: str = res["markdown_content"]
-        ocr_txt: str | None = res.get("ocr_text")
-        detected_specs: list[str] = res.get("specs") or ["plain"]
-
-        pages_md.append(page_md)
-        all_page_specs.append(detected_specs)
-        previous_context = page_md[-400:] if len(page_md) > 400 else page_md
-
-        pages.append(
-            DocumentPage(
-                page_number=idx,
-                specs=detected_specs,
-                markdown_content=page_md,
-                ocr_text=ocr_txt,
-                image_path=str(img_path),
+        for idx, img_path in enumerate(page_images, start=b_start + 1):
+            # Jalankan pipeline per halaman dengan membawa konteks halaman sebelumnya
+            res = pipeline.run(
+                str(img_path),
+                forced_specs=active_forced,
+                previous_page_context=previous_context,
             )
-        )
+
+            page_md: str = res["markdown_content"]
+            ocr_txt: str | None = res.get("ocr_text")
+            detected_specs: list[str] = res.get("specs") or ["plain"]
+
+            pages_md.append(page_md)
+            all_page_specs.append(detected_specs)
+            previous_context = page_md[-400:] if len(page_md) > 400 else page_md
+
+            pages.append(
+                DocumentPage(
+                    page_number=idx,
+                    specs=detected_specs,
+                    markdown_content=page_md,
+                    ocr_text=ocr_txt,
+                    image_path=str(img_path),
+                )
+            )
 
     # Kumpulkan seluruh spesifikasi unik dokumen
     if active_forced:
@@ -185,7 +234,7 @@ def process_multipage_pdf(
     return ExtractedDocument(
         file_path=str(pdf_path),
         specs=overall_specs,
-        total_pages=len(page_images),
+        total_pages=total_pages,
         markdown_content=stitched_markdown,
         pages=pages,
         metadata={

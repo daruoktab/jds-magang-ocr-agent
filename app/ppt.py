@@ -17,6 +17,11 @@ from typing import Any
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
+# Batas lisensi Spire.Presentation Free: hanya 10 slide pertama per objek
+# presentasi yang dirender penuh; slide ke-11 dst. menjadi blank + watermark.
+# Karena itu rendering selalu dilakukan bertahap dalam batch sebesar nilai ini.
+SPIRE_FREE_SLIDE_LIMIT: int = 10
+
 
 def _table_to_markdown(table: Any) -> str:
     """Ubah objek tabel python-pptx menjadi teks tabel Markdown (GFM)."""
@@ -41,14 +46,84 @@ def _table_to_markdown(table: Any) -> str:
     return "\n".join(md_lines)
 
 
+def count_presentation_slides(pptx_path: str | Path) -> int:
+    """
+    Hitung jumlah slide presentasi (.pptx / .ppt) menggunakan Spire.Presentation.
+    """
+    from spire.presentation import Presentation
+
+    path_obj = Path(pptx_path).resolve()
+    if not path_obj.exists():
+        raise FileNotFoundError(f"File presentasi tidak ditemukan: {path_obj}")
+
+    prs = Presentation()
+    try:
+        prs.LoadFromFile(str(path_obj))
+        return prs.Slides.Count
+    finally:
+        prs.Dispose()
+
+
+def _split_pptx_to_temp(
+    src_path: Path,
+    keep_start: int,
+    keep_end: int,
+    tmp_dir: Path,
+) -> Path:
+    """
+    Buat salinan PPTX yang hanya mempertahankan slide indeks [keep_start, keep_end)
+    (0-based) dan menyimpannya ke tmp_dir. Menggunakan python-pptx (tanpa batas lisensi).
+
+    Slide di luar rentang dihapus melalui manipulasi `sldIdLst` + `drop_rel`,
+    lalu disimpan sebagai file PPTX bersih (maksimal 10 slide) untuk di-render Spire.
+    """
+    from pptx import Presentation
+
+    prs = Presentation(str(src_path))
+    total = len(prs.slides)
+    sldIdLst = prs.slides._sldIdLst
+    slides = list(sldIdLst)
+
+    # Hapus slide di luar rentang (urutkan descending agar indeks tetap valid).
+    to_remove = [i for i in range(total) if not (keep_start <= i < keep_end)]
+    for i in sorted(to_remove, reverse=True):
+        prs.part.drop_rel(slides[i].rId)
+        sldIdLst.remove(slides[i])
+
+    out_path = tmp_dir / f"batch_{keep_start}_{keep_end}.pptx"
+    prs.save(str(out_path))
+    return out_path
+
+
 def render_presentation_slides_to_images(
     pptx_path: str | Path,
     output_dir: str | Path | None = None,
+    slides: list[int] | None = None,
+    batch_size: int = SPIRE_FREE_SLIDE_LIMIT,
 ) -> list[Path]:
     """
-    Render seluruh kanvas slide PowerPoint menjadi file gambar PNG (satu gambar per slide kanvas).
-    Menggunakan Spire.Presentation untuk Python (standalone, cross-platform, tanpa perlu Microsoft Office/LibreOffice).
+    Render kanvas slide PowerPoint menjadi file gambar PNG (satu gambar per slide kanvas)
+    dengan pemrosesan BERTAHAP per batch agar menghindari limitasi lisensi Spire.Presentation
+    Free (maksimal 10 slide per objek presentasi; slide ke-11 dst. akan blank + watermark).
+
+    Strategi: PPTX dipotong per batch (maksimal 10 slide) menggunakan python-pptx
+    (tanpa batas lisensi) menjadi file PPTX kecil, lalu masing-masing file kecil
+    di-render oleh Spire — sehingga Spire tidak pernah melihat presentasi > 10 slide.
+    File .ppt (format lama) tidak bisa dipotong oleh python-pptx, sehingga menggunakan
+    fallback AppendBySlide ke objek presentasi baru.
+
+    Args:
+        pptx_path: Path file presentasi (.pptx / .ppt).
+        output_dir: Direktori penyimpanan gambar (default: <folder_pptx>/<stem>_slides).
+        slides: Daftar indeks slide 0-based yang ingin dirender (None = seluruh slide).
+        batch_size: Jumlah slide per batch render (default 10 = limit lisensi Free;
+            jangan dinaikkan melebihi 10 pada versi Free).
+
+    Nama file: `slide_<N>.png` (N mulai dari 1, sesuai nomor slide asli).
+    Mengembalikan daftar path gambar yang dihasilkan (berurutan sesuai indeks input).
     """
+    import tempfile
+
     from spire.presentation import Presentation
 
     path_obj = Path(pptx_path).resolve()
@@ -62,20 +137,73 @@ def render_presentation_slides_to_images(
     )
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    prs = Presentation()
-    try:
-        prs.LoadFromFile(str(path_obj))
-        generated_images: list[Path] = []
-        for i in range(prs.Slides.Count):
-            slide = prs.Slides[i]
-            image = slide.SaveAsImage()
-            out_img = (out_dir / f"slide_{i + 1}.png").resolve()
-            image.Save(str(out_img))
-            if out_img.exists():
-                generated_images.append(out_img)
-        return generated_images
-    finally:
-        prs.Dispose()
+    is_pptx = path_obj.suffix.lower() == ".pptx"
+
+    # Hitung total slide: python-pptx untuk .pptx, Spire untuk .ppt.
+    if is_pptx:
+        from pptx import Presentation as PptxPresentation
+
+        probe = PptxPresentation(str(path_obj))
+        total = len(probe.slides)
+    else:
+        src_probe = Presentation()
+        src_probe.LoadFromFile(str(path_obj))
+        total = src_probe.Slides.Count
+        src_probe.Dispose()
+
+    if total == 0:
+        return []
+
+    if slides is None:
+        target_indices = list(range(total))
+    else:
+        target_indices = [i for i in slides if 0 <= i < total]
+    if not target_indices:
+        return []
+
+    # Clamp: versi Free tidak bisa merender > 10 slide per objek presentasi.
+    effective_batch = max(1, min(batch_size, SPIRE_FREE_SLIDE_LIMIT))
+
+    generated_images: list[Path] = []
+    with tempfile.TemporaryDirectory(prefix="pptx_batch_") as tmp_dir_name:
+        tmp_dir = Path(tmp_dir_name)
+        for b_start in range(0, len(target_indices), effective_batch):
+            chunk = target_indices[b_start : b_start + effective_batch]
+
+            batch_prs = Presentation()
+            try:
+                if is_pptx:
+                    # Potong PPTX menjadi file kecil (hanya slide di chunk), lalu render.
+                    split_path = _split_pptx_to_temp(
+                        path_obj, chunk[0], chunk[-1] + 1, tmp_dir
+                    )
+                    batch_prs.LoadFromFile(str(split_path))
+                else:
+                    # Fallback .ppt: AppendBySlide ke presentasi baru.
+                    # python-pptx tidak bisa membaca .ppt, jadi load source per batch.
+                    src = Presentation()
+                    src.LoadFromFile(str(path_obj))
+                    try:
+                        batch_prs.Slides.RemoveAt(0)
+                        try:
+                            batch_prs.SlideSize.Size = src.SlideSize.Size
+                        except Exception:  # noqa: BLE001, S110 - fallback ke ukuran default
+                            pass
+                        for idx in chunk:
+                            batch_prs.Slides.AppendBySlide(src.Slides[idx])
+                    finally:
+                        src.Dispose()
+
+                for pos, src_idx in enumerate(chunk):
+                    image = batch_prs.Slides[pos].SaveAsImage()
+                    out_img = (out_dir / f"slide_{src_idx + 1}.png").resolve()
+                    image.Save(str(out_img))
+                    if out_img.exists():
+                        generated_images.append(out_img)
+            finally:
+                batch_prs.Dispose()
+
+    return generated_images
 
 
 def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:

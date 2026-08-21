@@ -11,10 +11,16 @@ Alur kerja yang direkomendasikan untuk agent:
   1. scan_document_folders / select_document_batch : temukan & pilih dokumen
   2. render_presentation_slides / convert_pdf_to_images (+ preprocess_image) :
      ubah dokumen menjadi gambar dan KIRIM gambar tersebut LANGSUNG ke model
-     (image content block) agar model dapat melihat dan membaca dokumen secara visual
+     (image content) agar model dapat melihat dan membaca dokumen secara visual.
+     Karena library konversi (Spire.Presentation) hanya merender maksimal 10 slide per
+     objek presentasi, kedua tool ini memproses DENGAN BATCH per 10 slide/halaman:
+     ulangi panggilan dengan start_slide/start_page = next_start_... hingga has_more=false.
   3. Agent menulis Markdown sesuai spesifikasi layout dari gambar yang dilihat
   4. preview_markdown_chunks : validasi kesiapan chunking
   5. save_extraction_result : simpan Markdown + metadata sebagai gold data
+
+  WAJIB: proses SATU DOKUMEN sampai SEMUA BATCH-nya selesai (has_more=false) dan
+  sudah disimpan ke save_extraction_result, BARU pindah ke dokumen berikutnya.
 
 Menjalankan server:
     python -m app.mcp_agent_server
@@ -34,7 +40,8 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ContentBlock, ImageContent, TextContent
 
 from .multi_page import preview_markdown_chunks as sim_preview_chunks
-from .pdf import pdf_to_images
+from .pdf import pdf_page_count
+from .ppt import count_presentation_slides
 from .preprocess import preprocess_image
 
 SUPPORTED_EXTENSIONS: set[str] = {
@@ -134,14 +141,24 @@ server = MCPServer(
         "2. TANYAKAN KE USER folder mana yang datanya ingin diproses (user memilih, mis. 'input/ppt/english').\n"
         "3. TANYAKAN KE USER berapa banyak data random yang ingin dibuat (tanpa duplikasi).\n"
         "4. Panggil 'select_random_documents' dengan pilihan folder dan jumlah dari user.\n"
-        "5. Untuk tiap dokumen terpilih: 'render_presentation_slides' (PPTX) atau 'convert_pdf_to_images' "
-        "(PDF) — tool ini MENYALURKAN gambar LANGSUNG ke model sebagai image content, jadi model "
-        "dapat melihat slide/halaman secara visual. Gunakan 'preprocess_image' bila gambar perlu "
-        "diperbaiki orientasi/kontras (juga mengirim gambar hasil ke model).\n"
-        "6. Tulis sendiri Markdown-nya dari gambar yang dilihat (OCR/ekstraksi teks tidak tersedia di server ini).\n"
-        "7. Validasi dengan 'preview_markdown_chunks' bila perlu.\n"
-        "8. Simpan hasil dengan 'save_extraction_result'.\n"
-        "Jangan pernah memilih folder atau jumlah data sendiri tanpa persetujuan user."
+        "5. PROSES SATU DOKUMEN PER SATU HINGGA SELESAI SEMUA BATCH-NYA (jangan pindah ke dokumen\n"
+        "   berikutnya sebelum dokumen ini disimpan):\n"
+        "   a. Untuk PPTX: 'render_presentation_slides' (start_slide=1) — tool mengirim 10 slide per batch.\n"
+        "      Baca gambar secara visual, tulis Markdown batch itu (sertakan penanda halaman/slide\n"
+        "      standar: <!-- SLIDE: N -->). Jika summary has_more=true, ulangi panggilan dengan\n"
+        "      start_slide = next_start_slide hingga has_more=false. Gabungkan Markdown kumulatif.\n"
+        "   b. Untuk PDF: 'convert_pdf_to_images' (start_page=1) — sama, ulangi dengan\n"
+        "      start_page = next_start_page hingga has_more=false, kumulatifkan Markdown-nya.\n"
+        "      Gunakan 'preprocess_image' bila gambar perlu diperbaiki orientasi/kontras (juga mengirim\n"
+        "      gambar hasil ke model).\n"
+        "   c. Tulis sendiri Markdown-nya dari gambar yang dilihat (OCR/ekstraksi teks tidak tersedia\n"
+        "      di server ini).\n"
+        "   d. Setelah SEMUA BATCH SELESAI (has_more=false), simpan Markdown kumulatif LEBIH DARI SATU\n"
+        "      HALAMAN/SLIDE ke 'save_extraction_result' (file sumber = dokumen asli, bukan gambar).\n"
+        "   e. BARU setelah save_extraction_result mengembalikan status success, lanjut ke dokumen\n"
+        "      berikutnya dari daftar yang dipilih.\n"
+        "6. Gunakan 'preview_markdown_chunks' untuk validasi kesiapan chunking sebelum disimpan.\n"
+        "7. Jangan pernah memilih folder atau jumlah data sendiri tanpa persetujuan user."
     ),
     version="0.1.0",
 )
@@ -433,9 +450,12 @@ def select_random_documents(
             "selected_files": [str(p) for p in picked],
             "per_folder": per_folder,
             "next_step": (
-                "Render tiap dokumen terpilih dengan 'render_presentation_slides' (PPTX) atau "
-                "'convert_pdf_to_images' (PDF), baca gambar secara visual, tulis Markdown-nya, "
-                "lalu simpan dengan 'save_extraction_result'."
+                "PROSES SATU DOKUMEN PER SATU HINGGA SELESAI SEMUA BATCH-NYA sebelum pindah ke "
+                "dokumen berikutnya. Untuk PPTX: 'render_presentation_slides' (start_slide=1) ulangi "
+                "dengan next_start_slide hingga has_more=false, kumulatifkan Markdown-nya. Untuk PDF: "
+                "'convert_pdf_to_images' (start_page=1) ulangi dengan next_start_page hingga "
+                "has_more=false. Baca gambar secara visual, tulis Markdown-nya, lalu simpan dengan "
+                "'save_extraction_result' (file sumber = dokumen asli, bukan gambar)."
             ),
         },
         indent=2,
@@ -452,20 +472,34 @@ def _has_existing_gold(doc_path: Path, output_dir: str | Path) -> bool:
 @server.tool(
     name="render_presentation_slides",
     description=(
-        "Render seluruh slide file presentasi PowerPoint (.pptx / .ppt) menjadi file gambar PNG "
-        "beresolusi tinggi satu file per slide kanvas utuh, lalu KIRIM gambar-gambar tersebut LANGSUNG ke model "
-        "sebagai image content agar model dapat melihat dan membaca slide secara visual. "
+        "Render slide file presentasi PowerPoint (.pptx / .ppt) menjadi file gambar PNG "
+        "beresolusi tinggi satu file per slide kanvas utuh, lalu KIRIM gambar-gambar tersebut "
+        "LANGSUNG ke model sebagai image content agar model dapat melihat dan membaca slide secara visual. "
         "Default output: output/rendered_slides/<nama_file_tanpa_ekstensi>/. "
-        "Secara otomatis mengirim seluruh slide sesuai panjang dokumen aslinya."
+        "Karena Spire.Presentation (library yang digunakan) hanya bisa merender maksimal 10 slide "
+        "per objek presentasi (versi Free: slide ke-11 dst. akan blank + watermark lisensi), "
+        "tool ini memproses DENGAN BATCH per 10 slide: gunakan 'start_slide' (1-based, default 1) "
+        "dan 'max_images' (default 10) untuk mengirim SATU BATCH per panggilan. "
+        "Hasil summary mengandung 'has_more' dan 'next_start_slide': ulangi panggilan dengan "
+        "start_slide = next_start_slide hingga has_more=false (seluruh slide selesai) sebelum "
+        "menyimpan Markdown ke 'save_extraction_result'. Proses SATU FILE sampai selesai semua "
+        "batch-nya, BARU pindah ke file berikutnya."
     ),
 )
 def render_presentation_slides(
     pptx_path: str,
     output_dir: str | None = None,
+    start_slide: int = 1,
     max_images: int | None = None,
 ) -> list[ContentBlock] | str:
     """
-    Render slide PPTX ke file gambar PNG per slide dan kirim gambar ke model.
+    Render slide PPTX ke file gambar PNG per slide dan kirim SATU BATCH gambar ke model.
+
+    Args:
+        pptx_path: Path file presentasi.
+        output_dir: Folder output (default: output/rendered_slides/<stem>).
+        start_slide: Nomor slide 1-based dari mana batch dimulai (default 1).
+        max_images: Jumlah gambar yang dikirim dalam batch ini (default 10 = batas lisensi Free).
     """
     path_obj = Path(pptx_path).resolve()
     if not path_obj.exists():
@@ -474,8 +508,37 @@ def render_presentation_slides(
     resolved_out = Path(
         output_dir or f"output/rendered_slides/{path_obj.stem}"
     ).resolve()
-    # Hapus file gambar lama jika berisi ekstraksi parsial/stale
-    if resolved_out.exists():
+
+    try:
+        total_slides = count_presentation_slides(path_obj)
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat menghitung slide presentasi: {e}"
+
+    if total_slides <= 0:
+        return f"ERROR: File presentasi tidak memiliki slide: {path_obj}"
+
+    # Ukuran batch: default 10 (batas lisensi Spire Free), maksimal 10 per panggilan.
+    batch_size = (
+        DEFAULT_MAX_IMAGES if (max_images is None or max_images <= 0) else min(max_images, DEFAULT_MAX_IMAGES)
+    )
+
+    # Window slide 1-based yang akan diproses dalam batch ini.
+    first = max(1, start_slide)
+    last = min(first + batch_size - 1, total_slides)
+    if first > total_slides:
+        return f"ERROR: start_slide={start_slide} melebihi total slide ({total_slides})."
+
+    window_indices = list(range(first - 1, last))
+
+    # Hapus gambar stale HANYA saat memulai dokumen dari awal (batch 1),
+    # agar batch sebelumnya di disk tidak ikut terhapus.
+    if first == 1:
+        for old_f in resolved_out.glob("slide_*.png"):
+            try:
+                old_f.unlink(missing_ok=True)
+            except OSError:
+                pass
+        # Kompatibilitas mundur dengan penamaan lama (slide_N_img_M.*)
         for old_f in resolved_out.glob("slide_*_img_*.*"):
             try:
                 old_f.unlink(missing_ok=True)
@@ -489,43 +552,57 @@ def render_presentation_slides(
 
         importlib.reload(app.ppt)
         images = app.ppt.render_presentation_slides_to_images(
-            path_obj, output_dir=resolved_out
+            path_obj,
+            output_dir=resolved_out,
+            slides=window_indices,
         )
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat merender slide presentasi: {e}"
 
-    sent_count = (
-        len(images)
-        if (max_images is None or max_images <= 0)
-        else min(max_images, len(images))
-    )
+    has_more = last < total_slides
+    next_start = (last + 1) if has_more else None
     summary = {
         "pptx_file": str(path_obj),
-        "total_slides_rendered": len(images),
+        "total_slides": total_slides,
+        "batch_start": first,
+        "batch_end": last,
+        "batch_size": batch_size,
         "rendered_image_paths": [str(p) for p in images],
-        "images_sent_to_model": sent_count if images else 0,
+        "images_sent_to_model": len(images),
+        "has_more": has_more,
+        "next_start_slide": next_start,
+        "instruction": (
+            "Batch ini selesai. Lanjutkan dengan start_slide="
+            f"{next_start} hingga has_more=false, lalu simpan Markdown ke 'save_extraction_result'."
+            if has_more
+            else "Seluruh slide dokumen ini selesai. Sekarang simpan Markdown kumulatif ke 'save_extraction_result'."
+        ),
     }
-    return _build_image_result(summary, images, max_images=max_images)
+    return _build_image_result(summary, images, max_images=None)
 
 
 @server.tool(
     name="convert_pdf_to_images",
     description=(
-        "Konversi seluruh halaman file PDF menjadi file gambar beresolusi tinggi satu file per halaman, "
+        "Konversi halaman file PDF menjadi file gambar beresolusi tinggi satu file per halaman, "
         "lalu KIRIM gambar-gambar tersebut LANGSUNG ke model sebagai image content agar model dapat "
         "membaca halaman PDF secara visual. Default output: output/rendered_pages/<nama_file_tanpa_ekstensi>/. "
-        "Secara otomatis mengirim seluruh halaman dokumen aslinya. "
-        "Gunakan 'dpi' untuk mengatur resolusi (default 200)."
+        "Gunakan 'dpi' untuk mengatur resolusi (default 200), 'start_page' (1-based, default 1) untuk "
+        "memulai batch, dan 'max_images' (default 10) untuk jumlah halaman per batch. "
+        "Ulangi panggilan dengan start_page = next_start_page hingga has_more=false (seluruh halaman "
+        "selesai) sebelum menyimpan Markdown ke 'save_extraction_result'. Proses SATU FILE sampai "
+        "selesai semua batch-nya, BARU pindah ke file berikutnya."
     ),
 )
 def convert_pdf_to_images(
     pdf_path: str,
     output_dir: str | None = None,
     dpi: int = 200,
+    start_page: int = 1,
     max_images: int | None = None,
 ) -> list[ContentBlock] | str:
     """
-    Konversi halaman-halaman PDF menjadi file gambar per halaman dan kirim gambar ke model.
+    Konversi halaman-halaman PDF menjadi file gambar per halaman dan kirim SATU BATCH gambar ke model.
     """
     path_obj = Path(pdf_path).resolve()
     if not path_obj.exists():
@@ -533,25 +610,63 @@ def convert_pdf_to_images(
     if path_obj.suffix.lower() != ".pdf":
         return f"ERROR: File bukan PDF: {path_obj}"
 
-    resolved_out = output_dir or f"output/rendered_pages/{path_obj.stem}"
     try:
-        images = pdf_to_images(path_obj, output_dir=resolved_out, dpi=dpi)
+        total_pages = pdf_page_count(path_obj)
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat menghitung halaman PDF: {e}"
+    if total_pages <= 0:
+        return f"ERROR: PDF tidak memiliki halaman: {path_obj}"
+
+    resolved_out = output_dir or f"output/rendered_pages/{path_obj.stem}"
+
+    # Ukuran batch: default 10 per panggilan.
+    batch_size = (
+        DEFAULT_MAX_IMAGES if (max_images is None or max_images <= 0) else min(max_images, DEFAULT_MAX_IMAGES)
+    )
+
+    first = max(1, start_page)
+    last = min(first + batch_size - 1, total_pages)
+    if first > total_pages:
+        return f"ERROR: start_page={start_page} melebihi total halaman ({total_pages})."
+
+    window_indices = list(range(first - 1, last))
+
+    try:
+        import importlib
+
+        import app.pdf
+
+        importlib.reload(app.pdf)
+        images = app.pdf.pdf_to_images(
+            path_obj,
+            output_dir=resolved_out,
+            dpi=dpi,
+            pages=window_indices,
+        )
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat mengonversi PDF ke gambar: {e}"
 
-    sent_count = (
-        len(images)
-        if (max_images is None or max_images <= 0)
-        else min(max_images, len(images))
-    )
+    has_more = last < total_pages
+    next_start = (last + 1) if has_more else None
     summary = {
         "pdf_file": str(path_obj),
         "dpi": dpi,
-        "total_pages_rendered": len(images),
+        "total_pages": total_pages,
+        "batch_start": first,
+        "batch_end": last,
+        "batch_size": batch_size,
         "rendered_image_paths": [str(p) for p in images],
-        "images_sent_to_model": sent_count if images else 0,
+        "images_sent_to_model": len(images),
+        "has_more": has_more,
+        "next_start_page": next_start,
+        "instruction": (
+            "Batch ini selesai. Lanjutkan dengan start_page="
+            f"{next_start} hingga has_more=false, lalu simpan Markdown ke 'save_extraction_result'."
+            if has_more
+            else "Seluruh halaman dokumen ini selesai. Sekarang simpan Markdown kumulatif ke 'save_extraction_result'."
+        ),
     }
-    return _build_image_result(summary, images, max_images=max_images)
+    return _build_image_result(summary, images, max_images=None)
 
 
 @server.tool(
@@ -559,12 +674,15 @@ def convert_pdf_to_images(
     description=(
         "Ekstrak teks dan tabel dokumen PDF digital langsung menjadi Markdown menggunakan PyMuPDF4LLM "
         "(C++ backend sangat cepat, zero-token). Berguna untuk mengambil grounding teks mentah per-halaman, "
-        "tabel GFM, dan urutan baca 2-kolom sebagai referensi bantu bagi agent."
+        "tabel GFM, dan urutan baca 2-kolom sebagai referensi bantu bagi agent. "
+        "Gunakan 'max_pages' (misal 10) atau 'pages' (misal [0, 1, 2]) untuk membatasi rentang halaman pada PDF tebal."
     ),
 )
 def extract_pdf_markdown_mupdf(
     pdf_path: str,
     page_chunks: bool = True,
+    max_pages: int | None = 10,
+    pages: list[int] | None = None,
 ) -> str:
     """
     Ekstrak konten teks & tabel PDF digital langsung ke format Markdown menggunakan PyMuPDF4LLM.
@@ -576,9 +694,21 @@ def extract_pdf_markdown_mupdf(
         return f"ERROR: File bukan PDF: {path_obj}"
 
     try:
-        from .pdf import extract_pdf_with_pymupdf4llm
+        import importlib
 
-        res = extract_pdf_with_pymupdf4llm(path_obj, page_chunks=page_chunks)
+        import app.pdf
+
+        importlib.reload(app.pdf)
+
+        target_pages = pages
+        if target_pages is None and max_pages is not None and max_pages > 0:
+            target_pages = list(range(max_pages))
+
+        res = app.pdf.extract_pdf_with_pymupdf4llm(
+            path_obj,
+            page_chunks=page_chunks,
+            pages=target_pages,
+        )
         if isinstance(res, list):
             return json.dumps(
                 {
@@ -712,11 +842,55 @@ def save_extraction_result(
         out_base = Path(output_dir).resolve()
         out_base.mkdir(parents=True, exist_ok=True)
 
-        out_md = out_base / f"{src.stem}.md"
         clean_md = markdown.strip() + "\n"
+        pages_parsed = split_markdown_by_pages(clean_md)
+
+        # --- Gate riil: validasi kelengkapan batch (bukan hanya instruksi) ---
+        # Pastikan Markdown mencakup SEMUA slide/halaman file sumber. Jika tidak,
+        # agent masih ada batch yang dilewatkan (misal lupa ulangi panggilan hingga
+        # has_more=false) — tolak simpan agar agent melengkapi dulu.
+        ext = src.suffix.lower()
+        total_pages: int | None = None
+        if ext in (".pptx", ".ppt"):
+            try:
+                from .ppt import count_presentation_slides
+
+                total_pages = count_presentation_slides(src)
+            except Exception:  # noqa: BLE001 - jangan memblokir simpan jika hitung gagal
+                total_pages = None
+        elif ext == ".pdf":
+            try:
+                from .pdf import pdf_page_count
+
+                total_pages = pdf_page_count(src)
+            except Exception:  # noqa: BLE001
+                total_pages = None
+
+        if total_pages is not None and total_pages > 1:
+            got_numbers = sorted({p["page_number"] for p in pages_parsed})
+            missing = [n for n in range(1, total_pages + 1) if n not in got_numbers]
+            if missing:
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": (
+                            "Markdown BELUM lengkap: file sumber punya "
+                            f"{total_pages} halaman/slide, tetapi Markdown hanya mencakup "
+                            f"{len(got_numbers)} (nomor yang hilang: {missing}). "
+                            "Lanjutkan proses batch berikutnya (has_more=false) hingga semua "
+                            "slide/halaman terbaca, lalu simpan lagi."
+                        ),
+                        "total_pages_in_source": total_pages,
+                        "pages_in_markdown": got_numbers,
+                        "missing_pages": missing,
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
+        out_md = out_base / f"{src.stem}.md"
         out_md.write_text(clean_md, encoding="utf-8")
 
-        pages_parsed = split_markdown_by_pages(clean_md)
         page_structure = [
             {
                 "page_number": p["page_number"],

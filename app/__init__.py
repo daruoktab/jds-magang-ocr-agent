@@ -34,8 +34,18 @@ from .multi_page import (
     stitch_pages_to_markdown,
 )
 from .ocr import OCRExtractor, build_ocr_extractor
-from .pdf import extract_pdf_with_pymupdf4llm, pdf_to_images, process_multipage_pdf
-from .ppt import pptx_to_structured_text, process_presentation
+from .pdf import (
+    extract_pdf_with_pymupdf4llm,
+    pdf_page_count,
+    pdf_to_images,
+    process_multipage_pdf,
+)
+from .ppt import (
+    count_presentation_slides,
+    pptx_to_structured_text,
+    process_presentation,
+    render_presentation_slides_to_images,
+)
 from .preprocess import preprocess_image
 from .schemas import (
     ChunkingPreview,
@@ -66,17 +76,20 @@ __all__ = [
     "batch_extract_documents",
     "build_deep_agent",
     "build_ocr_extractor",
+    "count_presentation_slides",
     "extract_pdf_with_pymupdf4llm",
     "format_page_delimiter",
     "get_agent",
     "get_settings",
     "mcp_server",
+    "pdf_page_count",
     "pdf_to_images",
     "pptx_to_structured_text",
     "preprocess_image",
     "preview_markdown_chunks",
     "process_multipage_pdf",
     "process_presentation",
+    "render_presentation_slides_to_images",
     "scan_document_directories",
     "split_markdown_by_pages",
     "stitch_pages_to_markdown",

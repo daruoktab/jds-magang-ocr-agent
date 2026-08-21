@@ -29,7 +29,7 @@ import argparse
 import io
 import json
 import re
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 import pymupdf
@@ -559,7 +559,7 @@ def format_report(report: SurveyReport) -> str:
     for span in report.spans:
         lines.append(
             f"{span.index:>4}  {f'{span.page_start}-{span.page_end}':>15}  {span.mode:<12} "
-            f"{str(span.n_cols or '-'):>5}  {len(span.row_start_pages):>6}  {len(span.batches):>5}"
+            f"{span.n_cols or '-'!s:>5}  {len(span.row_start_pages):>6}  {len(span.batches):>5}"
         )
 
     flagged = [p for p in report.pages if p.warnings]

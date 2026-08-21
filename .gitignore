@@ -19,7 +19,8 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
-output/
+output/*
+!output/.gitkeep
 
 # ============ Model & data lokal (jangan commit) ============
 models/

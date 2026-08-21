@@ -86,21 +86,24 @@ Server MCP khusus untuk **agent model berbasis vision** (Gemini CLI, Claude Desk
 | 1 | `scan_document_folders` | Pindai folder & subfolder untuk menemukan dokumen |
 | 2 | `select_document_batch` | Pilih daftar file dengan kuota (limit per folder / total) |
 | 3 | `select_random_documents` | Pilih N file **secara acak tanpa duplikasi** (otomatis skip dokumen yang sudah punya gold data) |
-| 4 | `render_presentation_slides` | Render slide PPTX → PNG per slide kanvas utuh |
-| 5 | `convert_pdf_to_images` | Konversi halaman PDF → JPG per halaman |
+| 4 | `render_presentation_slides` | Render slide PPTX → PNG per slide kanvas utuh, **dengan batch per 10 slide** (workaround limit lisensi Spire Free). Kirim 10 gambar/panggilan, ulangi hingga `has_more=false`. |
+| 5 | `convert_pdf_to_images` | Konversi halaman PDF → JPG per halaman, **dengan batch per 10 halaman**. Kirim 10 gambar/panggilan, ulangi hingga `has_more=false`. |
 | 6 | `preprocess_image` | Perbaikan orientasi EXIF & kontras gambar |
 | 7 | `preview_markdown_chunks` | Simulasi chunking untuk validasi |
-| 8 | `save_extraction_result` | Simpan Markdown buatan agent + metadata sidecar sebagai gold data |
+| 8 | `save_extraction_result` | Simpan Markdown buatan agent + metadata sidecar sebagai gold data (dengan gate: Markdown harus mencakup semua slide/halaman file sumber) |
 
 ### Alur kerja yang direkomendasikan (agent):
 1. `scan_document_folders` → tampilkan folder dokumen yang tersedia
 2. **TANYAKAN KE USER** folder mana yang datanya mau diproses (mis. `input/ppt/english`)
 3. **TANYAKAN KE USER** berapa data random yang mau dibuat (tanpa duplikasi)
 4. `select_random_documents(folders=<pilihan>, count=<N>)` → dapatkan daftar file acak
-5. Untuk tiap dokumen: `render_presentation_slides` / `convert_pdf_to_images` (+ `preprocess_image` bila perlu) → dokumen menjadi gambar
+5. **PROSES SATU DOKUMEN PER SATU HINGGA SELESAI SEMUA BATCH-NYA** (jangan pindah ke dokumen berikutnya sebelum dokumen ini disimpan):
+   - PPTX: `render_presentation_slides(start_slide=1)` → baca 10 gambar, tulis Markdown-nya (sertakan `<!-- SLIDE: N -->`). Jika `has_more=true`, ulangi dengan `start_slide=next_start_slide` hingga `has_more=false`. Gabungkan Markdown kumulatif.
+   - PDF: `convert_pdf_to_images(start_page=1)` → sama, ulangi dengan `start_page=next_start_page` hingga `has_more=false`.
+   - Gunakan `preprocess_image` bila gambar perlu diperbaiki orientasi/kontras.
 6. Agent membaca gambar secara visual dan **menulis sendiri** Markdown-nya (OCR/ekstraksi teks tidak tersedia di server ini)
 7. `preview_markdown_chunks` → validasi kesiapan chunking
-8. `save_extraction_result` → simpan Markdown + metadata ke `output/agent_gold/`
+8. `save_extraction_result` → simpan Markdown + metadata ke `output/agent_gold/` (file sumber = dokumen asli, bukan gambar). Tool akan menolak jika Markdown tidak mencakup semua slide/halaman.
 
 ### Konfigurasi Antigravity / Gemini CLI (`mcp_config.json`):
 ```json
