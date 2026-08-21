@@ -83,6 +83,18 @@ def test_huruf_salah_baca_ikut_diperbaiki():
     assert [f.proposed for f in findings] == ["b"]
 
 
+def test_pasal_bersuffiks_hasil_amandemen():
+    """Pasal 6A, 7B, 18B lazim pada UUD dan UU yang diamandemen."""
+    urut = ["7", "7A", "7B", "7C", "8"]
+    assert audit([ev("pasal", o) for o in urut],
+                 cursor=Cursor(last_seen={"pasal": "6"})) == []
+
+    # Suffiks tetap tunduk pada urutan: 6 langsung ke 6B berarti 6A hilang.
+    findings = audit([ev("pasal", "6"), ev("pasal", "6B")],
+                     cursor=Cursor(last_seen={"pasal": "5"}))
+    assert [f.severity for f in findings] == ["eskalasi"]
+
+
 def test_nomor_hilang_dieskalasi_bukan_ditebak():
     """Lompatan satu nomor punya dua tafsir, jadi tidak boleh diperbaiki sendiri."""
     findings = audit([ev("pasal", "1"), ev("pasal", "3")])

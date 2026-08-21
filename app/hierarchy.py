@@ -166,12 +166,34 @@ def to_int(ordinal: str | None, kind: str) -> int | None:
         low = raw.lower()
         return ord(low) - ord("a") + 1 if len(low) == 1 and low.isalpha() else None
     if style == "arab":
-        # Harus seluruhnya angka. Membuang huruf secara diam-diam berbahaya:
-        # "L2" (OCR untuk "12") akan terbaca 2, dan kesalahan itu lolos sebagai
-        # nilai yang sah. Lebih baik dinyatakan tak terbaca agar Auditor bisa
-        # menyimpulkannya dari urutan.
-        return int(raw) if raw.isdigit() else None
+        # Angka murni, atau angka bersuffiks hasil amandemen ("Pasal 6A",
+        # "Pasal 18 B"). Suffiks disimpan sebagai pecahan perseratus supaya
+        # urutan 6 < 6A < 6B < 7 tetap terjaga.
+        match = re.fullmatch(r"(\d+)\s*([A-Za-z])?", raw)
+        if not match:
+            # Selain itu dianggap tak terbaca. Membuang huruf secara diam-diam
+            # berbahaya: "L2" (OCR untuk "12") akan terbaca 2, dan kesalahan itu
+            # lolos sebagai nilai sah. Lebih baik Auditor menyimpulkan dari urutan.
+            return None
+        base = int(match.group(1))
+        suffix = match.group(2)
+        return base + (ord(suffix.upper()) - ord("A") + 1) / 100 if suffix else base
     return None
+
+
+def _successor_ok(previous: float, current: float) -> bool:
+    """
+    Apakah `current` sah mengikuti `previous`.
+
+    Sah bila naik satu tingkat (6 -> 7), atau bila berupa varian bersuffiks
+    dari nomor yang sama (6 -> 6A -> 6B), atau kembali ke nomor bulat
+    berikutnya sesudah rangkaian suffiks (6B -> 7).
+    """
+    prev_base, prev_suffix = int(previous), round((previous - int(previous)) * 100)
+    curr_base, curr_suffix = int(current), round((current - int(current)) * 100)
+    if curr_base == prev_base and curr_suffix == prev_suffix + 1:
+        return True
+    return curr_base == prev_base + 1 and curr_suffix == 0
 
 
 def from_int(value: int, kind: str) -> str:
@@ -357,7 +379,7 @@ def audit(events: Sequence[Event], cursor: Cursor | None = None) -> list[Violati
         previous = last.get(event.kind)
 
         if value is None:
-            expected = previous + 1 if previous is not None else 1
+            expected = int(previous) + 1 if previous is not None else 1
             violations.append(
                 Violation(
                     severity="perbaiki",
@@ -380,7 +402,7 @@ def audit(events: Sequence[Event], cursor: Cursor | None = None) -> list[Violati
                         message=f"{event.kind} dibuka pada {event.ordinal}, bukan awal urutan",
                     )
                 )
-        elif value == previous + 1:
+        elif _successor_ok(previous, value):
             pass
         elif value <= previous:
             violations.append(
@@ -388,19 +410,19 @@ def audit(events: Sequence[Event], cursor: Cursor | None = None) -> list[Violati
                     severity="eskalasi",
                     kind=event.kind,
                     page=event.page,
-                    message=f"{event.kind} mundur: {from_int(previous, event.kind)} -> {event.ordinal}",
+                    message=f"{event.kind} mundur: {from_int(int(previous), event.kind)} -> {event.ordinal}",
                 )
             )
-        elif value == previous + 2:
+        elif int(value) == int(previous) + 2:
             # Satu nomor terlewat. Bisa jadi salah baca, bisa jadi memang hilang;
             # dua kemungkinan berarti tidak boleh diperbaiki sendiri.
-            missing = from_int(previous + 1, event.kind)
+            missing = from_int(int(previous) + 1, event.kind)
             violations.append(
                 Violation(
                     severity="eskalasi",
                     kind=event.kind,
                     page=event.page,
-                    message=f"{event.kind} {missing} tidak terlihat ({from_int(previous, event.kind)} -> {event.ordinal})",
+                    message=f"{event.kind} {missing} tidak terlihat ({from_int(int(previous), event.kind)} -> {event.ordinal})",
                 )
             )
         else:
@@ -409,7 +431,7 @@ def audit(events: Sequence[Event], cursor: Cursor | None = None) -> list[Violati
                     severity="eskalasi",
                     kind=event.kind,
                     page=event.page,
-                    message=f"{event.kind} melompat jauh: {from_int(previous, event.kind)} -> {event.ordinal}",
+                    message=f"{event.kind} melompat jauh: {from_int(int(previous), event.kind)} -> {event.ordinal}",
                 )
             )
 
