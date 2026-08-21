@@ -91,7 +91,10 @@ class PageSurvey(BaseModel):
     page_no: int = Field(..., description="Nomor halaman PDF, mulai 1")
     orientation: str = Field(..., description="'landscape' atau 'portrait'")
     dpi: int = Field(..., description="DPI efektif citra halaman")
-    mode: str = Field(..., description="'tabel', 'teks', atau 'tak_dikenal'")
+    mode: str = Field(..., description="'tabel' bila bergrid, selain itu 'teks'")
+    has_ruled_grid: bool = Field(
+        default=False, description="True bila grid tabel bergaris berhasil ditemukan"
+    )
     skew_deg: float = Field(
         default=0.0, description="Sudut kemiringan scan yang dikoreksi"
     )
@@ -216,6 +219,16 @@ def _deskew(ink: np.ndarray, deg: float) -> np.ndarray:
     """Putar peta tinta sebesar `deg` derajat."""
     im = Image.fromarray((ink * 255).astype(np.uint8))
     return np.array(im.rotate(deg, resample=Image.BILINEAR, fillcolor=0)) > 127
+
+
+def _has_long_h_lines(ink: np.ndarray) -> bool:
+    """Apakah halaman punya garis horizontal panjang sama sekali.
+
+    Dipakai sebagai penjaga murah sebelum koreksi kemiringan: halaman tanpa
+    satu pun garis panjang jelas bukan tabel bergaris, jadi tidak perlu diputar.
+    """
+    height, width = ink.shape
+    return bool((ink.sum(axis=1) > H_LINE_FRAC * width).any())
 
 
 def _detect_grid(ink: np.ndarray) -> ColumnGrid | None:
@@ -352,7 +365,7 @@ def survey_page(
         page_no=page_no,
         orientation="landscape" if landscape else "portrait",
         dpi=round(scale * 72),
-        mode="tabel" if landscape else "teks",
+        mode="teks",
     )
 
     if not landscape:
@@ -361,8 +374,9 @@ def survey_page(
     grid = _detect_grid(ink)
 
     # Kemiringan scan adalah penyebab kegagalan grid yang paling sering, tetapi
-    # koreksinya mahal. Jadi baru dikerjakan setelah percobaan murah gagal.
-    if grid is None and allow_deskew:
+    # koreksinya mahal. Baru dikerjakan setelah percobaan murah gagal, dan hanya
+    # bila halaman memang punya garis panjang sehingga masuk akal bergrid.
+    if grid is None and allow_deskew and _has_long_h_lines(ink):
         deg = _estimate_skew(ink)
         if abs(deg) >= 0.05:
             ink = _deskew(ink, deg)
@@ -376,11 +390,15 @@ def survey_page(
         result.warnings.append("grid diwarisi dari halaman sebelumnya")
 
     if grid is None:
-        result.mode = "tak_dikenal"
-        result.warnings.append("grid tidak terdeteksi")
+        # Halaman landscape tanpa grid itu wajar: slide presentasi, gambar
+        # selebar halaman, atau teks biasa. Bukan anomali, jadi tidak ditandai.
+        # Yang ditandai hanya bila halaman sebelumnya bergrid (lihat cabang di atas),
+        # sebab di situ grid memang seharusnya ada.
         return result
 
     result.grid = grid
+    result.mode = "tabel"
+    result.has_ruled_grid = grid.source == "deteksi"
     result.col_density = _column_density(ink, grid)
     result.occupancy = _classify_occupancy(result.col_density)
     result.row_tokens = _detect_row_start(page, grid, scale)
@@ -518,10 +536,12 @@ def survey(
         result = survey_page(
             doc, page_no, inherited_grid=inherited, allow_deskew=allow_deskew
         )
-        # Hanya grid hasil deteksi asli yang layak diwariskan ke halaman berikutnya.
+        # Hanya grid hasil deteksi asli yang layak diwariskan. Warisan diputus
+        # saat orientasi berubah, bukan saat satu halaman gagal terdeteksi:
+        # kegagalan satu halaman di tengah tabel justru alasan utama adanya warisan.
         if result.grid is not None and result.grid.source == "deteksi":
             inherited = result.grid
-        elif result.mode != "tabel":
+        elif result.orientation == "portrait":
             inherited = None
         pages.append(result)
 
