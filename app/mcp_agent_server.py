@@ -17,7 +17,9 @@ Alur kerja yang direkomendasikan untuk agent:
      ulangi panggilan dengan start_slide/start_page = next_start_... hingga has_more=false.
   3. Agent menulis Markdown sesuai spesifikasi layout dari gambar yang dilihat
   4. preview_markdown_chunks : validasi kesiapan chunking
-  5. save_extraction_result : simpan Markdown + metadata sebagai gold data
+  5. save_extraction_result : simpan Markdown + metadata sebagai gold data (otomatis mengidentifikasi
+     dan mengekstrak tabel transaksional ke database SQLite dengan verifikasi ganda).
+  6. query_tabular_database / inspect_tabular_database : jalankan query SQL untuk kalkulasi agregat (SUM, AVG, Filter).
 
   WAJIB: proses SATU DOKUMEN sampai SEMUA BATCH-nya selesai (has_more=false) dan
   sudah disimpan ke save_extraction_result, BARU pindah ke dokumen berikutnya.
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import random
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +46,13 @@ from .multi_page import preview_markdown_chunks as sim_preview_chunks
 from .pdf import pdf_page_count
 from .ppt import count_presentation_slides
 from .preprocess import preprocess_image
+from .tabular_db import (
+    TabularDatabaseManager,
+    extract_and_ingest_tables_from_markdown,
+    query_sqlite,
+)
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS: set[str] = {
     ".pdf",
@@ -132,8 +142,8 @@ server = MCPServer(
     description=(
         "Agent Mode Document Tools MCP Server (OCR/VLM/LLM endpoint NONAKTIF): "
         "alat bantu mekanis untuk agent vision — render dokumen (PPTX/PDF) menjadi gambar, "
-        "seleksi acak non-duplikat dokumen, dan penyimpanan hasil ekstraksi Markdown buatan agent "
-        "sebagai gold data example."
+        "seleksi acak non-duplikat dokumen, penyimpanan hasil ekstraksi Markdown buatan agent "
+        "sebagai gold data example, serta pemisahan data tabular ke SQLite dengan double-verification."
     ),
     instructions=(
         "Alur kerja wajib agent saat membuat gold data example:\n"
@@ -167,9 +177,6 @@ server = MCPServer(
 def _scan_document_directories(root_dir: str | Path = ".") -> list[dict[str, Any]]:
     """
     Pindai root_dir dan seluruh sub-foldernya untuk mendeteksi folder berisi dokumen.
-
-    Implementasi mandiri (ringan) agar server agent mode tidak menarik
-    dependensi pipeline LLM (deep agent / graph) saat startup stdio.
     """
     root_path = Path(root_dir).resolve()
     if not root_path.exists():
@@ -326,13 +333,6 @@ def select_random_documents(
 ) -> str:
     """
     Pilih dokumen secara acak tanpa duplikasi dari folder terpilih.
-
-    Args:
-        folders: Path folder atau daftar folder dipisah koma (pilihan user).
-        count: Jumlah data random yang diminta user (tanpa duplikasi).
-        seed: Seed opsional untuk seleksi acak yang dapat direproduksi.
-        exclude_already_extracted: Jika True, skip dokumen yang sudah punya hasil gold di output_dir.
-        output_dir: Direktori gold data untuk pengecekan anti-duplikasi.
     """
     if count is None or count <= 0:
         return "ERROR: 'count' harus berupa bilangan bulat positif (jumlah data random yang diminta user)."
@@ -494,12 +494,6 @@ def render_presentation_slides(
 ) -> list[ContentBlock] | str:
     """
     Render slide PPTX ke file gambar PNG per slide dan kirim SATU BATCH gambar ke model.
-
-    Args:
-        pptx_path: Path file presentasi.
-        output_dir: Folder output (default: output/rendered_slides/<stem>).
-        start_slide: Nomor slide 1-based dari mana batch dimulai (default 1).
-        max_images: Jumlah gambar yang dikirim dalam batch ini (default 10 = batas lisensi Free).
     """
     path_obj = Path(pptx_path).resolve()
     if not path_obj.exists():
@@ -524,7 +518,6 @@ def render_presentation_slides(
         else min(max_images, DEFAULT_MAX_IMAGES)
     )
 
-    # Window slide 1-based yang akan diproses dalam batch ini.
     first = max(1, start_slide)
     last = min(first + batch_size - 1, total_slides)
     if first > total_slides:
@@ -534,15 +527,12 @@ def render_presentation_slides(
 
     window_indices = list(range(first - 1, last))
 
-    # Hapus gambar stale HANYA saat memulai dokumen dari awal (batch 1),
-    # agar batch sebelumnya di disk tidak ikut terhapus.
     if first == 1:
         for old_f in resolved_out.glob("slide_*.png"):
             try:
                 old_f.unlink(missing_ok=True)
             except OSError:
                 pass
-        # Kompatibilitas mundur dengan penamaan lama (slide_N_img_M.*)
         for old_f in resolved_out.glob("slide_*_img_*.*"):
             try:
                 old_f.unlink(missing_ok=True)
@@ -623,7 +613,6 @@ def convert_pdf_to_images(
 
     resolved_out = output_dir or f"output/rendered_pages/{path_obj.stem}"
 
-    # Ukuran batch: default 10 per panggilan.
     batch_size = (
         DEFAULT_MAX_IMAGES
         if (max_images is None or max_images <= 0)
@@ -633,7 +622,9 @@ def convert_pdf_to_images(
     first = max(1, start_page)
     last = min(first + batch_size - 1, total_pages)
     if first > total_pages:
-        return f"ERROR: start_page={start_page} melebihi total halaman ({total_pages})."
+        return (
+            f"ERROR: start_page={start_page} melebihi total halaman ({total_pages})."
+        )
 
     window_indices = list(range(first - 1, last))
 
@@ -811,13 +802,91 @@ def preview_markdown_chunks(
         return f"ERROR saat simulasi chunking: {e}"
 
 
+# --- New Tabular SQLite Tools in Agent Mode ---
+
+
+@server.tool(
+    name="classify_and_ingest_tables_to_sqlite",
+    description=(
+        "Deteksi dan ekstrak tabel-tabel data di dalam Markdown dokumen. Jika tabel bertipe transaksional "
+        "(rekening koran, log mutasi keuangan, daftar tagihan, ledger), sistem otomatis membuatkan tabel SQLite "
+        "dan melakukan double-verification integritas data."
+    ),
+)
+def classify_and_ingest_tables_to_sqlite(
+    markdown_text: str,
+    source_file: str = "",
+    db_path: str | None = None,
+) -> str:
+    """
+    Ingest tabel transaksional dari Markdown ke database SQLite.
+    """
+    try:
+        results = extract_and_ingest_tables_from_markdown(
+            markdown_text=markdown_text,
+            source_file=source_file,
+            db_path=db_path,
+        )
+        return json.dumps(
+            {
+                "status": "success",
+                "tables_ingested_count": len(results),
+                "results": [r.model_dump() for r in results],
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat mengingest tabel ke SQLite: {e}"
+
+
+@server.tool(
+    name="query_tabular_database",
+    description=(
+        "Jalankan query SQL (misal 'SELECT SUM(debit_amount), COUNT(*) FROM ...') pada database SQLite dokumen "
+        "untuk melakukan kalkulasi agregat berpresisi 100% yang tidak dapat dilakukan oleh Vector RAG biasa."
+    ),
+)
+def query_tabular_database(
+    sql_query: str,
+    db_path: str | None = None,
+) -> str:
+    """
+    Eksekusi query SQL pada database SQLite dokumen.
+    """
+    try:
+        res = query_sqlite(sql_query, db_path=db_path)
+        return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat menjalankan query SQL: {e}"
+
+
+@server.tool(
+    name="inspect_tabular_database",
+    description="Periksa daftar tabel, skema kolom, jumlah baris, dan contoh record pada database SQLite dokumen.",
+)
+def inspect_tabular_database(
+    db_path: str | None = None,
+) -> str:
+    """
+    Inspeksi skema dan status tabel pada database SQLite.
+    """
+    try:
+        db_mgr = TabularDatabaseManager(db_path)
+        info = db_mgr.inspect_database()
+        return json.dumps(info, indent=2, ensure_ascii=False)
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat menginspeksi database: {e}"
+
+
 @server.tool(
     name="save_extraction_result",
     description=(
         "Simpan hasil ekstraksi Markdown yang telah ditulis sendiri oleh agent (hasil membaca gambar dokumen "
         "secara visual) sebagai gold data example untuk melatih agent/LLM lokal. File disimpan sebagai "
         "<nama_dokumen>.md di output_dir, disertai sidecar <nama_dokumen>.meta.json berisi metadata "
-        "(file sumber, spesifikasi layout, struktur per-halaman/slide yang terdeteksi secara sistem, timestamp, statistik)."
+        "(file sumber, spesifikasi layout, struktur per-halaman/slide yang terdeteksi secara sistem, "
+        "informasi tabel SQLite jika ada data transaksional, timestamp, statistik)."
     ),
 )
 def save_extraction_result(
@@ -825,15 +894,17 @@ def save_extraction_result(
     markdown: str,
     specs: str = "plain",
     output_dir: str = "output/agent_gold",
+    ingest_transactional_tables: bool = True,
 ) -> str:
     """
-    Simpan Markdown hasil ekstraksi agent beserta metadata gold data dan struktur halaman terstandar.
+    Simpan Markdown hasil ekstraksi agent beserta metadata gold data, struktur halaman, dan ingesti SQLite jika ada tabel transaksional.
 
     Args:
         source_file: Path file dokumen sumber yang telah dibaca agent.
         markdown: Konten Markdown hasil ekstraksi yang ditulis agent.
         specs: Spesifikasi layout yang digunakan ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides', atau komposit).
         output_dir: Direktori tujuan penyimpanan gold data.
+        ingest_transactional_tables: Otomatis ingest tabel transaksional ke database SQLite jika terdeteksi.
     """
     if not markdown or not markdown.strip():
         return "ERROR: Konten Markdown kosong; tidak ada yang disimpan."
@@ -851,10 +922,7 @@ def save_extraction_result(
         clean_md = markdown.strip() + "\n"
         pages_parsed = split_markdown_by_pages(clean_md)
 
-        # --- Gate riil: validasi kelengkapan batch (bukan hanya instruksi) ---
-        # Pastikan Markdown mencakup SEMUA slide/halaman file sumber. Jika tidak,
-        # agent masih ada batch yang dilewatkan (misal lupa ulangi panggilan hingga
-        # has_more=false) — tolak simpan agar agent melengkapi dulu.
+        # --- Gate riil: validasi kelengkapan batch ---
         ext = src.suffix.lower()
         total_pages: int | None = None
         if ext in (".pptx", ".ppt"):
@@ -862,7 +930,7 @@ def save_extraction_result(
                 from .ppt import count_presentation_slides
 
                 total_pages = count_presentation_slides(src)
-            except Exception:  # noqa: BLE001 - jangan memblokir simpan jika hitung gagal
+            except Exception:  # noqa: BLE001
                 total_pages = None
         elif ext == ".pdf":
             try:
@@ -906,6 +974,23 @@ def save_extraction_result(
             for p in pages_parsed
         ]
 
+        # Otomatis deteksi & ingesti tabel transaksional ke SQLite jika ada
+        tabular_info: list[dict[str, Any]] = []
+        if ingest_transactional_tables:
+            try:
+                db_target_dir = Path("output/databases").resolve()
+                db_target_dir.mkdir(parents=True, exist_ok=True)
+                db_file = db_target_dir / f"{src.stem}.sqlite"
+                ingest_res = extract_and_ingest_tables_from_markdown(
+                    markdown_text=clean_md,
+                    source_file=str(src),
+                    db_path=db_file,
+                )
+                for r in ingest_res:
+                    tabular_info.append(r.model_dump())
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Gagal auto-ingest tabel transaksional ke SQLite: %s", exc)
+
         metadata = {
             "source_file": str(src),
             "source_extension": src.suffix.lower(),
@@ -918,6 +1003,7 @@ def save_extraction_result(
             "line_count": len(clean_md.splitlines()),
             "total_pages_detected": len(pages_parsed),
             "page_structure": page_structure,
+            "tabular_database_tables": tabular_info,
         }
 
         out_meta = out_base / f"{src.stem}.meta.json"

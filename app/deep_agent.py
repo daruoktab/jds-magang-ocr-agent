@@ -1,6 +1,6 @@
 """
-Harness Deep Reasoning Agents untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking.
-Menggunakan arsitektur Master Orchestrator dengan 6 Sub-Agent terspesialisasi.
+Harness Deep Reasoning Agents untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking & Tabular SQLite Ingestion.
+Menggunakan arsitektur Master Orchestrator dengan 7 Sub-Agent terspesialisasi.
 """
 
 from __future__ import annotations
@@ -21,17 +21,26 @@ from .ocr import build_ocr_extractor
 from .pdf import process_multipage_pdf
 from .ppt import process_presentation
 from .preprocess import preprocess_image
+from .tabular_db import (
+    TabularDatabaseManager,
+    TabularVerifier,
+    classify_table_heuristic,
+    extract_and_ingest_tables_from_markdown,
+    parse_markdown_tables,
+    query_sqlite,
+)
 
 
 def build_deep_agent(settings: Settings | None = None) -> Any:
     """
-    Bangun Deep Reasoning Agent utama dengan armada 6 Sub-Agent spesialis:
+    Bangun Deep Reasoning Agent utama dengan armada 7 Sub-Agent spesialis:
       1. `ocr-specialist`           : Membaca teks mentah literal (ocr-lighton)
       2. `layout-classifier`        : Mengklasifikasikan multi-trait dokumen
       3. `markdown-extractor`       : Ekstraksi VLM multimodal ke Markdown
       4. `presentation-specialist`  : Parsing file presentasi PowerPoint (.pptx / .ppt)
       5. `pdf-orchestrator`         : Orkestrasi multi-halaman PDF & heading continuity
       6. `chunking-simulator`       : Simulasi partisi teks Markdown siap RAG
+      7. `tabular-db-specialist`    : Deteksi tabel transaksional, ingesti ke SQLite, double-verification, & eksekusi SQL
     """
     resolved_settings = settings or get_settings()
     vlm = build_vlm(resolved_settings)
@@ -105,6 +114,68 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         )
         return json.dumps(chunks, indent=2, ensure_ascii=False)
 
+    # --- New Tabular SQLite Tools ---
+
+    @tool
+    def classify_table_storage(markdown_text: str) -> str:
+        """Deteksi dan klasifikasikan tabel-tabel di dalam dokumen: apakah transaksional (harus disimpan ke SQLite untuk kalkulasi SUM/AVG/Filter) atau tabel naratif (bisa di-chunking ke Vector RAG)."""
+        tables = parse_markdown_tables(markdown_text)
+        if not tables:
+            return json.dumps({"status": "no_tables_found", "tables": []}, indent=2, ensure_ascii=False)
+
+        results = []
+        for t in tables:
+            cls_res = classify_table_heuristic(t["headers"], t["rows"], context=t.get("context", ""))
+            results.append(cls_res.model_dump())
+
+        return json.dumps({"total_tables": len(tables), "classifications": results}, indent=2, ensure_ascii=False)
+
+    @tool
+    def ingest_table_to_sqlite(
+        markdown_text: str,
+        source_file: str = "",
+        db_path: str | None = None,
+        table_name: str | None = None,
+    ) -> str:
+        """Ekstrak tabel transaksional dari Markdown dokumen, ubah menjadi skema SQL bersih, simpan ke database SQLite, dan jalankan double-verification otomatis."""
+        ingest_results = extract_and_ingest_tables_from_markdown(
+            markdown_text=markdown_text,
+            source_file=source_file,
+            db_path=db_path,
+            table_name_prefix=table_name,
+            llm=vlm,
+        )
+        serialized = [r.model_dump() for r in ingest_results]
+        return json.dumps({"total_tables_ingested": len(ingest_results), "results": serialized}, indent=2, ensure_ascii=False)
+
+    @tool
+    def verify_sqlite_table(
+        table_name: str,
+        db_path: str | None = None,
+        sample_markdown: str | None = None,
+    ) -> str:
+        """Lakukan verifikasi ganda (double-verification) terhadap tabel di SQLite: cek integritas baris, validitas tipe data numerik, tes kalkulasi agregat (SUM/AVG), kontinuitas saldo, dan catatan refleksi."""
+        db_mgr = TabularDatabaseManager(db_path)
+        verifier = TabularVerifier(db_mgr, llm=vlm)
+        report = verifier.verify_table(table_name, source_markdown_sample=sample_markdown)
+        return json.dumps(report.model_dump(), indent=2, ensure_ascii=False)
+
+    @tool
+    def query_tabular_database(
+        sql_query: str,
+        db_path: str | None = None,
+    ) -> str:
+        """Jalankan query SQL (SELECT, SUM, AVG, COUNT, date filter) pada database SQLite dokumen untuk mendapatkan hasil kalkulasi berpresisi 100%."""
+        res = query_sqlite(sql_query, db_path=db_path)
+        return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
+
+    @tool
+    def inspect_tabular_database(db_path: str | None = None) -> str:
+        """Periksa daftar tabel, skema kolom, jumlah baris, dan contoh record pada database SQLite dokumen."""
+        db_mgr = TabularDatabaseManager(db_path)
+        info = db_mgr.inspect_database()
+        return json.dumps(info, indent=2, ensure_ascii=False)
+
     # --- Sub-Agent Definitions ---
 
     ocr_subagent: SubAgent = {
@@ -167,6 +238,25 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         "tools": [preview_chunks],
     }
 
+    tabular_subagent: SubAgent = {
+        "name": "tabular-db-specialist",
+        "description": "Spesialis pemrosesan data tabular transaksional (rekening koran, log keuangan, ledger), ingesti ke SQLite, double-verification integritas data, dan eksekusi query SQL agregasi.",
+        "system_prompt": (
+            "Kamu adalah spesialis data tabular & database SQL.\n"
+            "Tugasmu:\n"
+            "1. Panggil 'classify_table_storage' untuk mendeteksi apakah tabel memerlukan penyimpanan database SQLite atau Vector RAG.\n"
+            "2. Untuk tabel transaksional, panggil 'ingest_table_to_sqlite' untuk menyimpan data ke SQLite dan melakukan double-verification.\n"
+            "3. Jika diperlukan pengujian atau query kalkulasi agregat (SUM, AVG, COUNT, filter tanggal), panggil 'query_tabular_database' atau 'verify_sqlite_table'."
+        ),
+        "tools": [
+            classify_table_storage,
+            ingest_table_to_sqlite,
+            verify_sqlite_table,
+            query_tabular_database,
+            inspect_tabular_database,
+        ],
+    }
+
     all_tools = [
         ocr_document,
         classify_layout,
@@ -174,6 +264,11 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         extract_presentation_pptx,
         extract_pdf_document,
         preview_chunks,
+        classify_table_storage,
+        ingest_table_to_sqlite,
+        verify_sqlite_table,
+        query_tabular_database,
+        inspect_tabular_database,
     ]
 
     all_subagents = [
@@ -183,6 +278,7 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         ppt_subagent,
         pdf_subagent,
         chunker_subagent,
+        tabular_subagent,
     ]
 
     return create_deep_agent(
@@ -190,8 +286,8 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         model=vlm,
         tools=all_tools,
         system_prompt=(
-            "Kamu adalah Master Deep Reasoning Agent untuk ekstraksi dokumen multi-modal.\n"
-            "Tugasmu: Menganalisis file dokumen pengguna (PDF, PPTX, Scan, Gambar) dan menghasilkan teks Markdown bersih siap chunking.\n\n"
+            "Kamu adalah Master Deep Reasoning Agent untuk ekstraksi dokumen multi-modal dan pemrosesan data tabular terstruktur.\n"
+            "Tugasmu: Menganalisis file dokumen pengguna (PDF, PPTX, Scan, Gambar), menghasilkan teks Markdown bersih siap chunking, dan memisahkan tabel data transaksional ke database SQLite.\n\n"
             "Strategi Eksekusi Otonom:\n"
             "1. Jika file berformat .pptx / .ppt: Delegasikan ke 'presentation-specialist'.\n"
             "2. Jika file berformat .pdf multi-halaman: Delegasikan ke 'pdf-orchestrator'.\n"
@@ -199,8 +295,10 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
             "   a. Panggil 'ocr-specialist' untuk teks mentah presisi tinggi.\n"
             "   b. Panggil 'layout-classifier' untuk menentukan spesifikasi layout.\n"
             "   c. Panggil 'markdown-extractor' untuk menyusun teks Markdown utuh.\n"
-            "4. Jika pengguna meminta simulasi chunking: Panggil 'chunking-simulator'.\n"
-            "5. Kembalikan HANYA teks Markdown dokumen akhir yang bersih dan terstruktur."
+            "4. Jika dokumen berisi tabel transaksional / log mutasi / rekening koran / laporan keuangan numerik yang memerlukan kalkulasi agregat (SUM, AVG, COUNT, date filter):\n"
+            "   Delegasikan ke 'tabular-db-specialist' untuk menyimpan tabel ke SQLite dan memverifikasi integritasnya.\n"
+            "5. Jika pengguna meminta simulasi chunking: Panggil 'chunking-simulator'.\n"
+            "6. Kembalikan teks Markdown dokumen dan laporkan status tabel database terstruktur bila ada."
         ),
         subagents=all_subagents,
     )
@@ -213,6 +311,7 @@ def run_deep_reasoning_agent(
     preview_chunks: bool = False,
     chunk_size: int = 1000,
     chunk_overlap: int = 150,
+    ingest_tables_to_db: bool = True,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     """
@@ -235,8 +334,12 @@ def run_deep_reasoning_agent(
         prompt_parts.append(
             f"Lakukan simulasi preview chunking (chunk_size={chunk_size}, overlap={chunk_overlap})."
         )
+    if ingest_tables_to_db:
+        prompt_parts.append(
+            "Jika dokumen mengandung tabel transaksional/keuangan/log mutasi, simpan tabel tersebut ke database SQLite dan lakukan verifikasi integritas data."
+        )
     prompt_parts.append(
-        "Pastikan output akhir berupa teks Markdown utuh yang siap langsung di-chunking."
+        "Pastikan output akhir terstruktur rapi."
     )
 
     user_prompt = " ".join(prompt_parts)

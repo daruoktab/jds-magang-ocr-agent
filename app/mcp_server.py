@@ -2,8 +2,8 @@
 MCP (Model Context Protocol) Server untuk jds-magang-ocr-agent.
 
 Mengekspos alat-alat ekstraksi Vision OCR, PowerPoint parser, rendering slide ke gambar,
-multi-page PDF stitcher, pemindaian direktori dataset, ekstraksi massal, dan simulasi chunking
-sebagai MCP Tools berstandar SDK v2.
+multi-page PDF stitcher, pemindaian direktori dataset, ekstraksi massal, simulasi chunking,
+serta ingesti & double-verification tabel transaksional ke database SQLite sebagai MCP Tools berstandar SDK v2.
 
 Menjalankan server:
     python -m app.mcp_server
@@ -29,11 +29,16 @@ from .ocr import build_ocr_extractor
 from .pdf import process_multipage_pdf
 from .ppt import process_presentation
 from .preprocess import preprocess_image
+from .tabular_db import (
+    TabularDatabaseManager,
+    extract_and_ingest_tables_from_markdown,
+    query_sqlite,
+)
 
 # Inisialisasi Server MCP
 server = MCPServer(
     name="jds-magang-ocr-agent",
-    description="Vision OCR & Document Extractor MCP Server: PDF, PPTX, Scan -> Markdown Siap Chunking",
+    description="Vision OCR & Document Extractor MCP Server: PDF, PPTX, Scan -> Markdown Siap Chunking & SQLite Tabular Engine",
     version="0.1.0",
 )
 
@@ -293,9 +298,89 @@ def preview_markdown_chunks(
         return f"ERROR saat simulasi chunking: {e}"
 
 
+# --- New Tabular SQLite MCP Tools ---
+
+
+@server.tool(
+    name="ingest_markdown_tables_to_sqlite",
+    description=(
+        "Pindai dokumen Markdown untuk menemukan tabel-tabel data, klasifikasikan mana yang bertipe transaksional "
+        "(rekening koran, mutasi, log keuangan, faktur, ledger), ubah menjadi skema SQL bersih, simpan ke SQLite, "
+        "dan lakukan double-verification otomatis (pemeriksaan baris, validasi tipe data, uji kalkulasi agregat SUM/AVG)."
+    ),
+)
+def ingest_markdown_tables_to_sqlite(
+    markdown_text: str,
+    source_file: str = "",
+    db_path: str | None = None,
+) -> str:
+    """
+    Ingest tabel transaksional dari Markdown ke SQLite dengan double-verification.
+    """
+    try:
+        settings = get_settings()
+        vlm = build_vlm(settings)
+        results = extract_and_ingest_tables_from_markdown(
+            markdown_text=markdown_text,
+            source_file=source_file,
+            db_path=db_path,
+            llm=vlm,
+        )
+        return json.dumps(
+            {
+                "status": "success",
+                "tables_ingested_count": len(results),
+                "results": [r.model_dump() for r in results],
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat mengingest tabel ke SQLite: {e}"
+
+
+@server.tool(
+    name="query_tabular_database",
+    description=(
+        "Jalankan query SQL (misal 'SELECT SUM(debit_amount), COUNT(*) FROM ...') pada database SQLite dokumen "
+        "untuk melakukan kalkulasi agregat berpresisi 100% yang tidak dapat dilakukan oleh Vector RAG biasa."
+    ),
+)
+def query_tabular_database(
+    sql_query: str,
+    db_path: str | None = None,
+) -> str:
+    """
+    Eksekusi query SQL pada database SQLite dokumen.
+    """
+    try:
+        res = query_sqlite(sql_query, db_path=db_path)
+        return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat menjalankan query SQL: {e}"
+
+
+@server.tool(
+    name="inspect_tabular_database",
+    description="Periksa daftar tabel, skema kolom, jumlah baris, dan contoh record pada database SQLite dokumen.",
+)
+def inspect_tabular_database(
+    db_path: str | None = None,
+) -> str:
+    """
+    Inspeksi skema dan status tabel pada database SQLite.
+    """
+    try:
+        db_mgr = TabularDatabaseManager(db_path)
+        info = db_mgr.inspect_database()
+        return json.dumps(info, indent=2, ensure_ascii=False)
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat menginspeksi database: {e}"
+
+
 @server.tool(
     name="run_deep_reasoning_agent",
-    description="Jalankan Master Deep Reasoning Agent dengan delegasi otonom ke 6 sub-agents untuk mengekstrak dan memproses dokumen.",
+    description="Jalankan Master Deep Reasoning Agent dengan delegasi otonom ke 7 sub-agents untuk mengekstrak dan memproses dokumen serta data tabular.",
 )
 def run_deep_reasoning_agent(
     file_path: str,

@@ -1,11 +1,11 @@
 """
-Pydantic Schemas untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking.
-Mendukung multi-spesifikasi / karakteristik komposit pada satu dokumen.
+Pydantic Schemas untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking & Tabular Database.
+Mendukung multi-spesifikasi / karakteristik komposit pada satu dokumen dan pemisahan data tabular transaksional ke SQLite.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -103,3 +103,136 @@ class ChunkingPreview(BaseModel):
     chunks: list[ChunkItem] = Field(
         default_factory=list, description="Daftar potongan chunk"
     )
+
+
+# ==============================================================================
+# Tabular & SQLite Ingestion / Verification Schemas
+# ==============================================================================
+
+TableTypeLiteral = Literal[
+    "transactional_log",
+    "financial_statement",
+    "inventory_ledger",
+    "narrative_matrix",
+    "form_key_value",
+    "generic_table",
+]
+
+RecommendedStorageLiteral = Literal["sqlite_database", "vector_rag"]
+
+
+class TableClassificationResult(BaseModel):
+    """Hasil klasifikasi tabel: membedakan tabel transaksional (DB) vs tabel naratif (Vector RAG)."""
+
+    table_id: str = Field(default="table_1", description="Identifier tabel")
+    is_transactional: bool = Field(
+        default=False,
+        description="True jika tabel berupa data log/transaksi numerik yang memerlukan agregasi SQL (SUM, AVG, filter)",
+    )
+    table_type: TableTypeLiteral = Field(
+        default="generic_table",
+        description="Tipe semantik tabel (transactional_log, financial_statement, inventory_ledger, narrative_matrix, form_key_value, generic_table)",
+    )
+    recommended_storage: RecommendedStorageLiteral = Field(
+        default="vector_rag",
+        description="Rekomendasi storage: 'sqlite_database' untuk transaksional, 'vector_rag' untuk naratif",
+    )
+    confidence: float = Field(default=1.0, description="Tingkat keyakinan klasifikasi (0.0 - 1.0)")
+    reasoning: str = Field(default="", description="Alasan klasifikasi dan karakteristik yang ditemukan")
+    numeric_density: float = Field(default=0.0, description="Rasio kolom/sel bernilai numerik")
+    date_density: float = Field(default=0.0, description="Rasio kolom/sel bertipe tanggal")
+    total_rows: int = Field(default=0, description="Estimasi total baris data")
+    total_columns: int = Field(default=0, description="Jumlah kolom terdeteksi")
+    columns_detected: list[str] = Field(default_factory=list, description="Daftar nama kolom header")
+
+
+class TableColumnSchema(BaseModel):
+    """Skema definisi satu kolom dalam tabel SQLite."""
+
+    name: str = Field(..., description="Nama kolom yang disanitasi untuk identifier SQL aman")
+    original_name: str = Field(..., description="Nama kolom asli pada dokumen/tabel sumber")
+    sql_type: Literal["TEXT", "INTEGER", "REAL", "NUMERIC", "DATE", "DATETIME"] = Field(
+        default="TEXT", description="Tipe data SQL yang sesuai"
+    )
+    is_nullable: bool = Field(default=True, description="Apakah kolom boleh bernilai NULL")
+    description: str | None = Field(default=None, description="Deskripsi makna kolom")
+    sample_values: list[Any] = Field(default_factory=list, description="Contoh nilai data untuk verifikasi")
+
+
+class TableSchema(BaseModel):
+    """Skema lengkap tabel terstruktur untuk database SQLite."""
+
+    table_name: str = Field(..., description="Nama tabel pada SQLite database")
+    source_file: str | None = Field(default=None, description="Path dokumen sumber asal tabel")
+    columns: list[TableColumnSchema] = Field(
+        default_factory=list, description="Daftar skema kolom"
+    )
+    primary_key: list[str] | None = Field(
+        default=None, description="Kolom primary key jika ada (mis. id, no_ref)"
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict, description="Metadata dokumen, header form, atau periode transaksi"
+    )
+
+
+class VerificationCheck(BaseModel):
+    """Hasil satu item pemeriksaan validitas data tabular."""
+
+    check_name: str = Field(..., description="Nama pemeriksaan (mis. row_count_check, numeric_integrity_check)")
+    passed: bool = Field(..., description="Apakah pemeriksaan lolos (True/False)")
+    details: str = Field(..., description="Penjelasan detail hasil pemeriksaan atau temuan anomali")
+    metric_value: Any | None = Field(default=None, description="Nilai metrik terukur")
+
+
+class TableVerificationReport(BaseModel):
+    """Laporan verifikasi ganda (double-verification) integritas data tabel SQLite."""
+
+    table_name: str = Field(..., description="Nama tabel yang diverifikasi")
+    database_path: str = Field(..., description="Path database SQLite yang diuji")
+    is_valid: bool = Field(..., description="Apakah seluruh kriteria verifikasi lolos")
+    confidence_score: float = Field(default=1.0, description="Skor kepercayaan validitas data (0.0 - 1.0)")
+    verification_status: Literal["verified", "needs_revision", "rejected"] = Field(
+        default="verified", description="Status verifikasi akhir"
+    )
+    checks: list[VerificationCheck] = Field(
+        default_factory=list, description="Rincian seluruh pemeriksaan yang dijalankan"
+    )
+    summary: str = Field(default="", description="Ringkasan evaluasi verifikasi")
+    verified_row_count: int = Field(default=0, description="Jumlah baris yang diverifikasi dalam SQLite")
+    test_queries: list[dict[str, Any]] = Field(
+        default_factory=list, description="Daftar query SQL uji coba (mis. SELECT COUNT(*), SUM(...)) dan hasilnya"
+    )
+    llm_reflection: str | None = Field(
+        default=None, description="Catatan refleksi/penalaran LLM atas kualitas dan akurasi ekstraksi"
+    )
+
+
+class TableIngestionResult(BaseModel):
+    """Hasil proses ekstraksi dan ingesti tabel ke SQLite."""
+
+    status: Literal["success", "warning", "error"] = Field(
+        default="success", description="Status hasil ingesti"
+    )
+    table_name: str = Field(..., description="Nama tabel di SQLite")
+    database_path: str = Field(..., description="Path file database SQLite tempat data disimpan")
+    total_rows_ingested: int = Field(default=0, description="Jumlah baris yang berhasil di-insert")
+    columns: list[str] = Field(default_factory=list, description="Daftar kolom yang berhasil dibuat")
+    verification_report: TableVerificationReport | None = Field(
+        default=None, description="Laporan verifikasi integritas data"
+    )
+    sample_data: list[dict[str, Any]] = Field(
+        default_factory=list, description="Contoh 3-5 baris data teratas"
+    )
+    message: str = Field(default="", description="Pesan status atau informasi tambahan")
+
+
+class TabularQueryResult(BaseModel):
+    """Hasil eksekusi query SQL pada database SQLite dokumen."""
+
+    query: str = Field(..., description="Query SQL yang dijalankan")
+    status: Literal["success", "error"] = Field(default="success", description="Status eksekusi query")
+    row_count: int = Field(default=0, description="Jumlah baris hasil query")
+    columns: list[str] = Field(default_factory=list, description="Daftar kolom hasil query")
+    rows: list[dict[str, Any]] = Field(default_factory=list, description="Baris data hasil query")
+    execution_time_ms: float = Field(default=0.0, description="Waktu eksekusi dalam milidetik")
+    error_message: str | None = Field(default=None, description="Pesan error jika query gagal")
