@@ -482,7 +482,8 @@ def _has_existing_gold(doc_path: Path, output_dir: str | Path) -> bool:
         "dan 'max_images' (default 10) untuk mengirim SATU BATCH per panggilan. "
         "Hasil summary mengandung 'has_more' dan 'next_start_slide': ulangi panggilan dengan "
         "start_slide = next_start_slide hingga has_more=false (seluruh slide selesai) sebelum "
-        "menyimpan Markdown ke 'save_extraction_result'. Proses SATU FILE sampai selesai semua "
+        "menyimpan Markdown ke 'save_extraction_result'. Parameter renderer='libreoffice' "
+        "memakai LibreOffice headless -> PDF -> PyMuPDF dan tidak membutuhkan Spire. Proses SATU FILE sampai selesai semua "
         "batch-nya, BARU pindah ke file berikutnya."
     ),
 )
@@ -491,6 +492,7 @@ def render_presentation_slides(
     output_dir: str | None = None,
     start_slide: int = 1,
     max_images: int | None = None,
+    renderer: str = "spire",
 ) -> list[ContentBlock] | str:
     """
     Render slide PPTX ke file gambar PNG per slide dan kirim SATU BATCH gambar ke model.
@@ -504,7 +506,7 @@ def render_presentation_slides(
     ).resolve()
 
     try:
-        total_slides = count_presentation_slides(path_obj)
+        total_slides = count_presentation_slides(path_obj, renderer=renderer)
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat menghitung slide presentasi: {e}"
 
@@ -549,6 +551,7 @@ def render_presentation_slides(
             path_obj,
             output_dir=resolved_out,
             slides=window_indices,
+            renderer=renderer,
         )
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat merender slide presentasi: {e}"

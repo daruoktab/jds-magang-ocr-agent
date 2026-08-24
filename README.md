@@ -20,6 +20,36 @@ Sistem mendukung ekstraksi dengan satu atau **beberapa spesifikasi sekaligus sec
 
 ---
 
+## 🖼️ Rendering PPT di Server Linux
+
+Selain renderer Spire, pipeline menyediakan jalur tanpa Spire:
+
+```text
+PPT/PPTX -> LibreOffice headless -> PDF -> PyMuPDF -> PNG per slide
+```
+
+Instal dependency sistem di Debian/Ubuntu:
+
+```bash
+sudo apt-get update && sudo apt-get install -y libreoffice
+```
+
+Gunakan secara langsung dari Python:
+
+```python
+from app.ppt import render_presentation_slides_to_images
+
+images = render_presentation_slides_to_images(
+    "input/presentation.pptx",
+    output_dir="output/rendered_slides",
+    renderer="libreoffice",
+)
+```
+
+MCP tool `render_presentation_slides` juga menerima parameter `renderer="libreoffice"`. Jika executable tidak berada di `PATH`, set `LIBREOFFICE_BIN` ke path `libreoffice` atau `soffice`.
+
+---
+
 ## 🗄️ Mekanisme Tabular Transaksional vs Narrative Chunking (SQLite + Double-Verification)
 
 Dokumen seperti **rekening koran, mutasi bank (Doc 8), ledger kas, slip transaksi, dan tabel keuangan** tidak cocok di-chunking ke Vector DB karena Vector Search tidak dapat melakukan kalkulasi agregat (SUM, AVG, filter tanggal).

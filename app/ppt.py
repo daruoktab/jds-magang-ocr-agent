@@ -11,8 +11,12 @@ Mengekstrak slide presentasi menjadi teks Markdown terstruktur yang siap dichunk
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
@@ -21,6 +25,154 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 # presentasi yang dirender penuh; slide ke-11 dst. menjadi blank + watermark.
 # Karena itu rendering selalu dilakukan bertahap dalam batch sebesar nilai ini.
 SPIRE_FREE_SLIDE_LIMIT: int = 10
+
+
+def _find_libreoffice() -> str:
+    """Cari executable LibreOffice/soffice yang tersedia di server."""
+    configured = os.environ.get("LIBREOFFICE_BIN", "").strip()
+    if configured:
+        configured_path = Path(configured).expanduser()
+        if configured_path.exists():
+            return str(configured_path)
+        resolved = shutil.which(configured)
+        if resolved:
+            return resolved
+        raise FileNotFoundError(
+            f"Executable LibreOffice dari LIBREOFFICE_BIN tidak ditemukan: {configured}"
+        )
+
+    for executable in ("libreoffice", "soffice"):
+        resolved = shutil.which(executable)
+        if resolved:
+            return resolved
+
+    raise FileNotFoundError(
+        "LibreOffice tidak ditemukan. Instal libreoffice di server Linux atau "
+        "set environment variable LIBREOFFICE_BIN ke path executable-nya."
+    )
+
+
+def convert_presentation_to_pdf(
+    presentation_path: str | Path,
+    output_dir: str | Path,
+) -> Path:
+    """Konversi PPT/PPTX menjadi PDF menggunakan LibreOffice headless."""
+    source = Path(presentation_path).resolve()
+    if not source.exists():
+        raise FileNotFoundError(f"File presentasi tidak ditemukan: {source}")
+    if source.suffix.lower() not in {".ppt", ".pptx"}:
+        raise ValueError(f"Format presentasi tidak didukung: {source.suffix}")
+
+    destination = Path(output_dir).resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    executable = _find_libreoffice()
+    with tempfile.TemporaryDirectory(prefix="libreoffice_profile_") as profile_name:
+        profile_dir = Path(profile_name).resolve()
+        command = [
+            executable,
+            "--headless",
+            f"-env:UserInstallation={profile_dir.as_uri()}",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(destination),
+            str(source),
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"Konversi LibreOffice timeout untuk {source.name}") from exc
+        except subprocess.CalledProcessError as exc:
+            details = (exc.stderr or exc.stdout or "").strip()
+            raise RuntimeError(
+                f"LibreOffice gagal mengonversi {source.name} ke PDF"
+                + (f": {details}" if details else "")
+            ) from exc
+
+    pdf_path = destination / f"{source.stem}.pdf"
+    if not pdf_path.exists():
+        # Nama keluaran biasanya sama dengan stem input, tetapi cari fallback
+        # agar tetap kompatibel dengan variasi LibreOffice di server.
+        candidates = sorted(
+            destination.glob(f"{source.stem}*.pdf"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        if candidates:
+            pdf_path = candidates[-1]
+        else:
+            details = (completed.stderr or completed.stdout or "").strip()
+            raise RuntimeError(
+                f"LibreOffice tidak menghasilkan PDF untuk {source.name}"
+                + (f": {details}" if details else "")
+            )
+
+    return pdf_path
+
+
+def render_presentation_slides_to_images_libreoffice(
+    presentation_path: str | Path,
+    output_dir: str | Path | None = None,
+    slides: list[int] | None = None,
+    dpi: int = 150,
+) -> list[Path]:
+    """Render PPT/PPTX menjadi PNG melalui LibreOffice PDF dan PyMuPDF.
+
+    Jalur ini tidak bergantung pada Spire sehingga cocok untuk server Linux.
+    LibreOffice dan PyMuPDF (`pymupdf`) tetap harus tersedia di environment.
+    ``slides`` menggunakan indeks 0-based, sama seperti renderer Spire.
+    """
+    if dpi <= 0:
+        raise ValueError("dpi harus lebih besar dari 0")
+
+    source = Path(presentation_path).resolve()
+    if not source.exists():
+        raise FileNotFoundError(f"File presentasi tidak ditemukan: {source}")
+    out_dir = (
+        Path(output_dir).resolve()
+        if output_dir
+        else (source.parent / f"{source.stem}_slides").resolve()
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    import pymupdf
+
+    with tempfile.TemporaryDirectory(prefix="libreoffice_ppt_") as temp_dir_name:
+        pdf_path = convert_presentation_to_pdf(source, temp_dir_name)
+        with pymupdf.open(str(pdf_path)) as document:
+            total = len(document)
+            target_indices = (
+                list(range(total))
+                if slides is None
+                else [index for index in slides if 0 <= index < total]
+            )
+            scale = dpi / 72.0
+            matrix = pymupdf.Matrix(scale, scale)
+            generated_images: list[Path] = []
+
+            for index in target_indices:
+                page = document.load_page(index)
+                pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+                output_path = (out_dir / f"slide_{index + 1}.png").resolve()
+                pixmap.save(str(output_path))
+                generated_images.append(output_path)
+
+    return generated_images
+
+
+def count_presentation_slides_libreoffice(presentation_path: str | Path) -> int:
+    """Hitung slide dengan jalur LibreOffice PDF dan PyMuPDF."""
+    import pymupdf
+
+    with tempfile.TemporaryDirectory(prefix="libreoffice_ppt_") as temp_dir_name:
+        pdf_path = convert_presentation_to_pdf(presentation_path, temp_dir_name)
+        with pymupdf.open(str(pdf_path)) as document:
+            return len(document)
 
 
 def _table_to_markdown(table: Any) -> str:
@@ -46,10 +198,18 @@ def _table_to_markdown(table: Any) -> str:
     return "\n".join(md_lines)
 
 
-def count_presentation_slides(pptx_path: str | Path) -> int:
+def count_presentation_slides(
+    pptx_path: str | Path,
+    renderer: Literal["spire", "libreoffice"] = "spire",
+) -> int:
     """
-    Hitung jumlah slide presentasi (.pptx / .ppt) menggunakan Spire.Presentation.
+    Hitung jumlah slide presentasi menggunakan backend yang dipilih.
     """
+    if renderer == "libreoffice":
+        return count_presentation_slides_libreoffice(pptx_path)
+    if renderer != "spire":
+        raise ValueError(f"Renderer tidak dikenal: {renderer}")
+
     from spire.presentation import Presentation
 
     path_obj = Path(pptx_path).resolve()
@@ -100,6 +260,7 @@ def render_presentation_slides_to_images(
     output_dir: str | Path | None = None,
     slides: list[int] | None = None,
     batch_size: int = SPIRE_FREE_SLIDE_LIMIT,
+    renderer: Literal["spire", "libreoffice"] = "spire",
 ) -> list[Path]:
     """
     Render kanvas slide PowerPoint menjadi file gambar PNG (satu gambar per slide kanvas)
@@ -118,11 +279,21 @@ def render_presentation_slides_to_images(
         slides: Daftar indeks slide 0-based yang ingin dirender (None = seluruh slide).
         batch_size: Jumlah slide per batch render (default 10 = limit lisensi Free;
             jangan dinaikkan melebihi 10 pada versi Free).
+        renderer: Backend rendering, ``"spire"`` (default) atau ``"libreoffice"``.
 
     Nama file: `slide_<N>.png` (N mulai dari 1, sesuai nomor slide asli).
     Mengembalikan daftar path gambar yang dihasilkan (berurutan sesuai indeks input).
     """
     import tempfile
+
+    if renderer == "libreoffice":
+        return render_presentation_slides_to_images_libreoffice(
+            presentation_path=pptx_path,
+            output_dir=output_dir,
+            slides=slides,
+        )
+    if renderer != "spire":
+        raise ValueError(f"Renderer tidak dikenal: {renderer}")
 
     from spire.presentation import Presentation
 

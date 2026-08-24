@@ -19,8 +19,7 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
-output/*
-!output/.gitkeep
+output/
 
 # ============ Model & data lokal (jangan commit) ============
 models/
@@ -38,6 +37,3 @@ input/*
 .idea/
 Thumbs.db
 .DS_Store
-
-# opencode
-opencode.json

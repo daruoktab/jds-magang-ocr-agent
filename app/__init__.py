@@ -43,9 +43,12 @@ from .pdf import (
 )
 from .ppt import (
     count_presentation_slides,
+    count_presentation_slides_libreoffice,
+    convert_presentation_to_pdf,
     pptx_to_structured_text,
     process_presentation,
     render_presentation_slides_to_images,
+    render_presentation_slides_to_images_libreoffice,
 )
 from .preprocess import preprocess_image
 from .schemas import (
@@ -104,6 +107,8 @@ __all__ = [
     "build_ocr_extractor",
     "classify_table_heuristic",
     "count_presentation_slides",
+    "count_presentation_slides_libreoffice",
+    "convert_presentation_to_pdf",
     "extract_and_ingest_tables_from_markdown",
     "extract_pdf_with_pymupdf4llm",
     "format_page_delimiter",
@@ -121,6 +126,7 @@ __all__ = [
     "process_presentation",
     "query_sqlite",
     "render_presentation_slides_to_images",
+    "render_presentation_slides_to_images_libreoffice",
     "run_deep_reasoning_agent",
     "scan_document_directories",
     "split_markdown_by_pages",

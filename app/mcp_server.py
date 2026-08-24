@@ -46,16 +46,18 @@ server = MCPServer(
 @server.tool(
     name="render_presentation_slides",
     description=(
-        "Render seluruh halaman/slide file presentasi PowerPoint (.pptx / .ppt) menjadi file gambar JPG beresolusi tinggi "
-        "agar dapat dilihat dan dianalisis secara visual langsung oleh AI Multimodal / VLM."
+        "Render seluruh halaman/slide file presentasi PowerPoint (.pptx / .ppt) menjadi file gambar PNG beresolusi tinggi "
+        "agar dapat dilihat dan dianalisis secara visual langsung oleh AI Multimodal / VLM. "
+        "Gunakan renderer='libreoffice' untuk jalur LibreOffice headless -> PDF -> PyMuPDF di server Linux."
     ),
 )
 def render_presentation_slides(
     pptx_path: str,
     output_dir: str | None = None,
+    renderer: str = "spire",
 ) -> str:
     """
-    Render slide PPTX ke file gambar JPG per slide.
+    Render slide PPTX ke file gambar PNG per slide.
     """
     path_obj = Path(pptx_path).resolve()
     if not path_obj.exists():
@@ -76,7 +78,7 @@ def render_presentation_slides(
 
         importlib.reload(app.ppt)
         images = app.ppt.render_presentation_slides_to_images(
-            path_obj, output_dir=out_dir
+            path_obj, output_dir=out_dir, renderer=renderer
         )
         return json.dumps(
             {
