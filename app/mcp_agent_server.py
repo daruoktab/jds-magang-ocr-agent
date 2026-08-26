@@ -12,8 +12,7 @@ Alur kerja yang direkomendasikan untuk agent:
   2. render_presentation_slides / convert_pdf_to_images (+ preprocess_image) :
      ubah dokumen menjadi gambar dan KIRIM gambar tersebut LANGSUNG ke model
      (image content) agar model dapat melihat dan membaca dokumen secara visual.
-     Karena library konversi (Spire.Presentation) hanya merender maksimal 10 slide per
-     objek presentasi, kedua tool ini memproses DENGAN BATCH per 10 slide/halaman:
+     Tool memproses DENGAN BATCH per 10 slide/halaman untuk context window efisien:
      ulangi panggilan dengan start_slide/start_page = next_start_... hingga has_more=false.
   3. Agent menulis Markdown sesuai spesifikasi layout dari gambar yang dilihat
   4. preview_markdown_chunks : validasi kesiapan chunking
@@ -476,15 +475,9 @@ def _has_existing_gold(doc_path: Path, output_dir: str | Path) -> bool:
         "beresolusi tinggi satu file per slide kanvas utuh, lalu KIRIM gambar-gambar tersebut "
         "LANGSUNG ke model sebagai image content agar model dapat melihat dan membaca slide secara visual. "
         "Default output: output/rendered_slides/<nama_file_tanpa_ekstensi>/. "
-        "Karena Spire.Presentation (library yang digunakan) hanya bisa merender maksimal 10 slide "
-        "per objek presentasi (versi Free: slide ke-11 dst. akan blank + watermark lisensi), "
-        "tool ini memproses DENGAN BATCH per 10 slide: gunakan 'start_slide' (1-based, default 1) "
+        "Tool ini memproses DENGAN BATCH per 10 slide: gunakan 'start_slide' (1-based, default 1) "
         "dan 'max_images' (default 10) untuk mengirim SATU BATCH per panggilan. "
-        "Hasil summary mengandung 'has_more' dan 'next_start_slide': ulangi panggilan dengan "
-        "start_slide = next_start_slide hingga has_more=false (seluruh slide selesai) sebelum "
-        "menyimpan Markdown ke 'save_extraction_result'. Parameter renderer='libreoffice' "
-        "memakai LibreOffice headless -> PDF -> PyMuPDF dan tidak membutuhkan Spire. Proses SATU FILE sampai selesai semua "
-        "batch-nya, BARU pindah ke file berikutnya."
+        "Parameter renderer ('spire' atau 'libreoffice') bersifat opsional (default mengikuti PPT_RENDERER)."
     ),
 )
 def render_presentation_slides(
@@ -492,7 +485,7 @@ def render_presentation_slides(
     output_dir: str | None = None,
     start_slide: int = 1,
     max_images: int | None = None,
-    renderer: str = "spire",
+    renderer: str | None = None,
 ) -> list[ContentBlock] | str:
     """
     Render slide PPTX ke file gambar PNG per slide dan kirim SATU BATCH gambar ke model.
@@ -513,7 +506,7 @@ def render_presentation_slides(
     if total_slides <= 0:
         return f"ERROR: File presentasi tidak memiliki slide: {path_obj}"
 
-    # Ukuran batch: default 10 (batas lisensi Spire Free), maksimal 10 per panggilan.
+    # Ukuran batch: default 10 per panggilan.
     batch_size = (
         DEFAULT_MAX_IMAGES
         if (max_images is None or max_images <= 0)
