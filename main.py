@@ -2,15 +2,16 @@
 CLI Document Vision OCR & Text Extractor (Ready for Chunking).
 
 Secara default, mengeksekusi ekstraksi dokumen:
-  - File PPTX / PPT   : Diekstrak langsung secara cepat & deterministik via `python-pptx` (tanpa LLM/token).
+  - File PPTX / PPT   : Dirender otomatis menjadi gambar kanvas per slide dan dikirim ke VLM (default), atau via `--ppt-native` untuk parser cepat tanpa VLM.
   - File Gambar / PDF : Diekstrak via pipeline Vision OCR / Deep Reasoning Agent.
 
 Contoh Penggunaan:
-    python main.py input/presentasi.pptx -o output/ppt01.md    # Ekstrak PPTX & simpan ke file (bersih tanpa dump terminal)
-    python main.py dokumen.pdf -o output.md                    # Ekstrak PDF otomatis
-    python main.py scan.jpg --debug                            # Ekstrak gambar dengan log lengkap
-    python main.py dokumen.pdf --direct-graph                  # Gunakan pipeline deterministik LangGraph
-    python main.py --scan-folders dataset                      # Pindai folder-folder dokumen
+    python main.py input/presentasi.pptx -o output/ppt01.md            # Ekstrak PPTX via gambar slide -> Model Vision (VLM)
+    python main.py input/presentasi.pptx --ppt-native -o output/ppt01.md # Ekstrak PPTX native (cepat, tanpa VLM)
+    python main.py dokumen.pdf -o output.md                            # Ekstrak PDF otomatis via VLM
+    python main.py scan.jpg --debug                                    # Ekstrak gambar dengan log lengkap
+    python main.py dokumen.pdf --direct-graph                          # Gunakan pipeline deterministik LangGraph
+    python main.py --scan-folders dataset                              # Pindai folder-folder dokumen
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ from app.graph import DocumentExtractionPipeline
 from app.multi_page import preview_markdown_chunks
 from app.ocr import build_ocr_extractor
 from app.pdf import pdf_to_images, process_multipage_pdf
-from app.ppt import process_presentation
+from app.ppt import process_presentation, process_presentation_vision
 
 logger = logging.getLogger("app.cli")
 
@@ -53,6 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Paksa spesifikasi tata letak dokumen, bisa komposit dipisah koma (mis. 'journal,hierarchy', 'plain', 'presentation_slides')",
     )
+    p.add_argument("--vision", "--vlm", action="store_true", dest="vision", help="Kompatibilitas lama: PPT sekarang otomatis dirender ke gambar dan dikirim ke VLM")
+    p.add_argument("--ppt-native", action="store_true", help="Gunakan parser native python-pptx untuk PPT/PPTX tanpa render gambar dan tanpa VLM")
     p.add_argument("--preview-chunks", action="store_true", help="Tampilkan simulasi pemecahan chunk")
     p.add_argument("--chunk-size", type=int, default=1000, help="Ukuran chunk karakter untuk preview (default 1000)")
     p.add_argument("--chunk-overlap", type=int, default=150, help="Overlap chunk karakter (default 150)")
@@ -176,9 +179,18 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"file": str(input_path), "specs": specs}, indent=2))
             return 0
 
-        # 6. File Presentasi (PPTX/PPT): Ekstraksi cepat native python-pptx langsung (kecuali dipaksa --agent)
+        # 6. File Presentasi (PPTX/PPT)
         if ext in (".pptx", ".ppt") and not args.agent:
-            markdown_content = process_presentation(input_path)
+            if args.ppt_native and not args.vision and not args.direct_graph:
+                markdown_content = process_presentation(input_path)
+            else:
+                logger.info("Mengekstrak presentasi via rendering gambar kanvas per slide -> Vision Model (VLM)...")
+                pipeline = DocumentExtractionPipeline(settings)
+                markdown_content = process_presentation_vision(
+                    pptx_path=input_path,
+                    pipeline=pipeline,
+                    forced_specs=args.doc_type or "presentation_slides",
+                )
 
         # 7. Mode Agent (jika eksplisit diminta --agent)
         elif args.agent:

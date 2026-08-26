@@ -15,7 +15,7 @@ from .config import Settings, get_settings
 from .graph import DocumentExtractionPipeline
 from .multi_page import preview_markdown_chunks
 from .pdf import process_multipage_pdf
-from .ppt import process_presentation
+from .ppt import process_presentation_vision
 
 SUPPORTED_EXTENSIONS: set[str] = {
     ".pdf",
@@ -183,7 +183,11 @@ def batch_extract_documents(
         try:
             # 1. PPTX
             if ext in (".pptx", ".ppt"):
-                md_content = process_presentation(doc_file)
+                md_content = process_presentation_vision(
+                    pptx_path=doc_file,
+                    pipeline=pipeline,
+                    forced_specs=specs,
+                )
             # 2. PDF
             elif ext == ".pdf":
                 extracted = process_multipage_pdf(

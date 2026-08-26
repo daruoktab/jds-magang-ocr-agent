@@ -19,7 +19,7 @@ from .llm import build_vlm
 from .multi_page import preview_markdown_chunks
 from .ocr import build_ocr_extractor
 from .pdf import process_multipage_pdf
-from .ppt import process_presentation
+from .ppt import process_presentation_vision
 from .preprocess import preprocess_image
 from .tabular_db import (
     TabularDatabaseManager,
@@ -81,8 +81,15 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
 
     @tool
     def extract_presentation_pptx(pptx_path: str) -> str:
-        """Ekstrak file presentasi PowerPoint (.pptx / .ppt) menjadi Markdown terstruktur per slide."""
-        return process_presentation(pptx_path)
+        """Render setiap slide PowerPoint (.pptx / .ppt) menjadi gambar, kirim tiap gambar ke VLM, lalu gabungkan menjadi satu Markdown."""
+        from .graph import DocumentExtractionPipeline
+
+        pipeline = DocumentExtractionPipeline(resolved_settings)
+        return process_presentation_vision(
+            pptx_path=pptx_path,
+            pipeline=pipeline,
+            forced_specs="presentation_slides",
+        )
 
     @tool
     def extract_pdf_document(
@@ -213,7 +220,7 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         "description": "Spesialis ekstraksi presentasi PowerPoint (.pptx / .ppt) menjadi Markdown terstruktur per-slide.",
         "system_prompt": (
             "Kamu adalah spesialis presentasi. "
-            "Panggil tool extract_presentation_pptx untuk mengekstrak seluruh slide, poin bertingkat, dan speaker notes."
+            "Panggil tool extract_presentation_pptx untuk merender seluruh slide menjadi gambar, membaca tiap gambar dengan VLM, dan menggabungkan hasilnya."
         ),
         "tools": [extract_presentation_pptx],
     }

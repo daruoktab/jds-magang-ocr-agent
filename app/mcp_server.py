@@ -27,7 +27,7 @@ from .llm import build_vlm
 from .multi_page import preview_markdown_chunks as sim_preview_chunks
 from .ocr import build_ocr_extractor
 from .pdf import process_multipage_pdf
-from .ppt import process_presentation
+from .ppt import process_presentation_vision
 from .preprocess import preprocess_image
 from .tabular_db import (
     TabularDatabaseManager,
@@ -191,7 +191,12 @@ def extract_document_to_markdown(
 
     try:
         if ext in (".pptx", ".ppt"):
-            return process_presentation(path_obj)
+            pipeline = DocumentExtractionPipeline(settings)
+            return process_presentation_vision(
+                pptx_path=path_obj,
+                pipeline=pipeline,
+                forced_specs=specs or "presentation_slides",
+            )
         elif ext == ".pdf":
             pipeline = DocumentExtractionPipeline(settings)
             extracted = process_multipage_pdf(
@@ -257,9 +262,9 @@ def classify_document_layout(image_path: str) -> str:
 
 @server.tool(
     name="extract_presentation_pptx",
-    description="Ekstrak file presentasi PowerPoint (.pptx / .ppt) menjadi Markdown terstruktur per slide dengan bullet points hierarkis, tabel GFM, dan speaker notes.",
+    description="Render file presentasi PowerPoint (.pptx / .ppt) menjadi gambar per slide, kirim setiap gambar ke VLM, lalu gabungkan hasilnya menjadi satu Markdown terstruktur per slide.",
 )
-def extract_presentation_pptx(pptx_path: str) -> str:
+def extract_presentation_pptx(pptx_path: str, specs: str = "presentation_slides") -> str:
     """
     Ekstrak presentasi PowerPoint ke Markdown.
     """
@@ -268,7 +273,13 @@ def extract_presentation_pptx(pptx_path: str) -> str:
         return f"ERROR: File tidak ditemukan: {path_obj}"
 
     try:
-        return process_presentation(path_obj)
+        settings = get_settings()
+        pipeline = DocumentExtractionPipeline(settings)
+        return process_presentation_vision(
+            pptx_path=path_obj,
+            pipeline=pipeline,
+            forced_specs=specs,
+        )
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat memproses presentasi: {e}"
 

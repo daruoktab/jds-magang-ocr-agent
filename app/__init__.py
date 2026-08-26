@@ -47,6 +47,7 @@ from .ppt import (
     convert_presentation_to_pdf,
     pptx_to_structured_text,
     process_presentation,
+    process_presentation_vision,
     render_presentation_slides_to_images,
     render_presentation_slides_to_images_libreoffice,
 )
@@ -124,6 +125,7 @@ __all__ = [
     "preview_markdown_chunks",
     "process_multipage_pdf",
     "process_presentation",
+    "process_presentation_vision",
     "query_sqlite",
     "render_presentation_slides_to_images",
     "render_presentation_slides_to_images_libreoffice",

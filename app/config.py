@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,6 +66,22 @@ def _bool_env(name: str, default: str) -> bool:
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _detect_default_ppt_renderer() -> str:
+    """Deteksi renderer PPT default yang stabil di sistem."""
+    custom = _env("PPT_RENDERER", "").strip().lower()
+    if custom:
+        return custom
+    # Jika LibreOffice terpasang, utamakan LibreOffice untuk stabilitas memori (bebas WinError 1455 & tanpa batas 10 slide)
+    if (
+        shutil.which("libreoffice")
+        or shutil.which("soffice")
+        or Path(r"C:\Program Files\LibreOffice\program\soffice.exe").exists()
+        or Path(r"C:\Program Files (x86)\LibreOffice\program\soffice.exe").exists()
+    ):
+        return "libreoffice"
+    return "spire"
+
+
 @dataclass(frozen=True)
 class Settings:
     """Pengaturan konfigurasi LLM, VLM, OCR, rendering, dan logging."""
@@ -112,9 +129,7 @@ class Settings:
     )
 
     # --- 3. PPT Renderer ('spire' atau 'libreoffice') ---
-    ppt_renderer: str = field(
-        default_factory=lambda: _env("PPT_RENDERER", "spire").strip().lower() or "spire"
-    )
+    ppt_renderer: str = field(default_factory=_detect_default_ppt_renderer)
 
     # --- 4. Logging Configuration ---
     log_level: str = field(
@@ -126,52 +141,31 @@ _settings: Settings | None = None
 
 
 def get_settings() -> Settings:
-    """Kembalikan singleton Settings (diinisialisasi secara lazy saat pertama kali diakses)."""
+    """Singleton getter untuk Settings."""
     global _settings
     if _settings is None:
         _settings = Settings()
     return _settings
 
 
-def get_ppt_renderer() -> str:
-    """Kembalikan default renderer PPT ('spire' atau 'libreoffice') dari konfigurasi / environment."""
-    return get_settings().ppt_renderer
-
-
-def setup_logging(level: str | int | None = None) -> None:
-    """
-    Setup logging global dengan format transparan dan terstruktur.
-    Menampilkan timestamp, level, nama komponen/modul, dan pesan yang mudah dibaca.
-    """
-    if level is None:
-        level_str = get_settings().log_level
-        log_level = getattr(logging, level_str, logging.INFO)
-    elif isinstance(level, str):
-        log_level = getattr(logging, level.upper(), logging.INFO)
-    else:
-        log_level = level
-
+def setup_logging(level: str | None = None) -> None:
+    """Inisialisasi logging terformat dengan timestamp."""
+    effective_level = (level or get_settings().log_level).upper()
     log_format = "%(asctime)s | %(levelname)-7s | [%(name)s] %(message)s"
     date_format = "%H:%M:%S"
 
-    # Konfigurasi root handler agar tidak duplikasi
-    root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
+    logging.basicConfig(
+        level=getattr(logging, effective_level, logging.INFO),
+        format=log_format,
+        datefmt=date_format,
+        force=True,
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-    # Bersihkan existing handlers jika ada
-    if root_logger.handlers:
-        for handler in root_logger.handlers[:]:
-            root_logger.removeHandler(handler)
 
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(log_level)
-    formatter = logging.Formatter(fmt=log_format, datefmt=date_format)
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
-
-    # Kurangi kebisingan dari third-party libraries jika tidak dalam DEBUG
-    if log_level > logging.DEBUG:
-        logging.getLogger("httpcore").setLevel(logging.WARNING)
-        logging.getLogger("httpx").setLevel(logging.WARNING)
-        logging.getLogger("openai").setLevel(logging.WARNING)
-        logging.getLogger("urllib3").setLevel(logging.WARNING)
+def get_ppt_renderer() -> str:
+    """Ambil renderer PPT aktif ('spire' atau 'libreoffice')."""
+    return get_settings().ppt_renderer

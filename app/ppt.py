@@ -1,12 +1,10 @@
 """
 Modul pemrosesan dokumen presentasi PowerPoint (.pptx / .ppt).
 
-Mengekstrak slide presentasi menjadi teks Markdown terstruktur yang siap dichunking:
-  - Menjaga judul slide (`## Slide N: [Judul]`)
-  - Menjaga hierarki bullet points (poin-poin bertingkat)
-  - Mengonversi tabel presentasi ke format Markdown Table (GFM)
-  - Mengekstrak catatan pembicara (*speaker notes*)
-  - Merender slide presentasi ke gambar resolusi tinggi untuk analisis VLM
+Alur presentasi dijaga sederhana dan eksplisit:
+  - PPT/PPTX dirender menjadi gambar per slide
+  - Setiap gambar slide dikirim langsung ke VLM Qwen 35B Vision
+  - Hasilnya digabung menjadi Markdown per-slide yang siap dichunking
 """
 
 from __future__ import annotations
@@ -20,10 +18,14 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import HumanMessage, SystemMessage
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 from .config import get_ppt_renderer
+from .llm import image_data_uri
+from .multi_page import stitch_pages_to_markdown
 
 logger = logging.getLogger("app.ppt")
 
@@ -31,6 +33,74 @@ logger = logging.getLogger("app.ppt")
 # presentasi yang dirender penuh; slide ke-11 dst. menjadi blank + watermark.
 # Karena itu rendering selalu dilakukan bertahap dalam batch sebesar nilai ini.
 SPIRE_FREE_SLIDE_LIMIT: int = 10
+
+PPT_SLIDE_SYSTEM_PROMPT: str = (
+    "Kamu adalah AI ekstraktor presentasi yang membaca gambar slide secara visual dan "
+    "mengubahnya menjadi Markdown bersih. "
+    "Jangan memakai OCR eksternal atau menambahkan teks pengantar. "
+    "Output harus hanya isi slide dalam Markdown."
+)
+
+
+def _build_slide_prompt(
+    slide_number: int,
+    total_slides: int,
+    previous_slide_context: str | None = None,
+) -> str:
+    """Susun instruksi khusus slide presentasi tanpa konteks OCR."""
+    blocks: list[str] = [
+        (
+            f"Ekstrak slide {slide_number} dari {total_slides} berikut ini menjadi Markdown yang rapi "
+            f"dan setia pada isi gambar."
+        ),
+        "Aturan output:",
+        "- Pertahankan teks, angka, istilah teknis, label grafik, dan urutan visual semirip mungkin dengan slide.",
+        "- Gunakan heading Markdown, bullet bertingkat, tabel Markdown, dan blockquote bila ada visual/diagram yang perlu dijelaskan.",
+        "- Jangan menambahkan interpretasi di luar yang terlihat jelas pada slide.",
+        "- Jangan menulis penjelasan pembuka atau penutup.",
+        "- Jika ada teks yang tidak terbaca, tandai seperlunya secara singkat dan jangan mengarang.",
+    ]
+
+    if previous_slide_context and previous_slide_context.strip():
+        blocks.append(
+            "Konteks slide sebelumnya (untuk kontinuitas jika slide ini merupakan lanjutan):\n"
+            f"```markdown\n{previous_slide_context.strip()[-500:]}\n```"
+        )
+
+    blocks.append("Outputkan HANYA Markdown final dari slide ini.")
+    return "\n".join(blocks)
+
+
+def _extract_slide_markdown(
+    llm: BaseChatModel,
+    image_path: str,
+    slide_number: int,
+    total_slides: int,
+    previous_slide_context: str | None = None,
+) -> str:
+    """Kirim satu gambar slide langsung ke VLM dan ambil Markdown-nya."""
+    prompt = _build_slide_prompt(
+        slide_number=slide_number,
+        total_slides=total_slides,
+        previous_slide_context=previous_slide_context,
+    )
+    message = HumanMessage(
+        content=[
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},
+        ]
+    )
+    response = llm.invoke([SystemMessage(content=PPT_SLIDE_SYSTEM_PROMPT), message])
+    md_text = str(response.content).strip()
+
+    if md_text.startswith("```markdown") and md_text.endswith("```"):
+        md_text = md_text[len("```markdown") : -3].strip()
+    elif md_text.startswith("```md") and md_text.endswith("```"):
+        md_text = md_text[len("```md") : -3].strip()
+    elif md_text.startswith("```") and md_text.endswith("```"):
+        md_text = md_text[3:-3].strip()
+
+    return md_text
 
 
 def _find_libreoffice() -> str:
@@ -410,7 +480,7 @@ def render_presentation_slides_to_images(
 
 def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
     """
-    Ekstrak presentasi PPTX menjadi list struktur per slide.
+    Ekstrak presentasi PPTX menjadi list struktur per slide via parser native python-pptx.
     """
     path_obj = Path(pptx_path)
     if not path_obj.exists():
@@ -510,7 +580,7 @@ def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
 
 def process_presentation(pptx_path: str | Path) -> str:
     """
-    Ekstrak seluruh file PPTX menjadi satu dokumen Markdown terpadu siap chunking.
+    Ekstrak seluruh file PPTX menjadi satu dokumen Markdown terpadu via native python-pptx.
     """
     slides = pptx_to_structured_text(pptx_path)
     file_stem = Path(pptx_path).stem.replace("_", " ").title()
@@ -521,3 +591,60 @@ def process_presentation(pptx_path: str | Path) -> str:
         doc_lines.append("\n---\n")
 
     return "\n".join(doc_lines).strip()
+
+
+def process_presentation_vision(
+    pptx_path: str | Path,
+    pipeline: Any,
+    output_dir: str | Path | None = None,
+    renderer: Literal["spire", "libreoffice"] | None = None,
+    forced_specs: list[str] | str | None = "presentation_slides",
+) -> str:
+    """Render slide PPT/PPTX menjadi gambar, lalu kirim setiap gambar langsung ke VLM."""
+    path_obj = Path(pptx_path).resolve()
+
+    logger.info("[Vision PPT] Memulai rendering slide menjadi gambar PNG kanvas...")
+    slide_images = render_presentation_slides_to_images(
+        pptx_path=path_obj,
+        output_dir=output_dir,
+        renderer=renderer,
+    )
+    total_images = len(slide_images)
+    if total_images == 0:
+        raise RuntimeError(f"Tidak ada slide yang berhasil dirender dari: {path_obj}")
+
+    logger.info(
+        "[Vision PPT] Selesai render %d slide gambar. Mengirim setiap gambar ke Vision Model (VLM)...",
+        total_images,
+    )
+
+    slide_markdowns: list[str] = []
+    previous_context: str | None = None
+    file_stem = path_obj.stem.replace("_", " ").title()
+    llm: BaseChatModel = getattr(pipeline, "vlm", None)
+    if llm is None:
+        raise AttributeError("pipeline harus menyediakan atribut 'vlm' untuk ekstraksi PPT Vision")
+
+    for idx, img_path in enumerate(slide_images, start=1):
+        logger.info(
+            "[Vision PPT] [Slide %d/%d] Mengirim gambar '%s' langsung ke VLM...",
+            idx,
+            total_images,
+            img_path.name,
+        )
+        page_md = _extract_slide_markdown(
+            llm=llm,
+            image_path=str(img_path),
+            slide_number=idx,
+            total_slides=total_images,
+            previous_slide_context=previous_context,
+        )
+        slide_markdowns.append(page_md)
+        previous_context = page_md[-400:] if len(page_md) > 400 else page_md
+
+    return stitch_pages_to_markdown(
+        slide_markdowns,
+        document_title=file_stem,
+        include_page_markers=True,
+        is_slide=True,
+    )
