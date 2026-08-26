@@ -1,6 +1,6 @@
 """
 Orkestrasi Pipeline Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking dengan LangGraph.
-Mendukung multi-spesifikasi komposit layout dokumen.
+Mendukung multi-spesifikasi komposit layout dokumen dengan logging transparan.
 
 Alur StateGraph:
     START -> preprocess -> ocr -> classify -> extract_markdown -> END
@@ -8,7 +8,8 @@ Alur StateGraph:
 
 from __future__ import annotations
 
-import warnings
+import logging
+import time
 from typing import Any, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
@@ -21,6 +22,8 @@ from .llm import build_vlm
 from .ocr import build_ocr_extractor
 from .preprocess import preprocess_image
 from .prompts import normalize_specs
+
+logger = logging.getLogger("app.graph")
 
 
 class DocumentExtractionState(TypedDict, total=False):
@@ -71,47 +74,119 @@ class DocumentExtractionPipeline:
         forced_doc_type: str | None = None,
         previous_page_context: str | None = None,
     ) -> dict[str, Any]:
-        """Jalankan pipeline ekstraksi komposit pada satu gambar dokumen."""
+        """Jalankan pipeline ekstraksi komposit pada satu gambar dokumen dengan pelacakan waktu & log terperinci."""
+        start_t = time.perf_counter()
+        logger.info("================================================================================")
+        logger.info("[Workflow] Memulai pipeline ekstraksi untuk file: '%s'", image_path)
+        if forced_specs or forced_doc_type:
+            logger.info("[Workflow] Override spesifikasi layout: %s", forced_specs or forced_doc_type)
+
         init_state: DocumentExtractionState = {
             "image_path": image_path,
             "forced_specs": forced_specs or forced_doc_type,
             "forced_doc_type": forced_doc_type,
             "previous_page_context": previous_page_context,
         }
-        return cast(dict[str, Any], self.graph.invoke(init_state))
+        try:
+            result = cast(dict[str, Any], self.graph.invoke(init_state))
+            elapsed = time.perf_counter() - start_t
+            md_len = len(result.get("markdown_content", ""))
+            specs_used = result.get("specs", [])
+            logger.info(
+                "[Workflow Selesai] Total waktu: %.2fs | Specs: %s | Markdown: %d karakter",
+                elapsed,
+                specs_used,
+                md_len,
+            )
+            logger.info("================================================================================")
+            return result
+        except Exception as exc:
+            elapsed = time.perf_counter() - start_t
+            logger.error(
+                "[Workflow Gagal] Terjadi error pada pipeline setelah %.2fs untuk file '%s': %s",
+                elapsed,
+                image_path,
+                exc,
+                exc_info=True,
+            )
+            raise
 
     def _node_preprocess(self, state: DocumentExtractionState) -> dict[str, Any]:
         image_path = state["image_path"]
+        t0 = time.perf_counter()
+        logger.info("[Node 1/4: Preprocess] Menyiapkan gambar dokumen...")
         try:
             proc = preprocess_image(image_path)
+            dt = time.perf_counter() - t0
+            logger.info(
+                "[Node 1/4: Preprocess] Selesai (%.2fs) | Path: %s | Modifikasi: %s | Dimensi: %s",
+                dt,
+                proc.processed_path,
+                proc.is_modified,
+                proc.dimensions,
+            )
             return {"preprocessed_path": proc.processed_path}
         except Exception as e:  # noqa: BLE001
-            warnings.warn(
-                f"Gagal melakukan preprocessing ({e}), menggunakan gambar asli."
+            dt = time.perf_counter() - t0
+            logger.warning(
+                "[Node 1/4: Preprocess] Gagal dalam %.2fs (%s). Menggunakan gambar asli: '%s'",
+                dt,
+                e,
+                image_path,
+                exc_info=True,
             )
             return {"preprocessed_path": image_path}
 
     def _node_ocr(self, state: DocumentExtractionState) -> dict[str, Any]:
         img_path = state.get("preprocessed_path") or state["image_path"]
+        t0 = time.perf_counter()
+        logger.info("[Node 2/4: OCR] Mengekstrak referensi teks mentah via model OCR...")
         try:
             ocr_res = self.ocr.extract(img_path)
+            dt = time.perf_counter() - t0
+            text_len = len(ocr_res.text)
+            sample = ocr_res.text[:60].replace("\n", " ").strip()
+            preview = f" ('{sample}...')" if text_len > 60 else f" ('{sample}')"
+            logger.info(
+                "[Node 2/4: OCR] Selesai (%.2fs) | Teks OCR: %d karakter%s",
+                dt,
+                text_len,
+                preview if text_len > 0 else "",
+            )
             return {"ocr_text": ocr_res.text}
         except Exception as e:  # noqa: BLE001
-            warnings.warn(f"Panggilan OCR gagal/dilewati ({e}).")
+            dt = time.perf_counter() - t0
+            logger.warning(
+                "[Node 2/4: OCR] Panggilan OCR gagal/dilewati dalam %.2fs: %s",
+                dt,
+                e,
+                exc_info=True,
+            )
             return {"ocr_text": ""}
 
     def _node_classify(self, state: DocumentExtractionState) -> dict[str, Any]:
         forced = state.get("forced_specs") or state.get("forced_doc_type")
         if forced:
             specs = normalize_specs(forced)
+            logger.info("[Node 3/4: Classify] Spesifikasi layout dipaksa (forced): %s", specs)
             return {"specs": specs, "doc_type": specs[0]}
 
         img_path = state.get("preprocessed_path") or state["image_path"]
+        t0 = time.perf_counter()
+        logger.info("[Node 3/4: Classify] Mengidentifikasi karakteristik layout dokumen via VLM...")
         try:
             specs = self.extractor.classify(img_path)
+            dt = time.perf_counter() - t0
+            logger.info("[Node 3/4: Classify] Selesai (%.2fs) | Terdeteksi: %s", dt, specs)
             return {"specs": specs, "doc_type": specs[0] if specs else "plain"}
         except Exception as e:  # noqa: BLE001
-            warnings.warn(f"Klasifikasi otomatis gagal ({e}), fallback ke ['plain'].")
+            dt = time.perf_counter() - t0
+            logger.warning(
+                "[Node 3/4: Classify] Klasifikasi otomatis gagal dalam %.2fs (%s). Fallback ke ['plain']",
+                dt,
+                e,
+                exc_info=True,
+            )
             return {"specs": ["plain"], "doc_type": "plain"}
 
     def _node_extract_markdown(self, state: DocumentExtractionState) -> dict[str, Any]:
@@ -120,15 +195,33 @@ class DocumentExtractionPipeline:
         ocr_text = state.get("ocr_text") or None
         previous_context = state.get("previous_page_context") or None
 
+        t0 = time.perf_counter()
+        logger.info("[Node 4/4: Extract] Menjalankan ekstraksi Markdown dengan spesifikasi: %s...", specs)
         agent = get_agent(specs)
-        md_text = agent.run(
-            image_path=img_path,
-            llm=self.vlm,
-            ocr_text=ocr_text,
-            previous_page_context=previous_context,
-        )
-
-        return {"markdown_content": md_text}
+        try:
+            md_text = agent.run(
+                image_path=img_path,
+                llm=self.vlm,
+                ocr_text=ocr_text,
+                previous_page_context=previous_context,
+            )
+            dt = time.perf_counter() - t0
+            logger.info(
+                "[Node 4/4: Extract] Selesai (%.2fs) | Panjang Markdown: %d karakter | %d baris",
+                dt,
+                len(md_text),
+                len(md_text.splitlines()),
+            )
+            return {"markdown_content": md_text}
+        except Exception as e:
+            dt = time.perf_counter() - t0
+            logger.error(
+                "[Node 4/4: Extract] Gagal dalam %.2fs saat ekstraksi Markdown: %s",
+                dt,
+                e,
+                exc_info=True,
+            )
+            raise
 
 
 # Alias untuk kompatibilitas ke belakang

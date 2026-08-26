@@ -1,11 +1,12 @@
 """
 Pipeline ekstraksi: gambar dokumen -> VLM (+ OCR Fusion) -> Markdown Bersih Siap Chunking.
-Mendukung multi-spesifikasi karakteristik tata letak dokumen secara komposit.
+Mendukung multi-spesifikasi karakteristik tata letak dokumen secara komposit dengan logging transparan.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, cast
 
@@ -20,6 +21,8 @@ from .prompts import (
     build_extraction_prompt,
     normalize_specs,
 )
+
+logger = logging.getLogger("app.extractor")
 
 
 class VisionExtractor:
@@ -38,9 +41,10 @@ class VisionExtractor:
         Klasifikasikan satu atau lebih karakteristik layout dokumen yang ada pada gambar:
         ['plain'], ['bilingual_journal', 'markdown_hierarchy'], dsb.
         """
-        content: list[dict[str, Any]] = [
-            {"type": "text", "text": CLASSIFY_PROMPT},
-            {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},
+        logger.debug("[Extractor:Classify] Menyiapkan payload klasifikasi untuk: %s", image_path)
+        content: list[dict[str, Any]] = [\
+            {"type": "text", "text": CLASSIFY_PROMPT},\
+            {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},\
         ]
         messages = [
             SystemMessage(content=CLASSIFY_SYSTEM),
@@ -49,6 +53,7 @@ class VisionExtractor:
 
         resp = self.llm.invoke(messages)
         text_resp = str(resp.content).strip()
+        logger.debug("[Extractor:Classify] Respon mentah VLM: %s", text_resp)
 
         # Parse JSON output jika ada
         match = re.search(r"\{.*?\}", text_resp, re.DOTALL)
@@ -56,9 +61,11 @@ class VisionExtractor:
             try:
                 data = json.loads(match.group(0))
                 raw_specs = data.get("specs") or [data.get("doc_type")]
-                return normalize_specs(raw_specs)
-            except (json.JSONDecodeError, TypeError, ValueError, KeyError):
-                pass
+                normalized = normalize_specs(raw_specs)
+                logger.info("[Extractor:Classify] Berhasil parse JSON layout: %s", normalized)
+                return normalized
+            except (json.JSONDecodeError, TypeError, ValueError, KeyError) as e:
+                logger.warning("[Extractor:Classify] Gagal parse JSON layout (%s): '%s'", e, match.group(0))
 
         # Fallback multi-matching via regex
         text_lower = text_resp.lower()
@@ -74,7 +81,9 @@ class VisionExtractor:
         if "slide" in text_lower or "presentation" in text_lower or "ppt" in text_lower:
             detected.append("presentation_slides")
 
-        return detected if detected else ["plain"]
+        final_specs = detected if detected else ["plain"]
+        logger.info("[Extractor:Classify] Fallback regex layout: %s", final_specs)
+        return final_specs
 
     def extract_markdown(
         self,
@@ -100,6 +109,13 @@ class VisionExtractor:
             specs=specs,
             ocr_text=ocr_text,
             previous_page_context=previous_page_context,
+        )
+
+        logger.debug(
+            "[Extractor:Markdown] Menyusun prompt ekstraksi (panjang prompt: %d karakter, OCR grounding: %s, konteks lalu: %s)",
+            len(user_prompt),
+            bool(ocr_text),
+            bool(previous_page_context),
         )
 
         content: list[dict[str, Any]] = [

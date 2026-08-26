@@ -1,36 +1,34 @@
 """
 CLI Document Vision OCR & Text Extractor (Ready for Chunking).
 
-Secara default, mengeksekusi ekstraksi dokumen menggunakan Deep Reasoning Agent
-dengan armada 6 Sub-Agent spesialis:
-  - `ocr-specialist`           : Grounding teks mentah presisi tinggi (ocr-lighton)
-  - `layout-classifier`        : Analisis & klasifikasi multi-spesifikasi layout
-  - `markdown-extractor`       : Ekstraksi VLM multimodal dengan composable prompts
-  - `presentation-specialist`  : Parser file presentasi PowerPoint (.pptx / .ppt)
-  - `pdf-orchestrator`         : Orkestrasi multi-halaman PDF & kontinuitas heading
-  - `chunking-simulator`       : Simulasi partisi teks Markdown siap RAG
+Secara default, mengeksekusi ekstraksi dokumen:
+  - File PPTX / PPT   : Diekstrak langsung secara cepat & deterministik via `python-pptx` (tanpa LLM/token).
+  - File Gambar / PDF : Diekstrak via pipeline Vision OCR / Deep Reasoning Agent.
 
 Contoh Penggunaan:
-    python main.py dokumen.pdf                        # Ekstrak PDF otomatis via Deep Reasoning Agent
-    python main.py presentasi.pptx                    # Ekstrak PPTX ke Markdown
-    python main.py scan.jpg                           # Ekstrak gambar ke Markdown
-    python main.py dokumen.pdf -o output.md           # Simpan output ke file Markdown
-    python main.py dokumen.pdf --preview-chunks       # Lihat simulasi hasil chunking
-    python main.py jurnal.pdf --type journal,hierarchy # Paksa spesifikasi komposit
-    python main.py --scan-folders dataset             # Pindai folder-folder yang berisi dokumen
-    python main.py --batch-folders dataset/indonesian,dataset/english --limit 10 # Ekstraksi massal
-    python main.py --list-types                       # Lihat daftar spesifikasi layout
+    python main.py input/presentasi.pptx -o output/ppt01.md    # Ekstrak PPTX & simpan ke file (bersih tanpa dump terminal)
+    python main.py dokumen.pdf -o output.md                    # Ekstrak PDF otomatis
+    python main.py scan.jpg --debug                            # Ekstrak gambar dengan log lengkap
+    python main.py dokumen.pdf --direct-graph                  # Gunakan pipeline deterministik LangGraph
+    python main.py --scan-folders dataset                      # Pindai folder-folder dokumen
 """
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 
+# Pastikan output stream di Windows menggunakan encoding UTF-8
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from app.agents import AGENT_REGISTRY
 from app.batch import batch_extract_documents, scan_document_directories
-from app.config import get_settings
+from app.config import get_settings, setup_logging
 from app.deep_agent import build_deep_agent
 from app.graph import DocumentExtractionPipeline
 from app.multi_page import preview_markdown_chunks
@@ -38,11 +36,13 @@ from app.ocr import build_ocr_extractor
 from app.pdf import pdf_to_images, process_multipage_pdf
 from app.ppt import process_presentation
 
+logger = logging.getLogger("app.cli")
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vision-doc-extractor",
-        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking (Deep Reasoning Agent).",
+        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking.",
     )
     p.add_argument("document", nargs="?", help="Path file dokumen (PDF, PPTX, PPT, atau Gambar)")
     p.add_argument("-o", "--out", default=None, help="Path file output .md untuk menyimpan hasil ekstraksi (atau direktori output batch)")
@@ -57,12 +57,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--chunk-size", type=int, default=1000, help="Ukuran chunk karakter untuk preview (default 1000)")
     p.add_argument("--chunk-overlap", type=int, default=150, help="Overlap chunk karakter (default 150)")
     p.add_argument("--dpi", type=int, default=200, help="DPI render untuk PDF (default 200)")
-    p.add_argument("--direct-graph", action="store_true", help="Gunakan eksekusi grafik deterministik langsung (bypass agent reasoning)")
+    p.add_argument("--agent", action="store_true", help="Paksa gunakan Deep Reasoning Agent (memerlukan endpoint LLM aktif)")
+    p.add_argument("--direct-graph", action="store_true", help="Gunakan eksekusi grafik deterministik langsung")
     p.add_argument("--ocr-only", action="store_true", help="Hanya jalankan model OCR tanpa VLM")
     p.add_argument("--classify-only", action="store_true", help="Hanya klasifikasi karakteristik dokumen")
     p.add_argument("--pdf-split-only", action="store_true", help="Hanya render PDF menjadi gambar per-halaman")
     p.add_argument("--list-types", action="store_true", help="Daftar spesifikasi karakteristik dokumen yang didukung")
     
+    # Logging options
+    p.add_argument("--debug", action="store_true", help="Aktifkan log DEBUG lengkap untuk melacak workflow & LLM requests")
+    p.add_argument("--log-level", default=None, help="Atur level logging (DEBUG, INFO, WARNING, ERROR)")
+
     # Batch & Folder Scanning Options
     p.add_argument("--scan-folders", nargs="?", const=".", help="Pindai direktori untuk mendeteksi folder-folder dokumen")
     p.add_argument("--batch-folders", dest="batch_folders", help="Ekstrak batch dokumen dari folder-folder yang dipisah koma (mis. 'dataset/indonesian,dataset/english')")
@@ -73,6 +78,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # Setup Logging terpusat
+    if args.debug:
+        setup_logging("DEBUG")
+    elif args.log_level:
+        setup_logging(args.log_level)
+    else:
+        setup_logging()
 
     if args.list_types:
         print("Spesifikasi Tata Letak & Kemampuan Ekstraksi Dokumen (Dapat Dikombinasikan):")
@@ -97,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    Contoh File: {', '.join(f_info['sample_files'][:3])}\n")
             return 0
         except Exception as e:  # noqa: BLE001
-            print(f"ERROR: {e}", file=sys.stderr)
+            logger.error("Gagal saat memindai folder: %s", e, exc_info=True)
             return 1
 
     # 2. Mode Batch Ekstraksi dari Folder Terpilih (--batch-folders)
@@ -163,8 +176,13 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"file": str(input_path), "specs": specs}, indent=2))
             return 0
 
-        # 6. Mode Eksekusi Utama: Otomatis via Deep Reasoning Agent & Subagents
-        if not args.direct_graph:
+        # 6. File Presentasi (PPTX/PPT): Ekstraksi cepat native python-pptx langsung (kecuali dipaksa --agent)
+        if ext in (".pptx", ".ppt") and not args.agent:
+            markdown_content = process_presentation(input_path)
+
+        # 7. Mode Agent (jika eksplisit diminta --agent)
+        elif args.agent:
+            logger.info("Menjalankan Deep Reasoning Agent dengan model di %s...", settings.vlm_base_url)
             deep_agent = build_deep_agent(settings)
             instruction_parts = [
                 f"Tolong proses dan ekstrak file dokumen berikut secara lengkap: '{input_path.resolve()}'.",
@@ -184,11 +202,9 @@ def main(argv: list[str] | None = None) -> int:
             messages = resp.get("messages", [])
             markdown_content = messages[-1].content if messages else str(resp)
 
-        # 7. Mode Fallback: Eksekusi LangGraph Deterministik Langsung (--direct-graph)
+        # 8. Mode Pipeline Standar (PDF & Gambar)
         else:
-            if ext in (".pptx", ".ppt"):
-                markdown_content = process_presentation(input_path)
-            elif ext == ".pdf":
+            if ext == ".pdf":
                 pipeline = DocumentExtractionPipeline(settings)
                 extracted_doc = process_multipage_pdf(
                     pdf_path=input_path,
@@ -202,18 +218,23 @@ def main(argv: list[str] | None = None) -> int:
                 res = pipeline.run(str(input_path), forced_specs=args.doc_type)
                 markdown_content = res["markdown_content"]
 
-        # Output Teks Markdown
-        print(markdown_content)
-
-        # Simpan ke file jika diminta (-o / --out)
+        # Simpan ke file jika diminta (-o / --out), atau tampilkan ke terminal jika tidak ada -o
         if args.out:
             out_file = Path(args.out)
             out_file.parent.mkdir(parents=True, exist_ok=True)
             out_file.write_text(markdown_content, encoding="utf-8")
-            print(f"\n[OK] Dokumen Markdown berhasil disimpan ke: {out_file}", file=sys.stderr)
+            logger.info(
+                "[OK] Dokumen Markdown berhasil disimpan ke: %s (%d karakter, %d baris)",
+                out_file,
+                len(markdown_content),
+                len(markdown_content.splitlines()),
+            )
+        else:
+            # Tampilkan teks markdown di stdout hanya jika user tidak menentukan file output
+            print(markdown_content)
 
-        # Preview Chunks jika diminta (pada mode direct-graph atau ekstra tampilan)
-        if args.preview_chunks and args.direct_graph:
+        # Preview Chunks jika diminta
+        if args.preview_chunks:
             chunks = preview_markdown_chunks(
                 markdown_content,
                 chunk_size=args.chunk_size,
@@ -228,7 +249,16 @@ def main(argv: list[str] | None = None) -> int:
                 print("-" * 40, file=sys.stderr)
 
     except Exception as e:  # noqa: BLE001
-        print(f"ERROR: {e}", file=sys.stderr)
+        logger.error(
+            "Terjadi kesalahan saat memproses '%s': %s\n"
+            "Info konfigurasi endpoint: VLM_BASE_URL='%s', VLM_MODEL='%s'.\n"
+            "Pastikan server LLM/VLM sedang berjalan atau periksa koneksi jaringan/konfigurasi .env.",
+            input_path,
+            e,
+            settings.vlm_base_url,
+            settings.vlm_model,
+            exc_info=args.debug,
+        )
         return 1
 
     return 0

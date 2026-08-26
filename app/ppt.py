@@ -11,10 +11,12 @@ Mengekstrak slide presentasi menjadi teks Markdown terstruktur yang siap dichunk
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -22,6 +24,8 @@ from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 from .config import get_ppt_renderer
+
+logger = logging.getLogger("app.ppt")
 
 # Batas lisensi Spire.Presentation Free: hanya 10 slide pertama per objek
 # presentasi yang dirender penuh; slide ke-11 dst. menjadi blank + watermark.
@@ -113,18 +117,17 @@ def convert_presentation_to_pdf(
                 f"Hasil PDF konversi LibreOffice tidak ditemukan di {destination}"
             )
         return matches[0]
+
     return pdf_candidate
 
 
 def render_presentation_slides_to_images_libreoffice(
     presentation_path: str | Path,
     output_dir: str | Path | None = None,
-    dpi: int = 150,
     slides: list[int] | None = None,
+    dpi: int = 200,
 ) -> list[Path]:
-    """
-    Render slide PPT/PPTX menggunakan LibreOffice headless -> PDF -> PyMuPDF.
-    """
+    """Render slide presentasi menjadi gambar via LibreOffice -> PDF -> PyMuPDF."""
     import fitz
 
     source = Path(presentation_path).resolve()
@@ -138,14 +141,18 @@ def render_presentation_slides_to_images_libreoffice(
     )
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="ppt_pdf_") as temp_pdf_dir:
+    with tempfile.TemporaryDirectory(prefix="libreoffice_pdf_") as temp_pdf_dir:
         pdf_path = convert_presentation_to_pdf(source, temp_pdf_dir)
         doc = fitz.open(pdf_path)
-        total_pages = len(doc)
+        total = len(doc)
+        if total == 0:
+            doc.close()
+            return []
+
         target_indices = (
-            [idx for idx in slides if 0 <= idx < total_pages]
-            if slides is not None
-            else list(range(total_pages))
+            list(range(total))
+            if slides is None
+            else [i for i in slides if 0 <= i < total]
         )
 
         zoom = dpi / 72.0
@@ -201,11 +208,15 @@ def _extract_shape_text(shape: Any) -> list[str]:
     return lines
 
 
-def _table_to_markdown(shape: Any) -> str:
-    """Konversi shape tabel PPTX ke Markdown Table (GFM)."""
-    table = shape.table
+def _table_to_markdown(table_or_shape: Any) -> str:
+    """Konversi shape tabel PPTX atau objek Table ke Markdown Table (GFM)."""
+    table = (
+        table_or_shape.table
+        if hasattr(table_or_shape, "table")
+        else table_or_shape
+    )
     rows: list[list[str]] = []
-    for row in table.rows:
+    for row in getattr(table, "rows", []):
         cell_texts = [cell.text.replace("\n", " ").strip() for cell in row.cells]
         rows.append(cell_texts)
 
@@ -298,7 +309,8 @@ def render_presentation_slides_to_images(
         pptx_path: Path file presentasi (.pptx / .ppt).
         output_dir: Direktori penyimpanan gambar (default: <folder_pptx>/<stem>_slides).
         slides: Daftar indeks slide 0-based yang ingin dirender (None = seluruh slide).
-        batch_size: Jumlah slide per batch render (default 10 = limit lisensi Free;\n            jangan dinaikkan melebihi 10 pada versi Free).
+        batch_size: Jumlah slide per batch render (default 10 = limit lisensi Free;
+            jangan dinaikkan melebihi 10 pada versi Free).
         renderer: Backend rendering, ``"spire"`` atau ``"libreoffice"`` (None = mengikuti konfigurasi).
 
     Nama file: `slide_<N>.png` (N mulai dari 1, sesuai nomor slide asli).
@@ -404,7 +416,11 @@ def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
     if not path_obj.exists():
         raise FileNotFoundError(f"File presentasi tidak ditemukan: {path_obj}")
 
+    start_time = time.time()
     prs = Presentation(str(path_obj))
+    total_slides = len(prs.slides)
+    logger.info("[Workflow] Membaca presentasi: '%s' | Total slide: %d", path_obj.name, total_slides)
+
     slides_data: list[dict[str, Any]] = []
 
     for idx, slide in enumerate(prs.slides, start=1):
@@ -412,6 +428,7 @@ def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
         body_lines: list[str] = []
         notes_text: str = ""
         image_count: int = 0
+        table_count: int = 0
 
         # 1. Ambil judul slide jika ada
         if slide.shapes.title and slide.shapes.title.text.strip():
@@ -430,6 +447,7 @@ def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
 
             # B. Tabel
             elif shape.has_table:
+                table_count += 1
                 md_table = _table_to_markdown(shape.table)
                 if md_table:
                     body_lines.append(md_table)
@@ -465,6 +483,16 @@ def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
 
         slide_markdown = "\n".join(md_content_lines)
 
+        logger.info(
+            "[Slide %d/%d] Selesai: '%s' | Shapes/Items: %d | Tabel: %d | Gambar: %d",
+            idx,
+            total_slides,
+            title_display[:30] + ("..." if len(title_display) > 30 else ""),
+            len(body_lines),
+            table_count,
+            image_count,
+        )
+
         slides_data.append(
             {
                 "slide_number": idx,
@@ -475,6 +503,8 @@ def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
             }
         )
 
+    duration = time.time() - start_time
+    logger.info("[Workflow] Selesai parsing %d slide dalam %.2fs", total_slides, duration)
     return slides_data
 
 

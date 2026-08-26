@@ -7,6 +7,8 @@ Output teks biasa di `choices[0].message.content`.
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import TYPE_CHECKING, Any, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -17,6 +19,8 @@ from .schemas import OCRResult
 
 if TYPE_CHECKING:
     from .config import Settings
+
+logger = logging.getLogger("app.ocr")
 
 OCR_DEFAULT_PROMPT: str = "Extract all text from this image."
 
@@ -34,16 +38,21 @@ class OCRExtractor:
 
     def extract(self, image_path: str) -> OCRResult:
         """Ekstrak seluruh teks mentah dari file gambar menggunakan model OCR."""
+        logger.debug("[OCR] Menyiapkan payload OCR untuk gambar: %s", image_path)
         content: list[dict[str, Any]] = [
             {"type": "text", "text": self.prompt},
             {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},
         ]
 
         message = HumanMessage(content=cast(Any, content))
+        t0 = time.perf_counter()
         resp = self.llm.invoke([message])
+        dt = time.perf_counter() - t0
 
         text = resp.content if isinstance(resp.content, str) else str(resp.content)
-        return OCRResult(text=text.strip())
+        cleaned = text.strip()
+        logger.debug("[OCR] Pemanggilan model OCR selesai dalam %.2fs (Panjang teks: %d)", dt, len(cleaned))
+        return OCRResult(text=cleaned)
 
 
 def build_ocr_extractor(settings: Settings | None = None) -> OCRExtractor:

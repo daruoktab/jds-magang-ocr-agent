@@ -10,8 +10,10 @@ Kategori model yang digunakan:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -65,7 +67,7 @@ def _bool_env(name: str, default: str) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    """Pengaturan konfigurasi LLM, VLM, OCR, dan rendering dokumen."""
+    """Pengaturan konfigurasi LLM, VLM, OCR, rendering, dan logging."""
 
     # --- Global Fallback ---
     llm_base_url: str = field(
@@ -111,7 +113,12 @@ class Settings:
 
     # --- 3. PPT Renderer ('spire' atau 'libreoffice') ---
     ppt_renderer: str = field(
-        default_factory=lambda: _env("PPT_RENDERER", "libreoffice").strip().lower() or "spire"
+        default_factory=lambda: _env("PPT_RENDERER", "spire").strip().lower() or "spire"
+    )
+
+    # --- 4. Logging Configuration ---
+    log_level: str = field(
+        default_factory=lambda: _env("LOG_LEVEL", "INFO").strip().upper() or "INFO"
     )
 
 
@@ -129,3 +136,42 @@ def get_settings() -> Settings:
 def get_ppt_renderer() -> str:
     """Kembalikan default renderer PPT ('spire' atau 'libreoffice') dari konfigurasi / environment."""
     return get_settings().ppt_renderer
+
+
+def setup_logging(level: str | int | None = None) -> None:
+    """
+    Setup logging global dengan format transparan dan terstruktur.
+    Menampilkan timestamp, level, nama komponen/modul, dan pesan yang mudah dibaca.
+    """
+    if level is None:
+        level_str = get_settings().log_level
+        log_level = getattr(logging, level_str, logging.INFO)
+    elif isinstance(level, str):
+        log_level = getattr(logging, level.upper(), logging.INFO)
+    else:
+        log_level = level
+
+    log_format = "%(asctime)s | %(levelname)-7s | [%(name)s] %(message)s"
+    date_format = "%H:%M:%S"
+
+    # Konfigurasi root handler agar tidak duplikasi
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+
+    # Bersihkan existing handlers jika ada
+    if root_logger.handlers:
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(log_level)
+    formatter = logging.Formatter(fmt=log_format, datefmt=date_format)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+
+    # Kurangi kebisingan dari third-party libraries jika tidak dalam DEBUG
+    if log_level > logging.DEBUG:
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("openai").setLevel(logging.WARNING)
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
