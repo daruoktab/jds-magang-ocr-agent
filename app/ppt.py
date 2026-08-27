@@ -297,11 +297,7 @@ def _extract_shape_text(shape: Any) -> list[str]:
 
 def _table_to_markdown(table_or_shape: Any) -> str:
     """Konversi shape tabel PPTX atau objek Table ke Markdown Table (GFM)."""
-    table = (
-        table_or_shape.table
-        if hasattr(table_or_shape, "table")
-        else table_or_shape
-    )
+    table = table_or_shape.table if hasattr(table_or_shape, "table") else table_or_shape
     rows: list[list[str]] = []
     for row in getattr(table, "rows", []):
         cell_texts = [cell.text.replace("\n", " ").strip() for cell in row.cells]
@@ -334,7 +330,11 @@ def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
     start_time = time.time()
     prs = Presentation(str(path_obj))
     total_slides = len(prs.slides)
-    logger.info("[Workflow] Membaca presentasi: '%s' | Total slide: %d", path_obj.name, total_slides)
+    logger.info(
+        "[Workflow] Membaca presentasi: '%s' | Total slide: %d",
+        path_obj.name,
+        total_slides,
+    )
 
     slides_data: list[dict[str, Any]] = []
 
@@ -419,7 +419,9 @@ def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
         )
 
     duration = time.time() - start_time
-    logger.info("[Workflow] Selesai parsing %d slide dalam %.2fs", total_slides, duration)
+    logger.info(
+        "[Workflow] Selesai parsing %d slide dalam %.2fs", total_slides, duration
+    )
     return slides_data
 
 
@@ -466,7 +468,9 @@ def process_presentation_vision(
     file_stem = path_obj.stem.replace("_", " ").title()
     llm: BaseChatModel | None = getattr(pipeline, "vlm", None)
     if llm is None:
-        raise AttributeError("pipeline harus menyediakan atribut 'vlm' untuk ekstraksi PPT Vision")
+        raise AttributeError(
+            "pipeline harus menyediakan atribut 'vlm' untuk ekstraksi PPT Vision"
+        )
 
     for idx, img_path in enumerate(slide_images, start=1):
         logger.info(

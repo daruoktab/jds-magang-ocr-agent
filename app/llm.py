@@ -60,7 +60,11 @@ class LoggingCallbackHandler(BaseCallbackHandler):
         if response.generations and response.generations[0]:
             first_gen = response.generations[0][0].text
             preview = first_gen[:80].replace("\n", " ").strip()
-            text_preview = f" | Preview: '{preview}...'" if len(first_gen) > 80 else f" | Res: '{preview}'"
+            text_preview = (
+                f" | Preview: '{preview}...'"
+                if len(first_gen) > 80
+                else f" | Res: '{preview}'"
+            )
 
         logger.info(
             "<-- [LLM Response] Selesai dalam %.2fs | Generasi: %d%s%s",
@@ -78,7 +82,6 @@ class LoggingCallbackHandler(BaseCallbackHandler):
             self.base_url,
             self.model_name,
             error,
-            exc_info=True,
         )
 
 

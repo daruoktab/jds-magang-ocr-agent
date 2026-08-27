@@ -3,7 +3,8 @@ MCP (Model Context Protocol) Server untuk jds-magang-ocr-agent.
 
 Mengekspos alat-alat ekstraksi Vision OCR, PowerPoint parser, rendering slide ke gambar,
 multi-page PDF stitcher, pemindaian direktori dataset, ekstraksi massal, simulasi chunking,
-serta ingesti & double-verification tabel transaksional ke database SQLite sebagai MCP Tools berstandar SDK v2.
+ingesti & double-verification tabel transaksional ke database SQLite,
+serta evaluasi & ekstraksi selektif diagram ke sintaks Mermaid.js sebagai MCP Tools berstandar SDK v2.
 
 Menjalankan server:
     python -m app.mcp_server
@@ -21,6 +22,12 @@ from .batch import batch_extract_documents as run_batch_extract
 from .batch import scan_document_directories
 from .config import get_settings
 from .deep_agent import build_deep_agent
+from .diagram import (
+    classify_diagram_convertibility as run_classify_diagram,
+)
+from .diagram import (
+    extract_diagram_to_mermaid as run_extract_diagram,
+)
 from .extractor import VisionExtractor
 from .graph import DocumentExtractionPipeline
 from .llm import build_vlm
@@ -38,7 +45,7 @@ from .tabular_db import (
 # Inisialisasi Server MCP
 server = MCPServer(
     name="jds-magang-ocr-agent",
-    description="Vision OCR & Document Extractor MCP Server: PDF, PPTX, Scan -> Markdown Siap Chunking & SQLite Tabular Engine",
+    description="Vision OCR & Document Extractor MCP Server: PDF, PPTX, Scan -> Markdown Siap Chunking, SQLite Tabular Engine, & Mermaid Diagrams",
     version="0.1.0",
 )
 
@@ -100,85 +107,72 @@ def render_presentation_slides(
     ),
 )
 def scan_document_folders(
-    root_dir: str = ".",
+    base_dir: str = "dataset",
+    max_depth: int = 5,
 ) -> str:
     """
-    Pindai root_dir untuk menemukan folder-folder yang berisi file dokumen.
+    Pindai struktur direktori dokumen.
     """
     try:
-        found_folders = scan_document_directories(root_dir)
-        return json.dumps(
-            {
-                "root_scanned": str(Path(root_dir).resolve()),
-                "total_folders_found": len(found_folders),
-                "folders": found_folders,
-            },
-            indent=2,
-            ensure_ascii=False,
+        results = scan_document_directories(
+            root_dir=base_dir,
+            max_depth=max_depth,
         )
+        return json.dumps(results, indent=2, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
-        return f"ERROR saat memindai folder: {e}"
+        return f"ERROR saat memindai direktori: {e}"
 
 
 @server.tool(
     name="batch_extract_documents",
     description=(
-        "Ekstrak dokumen secara massal dari satu atau banyak folder yang dipilih oleh user. "
-        "Mendukung pemilihan multi-folder (list atau koma), pembatasan kuota jumlah data (total limit atau limit per folder), "
-        "pemilihan spesifikasi layout dokumen, dan penyimpanan hasil ke direktori output."
+        "Jalankan ekstraksi dokumen secara massal (batch) pada daftar folder atau direktori tertentu. "
+        "Mendukung batas jumlah dokumen, spesifikasi tata letak, dan simulasi preview chunking."
     ),
 )
 def batch_extract_documents(
-    folders: str,
-    limit: int | None = None,
-    limit_per_folder: int | None = None,
-    specs: str = "plain",
+    target_folders: list[str] | str = "dataset",
     output_dir: str = "output/extracted_md",
+    max_documents: int | None = None,
+    limit_per_folder: int | None = None,
+    forced_specs: str = "plain",
     preview_chunks: bool = False,
     chunk_size: int = 1000,
+    chunk_overlap: int = 150,
 ) -> str:
     """
-    Ekstrak dokumen dari folder-folder terpilih dengan kuota data tertentu.
-
-    Args:
-        folders: Path folder atau daftar folder dipisah koma (mis. 'dataset/download/indonesian,dataset/download/english').
-        limit: Batas total file yang diproses.
-        limit_per_folder: Batas file per folder.
-        specs: Spesifikasi layout ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides', atau komposit).
-        output_dir: Folder tujuan penyimpanan hasil Markdown.
-        preview_chunks: Sertakan simulasi chunking.
-        chunk_size: Ukuran chunk karakter.
+    Ekstraksi dokumen secara massal.
     """
     try:
-        result = run_batch_extract(
-            folders=folders,
-            limit=limit,
-            limit_per_folder=limit_per_folder,
-            specs=specs,
+        summary = run_batch_extract(
+            folders=target_folders,
             output_dir=output_dir,
+            limit=max_documents,
+            limit_per_folder=limit_per_folder,
+            specs=forced_specs,
             preview_chunks=preview_chunks,
             chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
         )
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        return json.dumps(summary, indent=2, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
-        return f"ERROR saat batch ekstraksi dokumen: {e}"
+        return f"ERROR saat ekstraksi batch: {e}"
 
 
 @server.tool(
     name="extract_document_to_markdown",
     description=(
-        "Ekstrak file dokumen tunggal (PDF, PPTX, JPG, PNG, WEBP) menjadi teks Markdown bersih yang siap langsung di-chunking. "
-        "Mendukung spesifikasi tunggal maupun komposit: 'plain', 'markdown_hierarchy', 'bilingual_journal', "
-        "'presentation_slides', atau kombinasi seperti 'journal,hierarchy'."
+        "Ekstrak satu file dokumen (PDF, PPTX, Scan, Gambar) menjadi teks Markdown bersih siap chunking. "
+        "Mendukung multi-spesifikasi layout komposit ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides')."
     ),
 )
 def extract_document_to_markdown(
     file_path: str,
-    specs: str = "plain",
+    specs: str | None = None,
     dpi: int = 200,
 ) -> str:
     """
-    Ekstrak file dokumen ke Markdown terstruktur.
+    Ekstrak file dokumen ke Markdown.
     """
     path_obj = Path(file_path).resolve()
     if not path_obj.exists():
@@ -188,15 +182,9 @@ def extract_document_to_markdown(
     settings = get_settings()
 
     try:
-        if ext in (".pptx", ".ppt"):
-            pipeline = DocumentExtractionPipeline(settings)
-            return process_presentation_vision(
-                pptx_path=path_obj,
-                pipeline=pipeline,
-                forced_specs=specs or "presentation_slides",
-            )
-        elif ext == ".pdf":
-            pipeline = DocumentExtractionPipeline(settings)
+        pipeline = DocumentExtractionPipeline(settings)
+
+        if ext == ".pdf":
             extracted = process_multipage_pdf(
                 pdf_path=path_obj,
                 pipeline=pipeline,
@@ -204,21 +192,30 @@ def extract_document_to_markdown(
                 forced_specs=specs,
             )
             return extracted.markdown_content
-        else:
-            pipeline = DocumentExtractionPipeline(settings)
-            res = pipeline.run(str(path_obj), forced_specs=specs)
-            return str(res["markdown_content"])
+
+        if ext in {".pptx", ".ppt"}:
+            return process_presentation_vision(
+                pptx_path=path_obj,
+                pipeline=pipeline,
+                forced_specs=specs or "presentation_slides",
+            )
+
+        if ext in {".png", ".jpg", ".jpeg", ".webp"}:
+            result = pipeline.run(str(path_obj), forced_specs=specs)
+            return result.get("markdown_content", "")
+
+        return f"ERROR: Ekstensi file tidak didukung: {ext}"
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat ekstraksi dokumen: {e}"
 
 
 @server.tool(
     name="ocr_image",
-    description="Ekstrak teks mentah literal beresolusi tinggi dari gambar menggunakan model OCR tuned (ocr-lighton).",
+    description="Ekstrak teks mentah literal dari file gambar menggunakan model OCR resolusi tinggi tanpa interpretasi layout.",
 )
 def ocr_image(image_path: str) -> str:
     """
-    Lakukan OCR langsung pada file gambar untuk mendapatkan teks mentah.
+    Jalankan OCR teks mentah pada gambar.
     """
     path_obj = Path(image_path).resolve()
     if not path_obj.exists():
@@ -228,14 +225,15 @@ def ocr_image(image_path: str) -> str:
     try:
         proc = preprocess_image(str(path_obj))
         ocr = build_ocr_extractor(settings)
-        return ocr.extract(proc.processed_path).text
+        res = ocr.extract(proc.processed_path)
+        return res.text
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat OCR: {e}"
 
 
 @server.tool(
     name="classify_document_layout",
-    description="Analisis dan klasifikasikan seluruh spesifikasi tata letak dokumen yang aktif (plain, markdown_hierarchy, bilingual_journal, presentation_slides).",
+    description="Analisis karakteristik visual dokumen untuk mendeteksi spesifikasi layout yang relevan (plain, markdown_hierarchy, bilingual_journal, presentation_slides).",
 )
 def classify_document_layout(image_path: str) -> str:
     """
@@ -259,10 +257,64 @@ def classify_document_layout(image_path: str) -> str:
 
 
 @server.tool(
+    name="classify_diagram_convertibility",
+    description=(
+        "Evaluasi apakah diagram/visual pada dokumen cocok dikonversi menjadi kode diagram Mermaid.js "
+        "(flowchart, sequence, ERD, state, class, mindmap, block architecture) atau tidak cocok "
+        "(grafik statistik kontinu numerik, peta spasial, foto, skematik sirkuit mikro)."
+    ),
+)
+def classify_diagram_convertibility(image_path: str) -> str:
+    """
+    Evaluasi kelayakan konversi diagram ke Mermaid.
+    """
+    path_obj = Path(image_path).resolve()
+    if not path_obj.exists():
+        return f"ERROR: File tidak ditemukan: {path_obj}"
+
+    settings = get_settings()
+    try:
+        vlm = build_vlm(settings)
+        res = run_classify_diagram(path_obj, llm=vlm)
+        return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat evaluasi diagram: {e}"
+
+
+@server.tool(
+    name="extract_diagram_to_mermaid",
+    description=(
+        "Ekstrak diagram visual menjadi kode Mermaid.js yang 100% valid dan terstruktur, "
+        "atau kembalikan deskripsi struktural/tabel jika diagram tidak cocok untuk Mermaid."
+    ),
+)
+def extract_diagram_to_mermaid(
+    image_path: str,
+    diagram_hint: str | None = None,
+) -> str:
+    """
+    Ekstrak diagram ke sintaks Mermaid.js.
+    """
+    path_obj = Path(image_path).resolve()
+    if not path_obj.exists():
+        return f"ERROR: File tidak ditemukan: {path_obj}"
+
+    settings = get_settings()
+    try:
+        vlm = build_vlm(settings)
+        res = run_extract_diagram(path_obj, llm=vlm, forced_diagram_type=diagram_hint)
+        return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR saat ekstraksi diagram Mermaid: {e}"
+
+
+@server.tool(
     name="extract_presentation_pptx",
     description="Render file presentasi PowerPoint (.pptx / .ppt) menjadi gambar per slide, kirim setiap gambar ke VLM, lalu gabungkan hasilnya menjadi satu Markdown terstruktur per slide.",
 )
-def extract_presentation_pptx(pptx_path: str, specs: str = "presentation_slides") -> str:
+def extract_presentation_pptx(
+    pptx_path: str, specs: str = "presentation_slides"
+) -> str:
     """
     Ekstrak presentasi PowerPoint ke Markdown.
     """
@@ -309,7 +361,7 @@ def preview_markdown_chunks(
         return f"ERROR saat simulasi chunking: {e}"
 
 
-# --- New Tabular SQLite MCP Tools ---
+# --- Tabular SQLite MCP Tools ---
 
 
 @server.tool(
@@ -391,7 +443,7 @@ def inspect_tabular_database(
 
 @server.tool(
     name="run_deep_reasoning_agent",
-    description="Jalankan Master Deep Reasoning Agent dengan delegasi otonom ke 7 sub-agents untuk mengekstrak dan memproses dokumen serta data tabular.",
+    description="Jalankan Master Deep Reasoning Agent dengan delegasi otonom ke 8 sub-agents untuk mengekstrak dan memproses dokumen, diagram visual Mermaid, serta data tabular SQLite.",
 )
 def run_deep_reasoning_agent(
     file_path: str,

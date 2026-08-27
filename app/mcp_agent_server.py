@@ -615,9 +615,7 @@ def convert_pdf_to_images(
     first = max(1, start_page)
     last = min(first + batch_size - 1, total_pages)
     if first > total_pages:
-        return (
-            f"ERROR: start_page={start_page} melebihi total halaman ({total_pages})."
-        )
+        return f"ERROR: start_page={start_page} melebihi total halaman ({total_pages})."
 
     window_indices = list(range(first - 1, last))
 
@@ -982,7 +980,9 @@ def save_extraction_result(
                 for r in ingest_res:
                     tabular_info.append(r.model_dump())
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Gagal auto-ingest tabel transaksional ke SQLite: %s", exc)
+                logger.warning(
+                    "Gagal auto-ingest tabel transaksional ke SQLite: %s", exc
+                )
 
         metadata = {
             "source_file": str(src),

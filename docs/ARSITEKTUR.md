@@ -56,9 +56,10 @@ main.py / mcp_server.py
 | `ppt.py` | Ekstraksi PPTX/PPT | Renderer LibreOffice headless (satu-satunya backend; PPT/PPTX → PDF → PyMuPDF → PNG); jalur utama render→VLM (`process_presentation_vision`), parser native di balik `--ppt-native`; batching bertahap per 10 slide untuk memori & progres log |
 | `multi_page.py` | Jahit halaman, bersihkan artefak, simulasi chunking | Regex nomor halaman, penyambungan paragraf terpotong |
 | `batch.py` | Pemindaian folder & ekstraksi massal | — |
-| `schemas.py` | Kontrak data Pydantic seluruh pipeline | Dokumen & chunking; klasifikasi tabel, skema SQL, laporan verifikasi |
+| `schemas.py` | Kontrak data Pydantic seluruh pipeline | Dokumen & chunking; klasifikasi tabel, skema SQL, laporan verifikasi; evaluasi & ekstraksi diagram |
+| `diagram.py` | Analisis & ekstraksi selektif diagram ke Mermaid.js | Klasifikasi kelayakan topologi relasi/alur, sanitasi sintaks Mermaid, fallback deskriptif |
 | `tabular_db.py` | Tabel transaksional → SQLite + verifikasi ganda | Heuristik densitas angka/tanggal, normalisasi format angka ID/US, cek kontinuitas saldo |
-| `deep_agent.py` | Harness `deepagents` dengan 7 sub-agent | Master orchestrator mendelegasi per jenis file; `tabular-db-specialist` memegang jalur SQLite |
+| `deep_agent.py` | Harness `deepagents` dengan 8 sub-agent | Master orchestrator mendelegasi per jenis file; `diagram-mermaid-specialist` untuk diagram visual; `tabular-db-specialist` memegang jalur SQLite |
 | `mcp_server.py`, `mcp_agent_server.py` | Antarmuka MCP | 1023 baris untuk agent server (tooling anotasi/gold set) |
 
 **Algoritma penting di jalur ini**
@@ -219,7 +220,7 @@ VLM agent **hanya** melaporkan apa yang dilihatnya:
 
 ```python
 Event(kind="pasal", ordinal="30", page=11)
-Event(kind="ayat",  ordinal="1", text="...", page=11)
+Event(kind="ayat", ordinal="1", text="...", page=11)
 ```
 
 Tidak ada `#`. Tidak ada kedalaman. Tidak ada penyarangan.

@@ -1,5 +1,5 @@
 """
-Vision OCR & Document Text Extractor (Ready for Chunking & Tabular Database).
+Vision OCR & Document Text Extractor (Ready for Chunking, Tabular Database, & Mermaid Diagrams).
 
 Modul:
   - config.py        : Pengaturan lingkungan & model via .env
@@ -12,15 +12,21 @@ Modul:
   - pdf.py           : Konversi & ekstraksi PDF multi-halaman
   - multi_page.py    : Penyambung halaman (header continuity & chunking simulation)
   - graph.py         : Pipeline LangGraph orkestrasi ekstraksi dokumen
-  - deep_agent.py    : Harness Deep Agents untuk ekstraksi dokumen & database tabular
+  - diagram.py       : Analisis & ekstraksi selektif diagram ke sintaks Mermaid.js
+  - deep_agent.py    : Harness Deep Agents untuk ekstraksi dokumen, database tabular, & diagram
   - tabular_db.py    : Deteksi tabel transaksional, SQLite ingestion, double-verification, & SQL querying
-  - schemas.py       : Schema data (Pydantic models untuk dokumen, chunking, tabel, dan verifikasi)
+  - schemas.py       : Schema data (Pydantic models untuk dokumen, chunking, tabel, verifikasi, dan diagram)
 """
 
 from .agents import AGENT_REGISTRY, DocumentExtractionAgent, get_agent
 from .batch import batch_extract_documents, scan_document_directories
 from .config import Settings, get_settings
 from .deep_agent import build_deep_agent, run_deep_reasoning_agent
+from .diagram import (
+    classify_diagram_convertibility,
+    extract_diagram_to_mermaid,
+    sanitize_mermaid_code,
+)
 from .extractor import VisionExtractor
 from .graph import (
     DocumentExtractionPipeline,
@@ -54,6 +60,8 @@ from .schemas import (
     ChunkingPreview,
     ChunkItem,
     ClassificationResult,
+    DiagramConvertibilityResult,
+    DiagramExtractionResult,
     DocumentPage,
     DocumentSection,
     ExtractedDocument,
@@ -81,6 +89,8 @@ __all__ = [
     "ChunkItem",
     "ChunkingPreview",
     "ClassificationResult",
+    "DiagramConvertibilityResult",
+    "DiagramExtractionResult",
     "DocumentExtractionAgent",
     "DocumentExtractionPipeline",
     "DocumentExtractionState",
@@ -104,10 +114,12 @@ __all__ = [
     "batch_extract_documents",
     "build_deep_agent",
     "build_ocr_extractor",
+    "classify_diagram_convertibility",
     "classify_table_heuristic",
     "convert_presentation_to_pdf",
     "count_presentation_slides",
     "extract_and_ingest_tables_from_markdown",
+    "extract_diagram_to_mermaid",
     "extract_pdf_with_pymupdf4llm",
     "format_page_delimiter",
     "get_agent",
@@ -126,6 +138,7 @@ __all__ = [
     "query_sqlite",
     "render_presentation_slides_to_images",
     "run_deep_reasoning_agent",
+    "sanitize_mermaid_code",
     "scan_document_directories",
     "split_markdown_by_pages",
     "stitch_pages_to_markdown",

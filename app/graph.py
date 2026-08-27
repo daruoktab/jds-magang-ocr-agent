@@ -76,10 +76,17 @@ class DocumentExtractionPipeline:
     ) -> dict[str, Any]:
         """Jalankan pipeline ekstraksi komposit pada satu gambar dokumen dengan pelacakan waktu & log terperinci."""
         start_t = time.perf_counter()
-        logger.info("================================================================================")
-        logger.info("[Workflow] Memulai pipeline ekstraksi untuk file: '%s'", image_path)
+        logger.info(
+            "================================================================================"
+        )
+        logger.info(
+            "[Workflow] Memulai pipeline ekstraksi untuk file: '%s'", image_path
+        )
         if forced_specs or forced_doc_type:
-            logger.info("[Workflow] Override spesifikasi layout: %s", forced_specs or forced_doc_type)
+            logger.info(
+                "[Workflow] Override spesifikasi layout: %s",
+                forced_specs or forced_doc_type,
+            )
 
         init_state: DocumentExtractionState = {
             "image_path": image_path,
@@ -98,7 +105,9 @@ class DocumentExtractionPipeline:
                 specs_used,
                 md_len,
             )
-            logger.info("================================================================================")
+            logger.info(
+                "================================================================================"
+            )
             return result
         except Exception:
             elapsed = time.perf_counter() - start_t
@@ -138,7 +147,9 @@ class DocumentExtractionPipeline:
     def _node_ocr(self, state: DocumentExtractionState) -> dict[str, Any]:
         img_path = state.get("preprocessed_path") or state["image_path"]
         t0 = time.perf_counter()
-        logger.info("[Node 2/4: OCR] Mengekstrak referensi teks mentah via model OCR...")
+        logger.info(
+            "[Node 2/4: OCR] Mengekstrak referensi teks mentah via model OCR..."
+        )
         try:
             ocr_res = self.ocr.extract(img_path)
             dt = time.perf_counter() - t0
@@ -166,16 +177,22 @@ class DocumentExtractionPipeline:
         forced = state.get("forced_specs") or state.get("forced_doc_type")
         if forced:
             specs = normalize_specs(forced)
-            logger.info("[Node 3/4: Classify] Spesifikasi layout dipaksa (forced): %s", specs)
+            logger.info(
+                "[Node 3/4: Classify] Spesifikasi layout dipaksa (forced): %s", specs
+            )
             return {"specs": specs, "doc_type": specs[0]}
 
         img_path = state.get("preprocessed_path") or state["image_path"]
         t0 = time.perf_counter()
-        logger.info("[Node 3/4: Classify] Mengidentifikasi karakteristik layout dokumen via VLM...")
+        logger.info(
+            "[Node 3/4: Classify] Mengidentifikasi karakteristik layout dokumen via VLM..."
+        )
         try:
             specs = self.extractor.classify(img_path)
             dt = time.perf_counter() - t0
-            logger.info("[Node 3/4: Classify] Selesai (%.2fs) | Terdeteksi: %s", dt, specs)
+            logger.info(
+                "[Node 3/4: Classify] Selesai (%.2fs) | Terdeteksi: %s", dt, specs
+            )
             return {"specs": specs, "doc_type": specs[0] if specs else "plain"}
         except Exception as e:
             dt = time.perf_counter() - t0
@@ -194,7 +211,10 @@ class DocumentExtractionPipeline:
         previous_context = state.get("previous_page_context") or None
 
         t0 = time.perf_counter()
-        logger.info("[Node 4/4: Extract] Menjalankan ekstraksi Markdown dengan spesifikasi: %s...", specs)
+        logger.info(
+            "[Node 4/4: Extract] Menjalankan ekstraksi Markdown dengan spesifikasi: %s...",
+            specs,
+        )
         agent = get_agent(specs)
         try:
             md_text = agent.run(

@@ -41,10 +41,12 @@ class VisionExtractor:
         Klasifikasikan satu atau lebih karakteristik layout dokumen yang ada pada gambar:
         ['plain'], ['bilingual_journal', 'markdown_hierarchy'], dsb.
         """
-        logger.debug("[Extractor:Classify] Menyiapkan payload klasifikasi untuk: %s", image_path)
-        content: list[dict[str, Any]] = [\
-            {"type": "text", "text": CLASSIFY_PROMPT},\
-            {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},\
+        logger.debug(
+            "[Extractor:Classify] Menyiapkan payload klasifikasi untuk: %s", image_path
+        )
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": CLASSIFY_PROMPT},
+            {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},
         ]
         messages = [
             SystemMessage(content=CLASSIFY_SYSTEM),
@@ -62,10 +64,16 @@ class VisionExtractor:
                 data = json.loads(match.group(0))
                 raw_specs = data.get("specs") or [data.get("doc_type")]
                 normalized = normalize_specs(raw_specs)
-                logger.info("[Extractor:Classify] Berhasil parse JSON layout: %s", normalized)
+                logger.info(
+                    "[Extractor:Classify] Berhasil parse JSON layout: %s", normalized
+                )
                 return normalized
             except (json.JSONDecodeError, TypeError, ValueError, KeyError) as e:
-                logger.warning("[Extractor:Classify] Gagal parse JSON layout (%s): '%s'", e, match.group(0))
+                logger.warning(
+                    "[Extractor:Classify] Gagal parse JSON layout (%s): '%s'",
+                    e,
+                    match.group(0),
+                )
 
         # Fallback multi-matching via regex
         text_lower = text_resp.lower()

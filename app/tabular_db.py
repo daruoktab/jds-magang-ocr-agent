@@ -171,7 +171,9 @@ def parse_date_value(val_str: str) -> str | None:
         return raw
 
     # Format DD.MM.YYYY atau DD/MM/YYYY atau DD-MM-YYYY
-    m = re.match(r"^(0[1-9]|[12]\d|3[01])[./-]((0[1-9]|1[0-2]))[./-]((19|20)\d{2})$", raw)
+    m = re.match(
+        r"^(0[1-9]|[12]\d|3[01])[./-]((0[1-9]|1[0-2]))[./-]((19|20)\d{2})$", raw
+    )
     if m:
         return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
 
@@ -192,13 +194,19 @@ def parse_markdown_tables(markdown_text: str) -> list[dict[str, Any]]:
         # Deteksi awal tabel Markdown: baris yang diawali '|' dan baris berikutnya adalah separator '|---|'
         if line.startswith("|") and line.endswith("|") and i + 1 < len(lines):
             next_line = lines[i + 1].strip()
-            if next_line.startswith("|") and re.match(r"^\|(\s*:?-+:?\s*\|)+$", next_line):
+            if next_line.startswith("|") and re.match(
+                r"^\|(\s*:?-+:?\s*\|)+$", next_line
+            ):
                 # Header row
                 header_raw = [c.strip() for c in line.strip("|").split("|")]
                 rows_raw: list[list[str]] = []
 
                 # Konteks teks sebelum tabel (3 baris sebelumnya)
-                context_lines = [lines[k].strip() for k in range(max(0, i - 3), i) if lines[k].strip()]
+                context_lines = [
+                    lines[k].strip()
+                    for k in range(max(0, i - 3), i)
+                    if lines[k].strip()
+                ]
                 context = " ".join(context_lines)
 
                 # Baca baris data
@@ -216,13 +224,15 @@ def parse_markdown_tables(markdown_text: str) -> list[dict[str, Any]]:
                     j += 1
 
                 if rows_raw:
-                    tables.append({
-                        "headers": header_raw,
-                        "rows": rows_raw,
-                        "context": context,
-                        "line_start": i,
-                        "line_end": j,
-                    })
+                    tables.append(
+                        {
+                            "headers": header_raw,
+                            "rows": rows_raw,
+                            "context": context,
+                            "line_start": i,
+                            "line_end": j,
+                        }
+                    )
                 i = j
                 continue
         i += 1
@@ -298,7 +308,16 @@ def classify_table_heuristic(
 
     has_financial_headers = any(
         kw in [sanitize_identifier(h) for h in headers]
-        for kw in ["debit", "kredit", "credit", "saldo", "balance", "amount", "nominal", "mutasi"]
+        for kw in [
+            "debit",
+            "kredit",
+            "credit",
+            "saldo",
+            "balance",
+            "amount",
+            "nominal",
+            "mutasi",
+        ]
     )
     has_date_headers = any(
         kw in [sanitize_identifier(h) for h in headers]
@@ -311,7 +330,11 @@ def classify_table_heuristic(
         reasoning_points.append(
             f"Header mengandung kombinasi tanggal dan finansial (Debit/Kredit/Saldo): {matched_keywords}."
         )
-    elif keyword_ratio >= 0.4 and (numeric_density + date_density >= 0.3) and total_rows >= 3:
+    elif (
+        keyword_ratio >= 0.4
+        and (numeric_density + date_density >= 0.3)
+        and total_rows >= 3
+    ):
         is_transactional = True
         table_type = "transactional_log"
         reasoning_points.append(
@@ -331,7 +354,9 @@ def classify_table_heuristic(
         )
 
     recommended_storage = "sqlite_database" if is_transactional else "vector_rag"
-    confidence = min(0.98, max(0.65, keyword_ratio * 0.5 + (numeric_density + date_density) * 0.5))
+    confidence = min(
+        0.98, max(0.65, keyword_ratio * 0.5 + (numeric_density + date_density) * 0.5)
+    )
 
     return TableClassificationResult(
         table_id=f"table_auto_{total_rows}r_{total_cols}c",
@@ -374,7 +399,11 @@ def infer_table_schema(
         used_names.add(clean_name)
 
         # Analisis sampel nilai kolom
-        col_values = [rows[r][col_idx] for r in range(min(total_rows, 50)) if col_idx < len(rows[r])]
+        col_values = [
+            rows[r][col_idx]
+            for r in range(min(total_rows, 50))
+            if col_idx < len(rows[r])
+        ]
         non_empty = [v for v in col_values if clean_cell_text(v)]
 
         numeric_count = sum(1 for v in non_empty if parse_numeric_value(v) is not None)
@@ -384,13 +413,28 @@ def infer_table_schema(
         if non_empty and numeric_count / len(non_empty) >= 0.7:
             # Cek apakah integer atau real (ada desimal)
             has_float = any(
-                isinstance(parse_numeric_value(v), float) and not float(parse_numeric_value(v) or 0).is_integer()
+                isinstance(parse_numeric_value(v), float)
+                and not float(parse_numeric_value(v) or 0).is_integer()
                 for v in non_empty
             )
             sql_type = "REAL" if has_float else "NUMERIC"
         elif non_empty and date_count / len(non_empty) >= 0.7:
             sql_type = "DATE"
-        elif any(k in clean_name for k in ["amount", "saldo", "balance", "debit", "kredit", "credit", "nominal", "fee", "harga", "price"]):
+        elif any(
+            k in clean_name
+            for k in [
+                "amount",
+                "saldo",
+                "balance",
+                "debit",
+                "kredit",
+                "credit",
+                "nominal",
+                "fee",
+                "harga",
+                "price",
+            ]
+        ):
             sql_type = "REAL"
         elif any(k in clean_name for k in ["date", "tanggal", "posting"]):
             sql_type = "DATE"
@@ -438,7 +482,9 @@ class TabularDatabaseManager:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def create_table(self, schema: TableSchema, if_not_exists: bool = True, replace: bool = False) -> str:
+    def create_table(
+        self, schema: TableSchema, if_not_exists: bool = True, replace: bool = False
+    ) -> str:
         """Buat tabel SQLite berdasarkan skema terstruktur."""
         with self._get_connection() as conn:
             if replace:
@@ -450,14 +496,20 @@ class TabularDatabaseManager:
             col_defs.append('"_ingested_at" TEXT')
 
             exist_clause = "" if replace else ("IF NOT EXISTS" if if_not_exists else "")
-            sql = f'CREATE TABLE {exist_clause} "{schema.table_name}" (\n  ' + ",\n  ".join(col_defs) + "\n);"
+            sql = (
+                f'CREATE TABLE {exist_clause} "{schema.table_name}" (\n  '
+                + ",\n  ".join(col_defs)
+                + "\n);"
+            )
 
             conn.execute(sql)
             # Buat indeks untuk kolom tanggal atau referensi jika ada
             for col in schema.columns:
                 if col.sql_type == "DATE" or "ref" in col.name or "account" in col.name:
-                    idx_name = f'idx_{schema.table_name}_{col.name}'
-                    conn.execute(f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON "{schema.table_name}" ("{col.name}");')
+                    idx_name = f"idx_{schema.table_name}_{col.name}"
+                    conn.execute(
+                        f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON "{schema.table_name}" ("{col.name}");'
+                    )
             conn.commit()
 
         return schema.table_name
@@ -480,8 +532,12 @@ class TabularDatabaseManager:
         col_types = {col.name: col.sql_type for col in schema.columns}
 
         placeholders = ", ".join(["?"] * (len(col_names) + 2))
-        insert_cols = ", ".join([f'"{c}"' for c in col_names] + ['"_source_doc"', '"_ingested_at"'])
-        insert_sql = f'INSERT INTO "{schema.table_name}" ({insert_cols}) VALUES ({placeholders})'
+        insert_cols = ", ".join(
+            [f'"{c}"' for c in col_names] + ['"_source_doc"', '"_ingested_at"']
+        )
+        insert_sql = (
+            f'INSERT INTO "{schema.table_name}" ({insert_cols}) VALUES ({placeholders})'
+        )
 
         ingested_at = datetime.now(UTC).isoformat()
         prepared_rows: list[tuple[Any, ...]] = []
@@ -532,7 +588,9 @@ class TabularDatabaseManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.execute(stripped)
-                col_names = [d[0] for d in cursor.description] if cursor.description else []
+                col_names = (
+                    [d[0] for d in cursor.description] if cursor.description else []
+                )
                 raw_rows = cursor.fetchmany(max_rows)
                 rows_dict = [dict(r) for r in raw_rows]
                 elapsed = round((time.perf_counter() - t0) * 1000, 2)
@@ -559,7 +617,9 @@ class TabularDatabaseManager:
     def inspect_database(self) -> dict[str, Any]:
         """Ambil daftar seluruh tabel dan skema kolom yang ada di database."""
         with self._get_connection() as conn:
-            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
+            )
             tables = [row["name"] for row in cursor.fetchall()]
 
             table_details = {}
@@ -596,7 +656,9 @@ class TabularVerifier:
       4. Refleksi verifikasi model LLM bila tersedia.
     """
 
-    def __init__(self, db_manager: TabularDatabaseManager, llm: BaseChatModel | None = None) -> None:
+    def __init__(
+        self, db_manager: TabularDatabaseManager, llm: BaseChatModel | None = None
+    ) -> None:
         self.db = db_manager
         self.llm = llm
 
@@ -612,7 +674,13 @@ class TabularVerifier:
         # 1. Pengecekan Integritas Baris (Row Count Integrity)
         count_res = self.db.execute_query(f'SELECT COUNT(*) as cnt FROM "{table_name}"')
         actual_rows = count_res.rows[0]["cnt"] if count_res.rows else 0
-        test_queries.append({"query": f'SELECT COUNT(*) FROM "{table_name}"', "result": actual_rows, "success": count_res.status == "success"})
+        test_queries.append(
+            {
+                "query": f'SELECT COUNT(*) FROM "{table_name}"',
+                "result": actual_rows,
+                "success": count_res.status == "success",
+            }
+        )
 
         if expected_row_count is not None:
             row_count_ok = actual_rows == expected_row_count
@@ -650,7 +718,12 @@ class TabularVerifier:
         )
 
         # 3. Numeric Aggregation Sanity Test (Uji SUM & AVG)
-        numeric_cols = [c["name"] for c in cols_info if c["type"] in ("REAL", "NUMERIC", "INTEGER") and not c["name"].startswith("_")]
+        numeric_cols = [
+            c["name"]
+            for c in cols_info
+            if c["type"] in ("REAL", "NUMERIC", "INTEGER")
+            and not c["name"].startswith("_")
+        ]
         agg_passed = True
         agg_details: Any = {}
 
@@ -665,28 +738,46 @@ class TabularVerifier:
             if agg_res.status == "error":
                 agg_passed = False
                 agg_details = {"error": agg_res.error_message}
-                test_queries.append({"query": agg_sql, "result": str(agg_res.error_message), "success": False})
+                test_queries.append(
+                    {
+                        "query": agg_sql,
+                        "result": str(agg_res.error_message),
+                        "success": False,
+                    }
+                )
             else:
                 agg_details = agg_res.rows[0] if agg_res.rows else {}
-                test_queries.append({"query": agg_sql, "result": agg_details, "success": True})
+                test_queries.append(
+                    {"query": agg_sql, "result": agg_details, "success": True}
+                )
 
             checks.append(
                 VerificationCheck(
                     check_name="numeric_aggregation_sanity",
                     passed=agg_passed,
-                    details=f"Query kalkulasi agregat (SUM & AVG) berjalan sukses tanpa error: {agg_details}" if agg_passed else f"Gagal menjalankan query agregat: {agg_details}",
+                    details=f"Query kalkulasi agregat (SUM & AVG) berjalan sukses tanpa error: {agg_details}"
+                    if agg_passed
+                    else f"Gagal menjalankan query agregat: {agg_details}",
                 )
             )
 
         # 4. Bank Statement Balance Continuity Check (Balance[n-1] + Kredit - Debit ≈ Balance[n])
         has_debit = any("debit" in c.lower() for c in col_names)
-        has_credit = any("credit" in c.lower() or "kredit" in c.lower() for c in col_names)
-        has_balance = any("balance" in c.lower() or "saldo" in c.lower() for c in col_names)
+        has_credit = any(
+            "credit" in c.lower() or "kredit" in c.lower() for c in col_names
+        )
+        has_balance = any(
+            "balance" in c.lower() or "saldo" in c.lower() for c in col_names
+        )
 
         if has_debit and has_credit and has_balance:
             debit_col = next(c for c in col_names if "debit" in c.lower())
-            credit_col = next(c for c in col_names if "credit" in c.lower() or "kredit" in c.lower())
-            balance_col = next(c for c in col_names if "balance" in c.lower() or "saldo" in c.lower())
+            credit_col = next(
+                c for c in col_names if "credit" in c.lower() or "kredit" in c.lower()
+            )
+            balance_col = next(
+                c for c in col_names if "balance" in c.lower() or "saldo" in c.lower()
+            )
 
             sample_rows_res = self.db.execute_query(
                 f'SELECT "_row_id", "{debit_col}", "{credit_col}", "{balance_col}" FROM "{table_name}" ORDER BY "_row_id" ASC LIMIT 20;'
@@ -718,7 +809,9 @@ class TabularVerifier:
         reflection_notes: str | None = None
         if self.llm is not None and source_markdown_sample:
             try:
-                sample_db_rows = self.db.execute_query(f'SELECT * FROM "{table_name}" LIMIT 5;').rows
+                sample_db_rows = self.db.execute_query(
+                    f'SELECT * FROM "{table_name}" LIMIT 5;'
+                ).rows
                 prompt = (
                     "Lakukan verifikasi refleksi antara teks sampel Markdown asli dan record data SQLite hasil ekstraksi berikut.\n"
                     f"Sample Markdown Dokumen:\n```\n{source_markdown_sample[:1000]}\n```\n\n"
@@ -728,7 +821,11 @@ class TabularVerifier:
                 resp = self.llm.invoke(prompt)
                 if hasattr(resp, "content"):
                     raw_c = resp.content
-                    reflection_notes = raw_c if isinstance(raw_c, str) else json.dumps(raw_c, ensure_ascii=False)
+                    reflection_notes = (
+                        raw_c
+                        if isinstance(raw_c, str)
+                        else json.dumps(raw_c, ensure_ascii=False)
+                    )
                 else:
                     reflection_notes = str(resp)
             except Exception as e:  # noqa: BLE001
@@ -736,8 +833,16 @@ class TabularVerifier:
 
         all_passed = all(c.passed for c in checks)
         passed_ratio = sum(1 for c in checks if c.passed) / max(1, len(checks))
-        confidence_score = round(0.5 + (passed_ratio * 0.5), 2) if all_passed else round(passed_ratio * 0.75, 2)
-        status_lit: Any = "verified" if all_passed else ("needs_revision" if passed_ratio >= 0.6 else "rejected")
+        confidence_score = (
+            round(0.5 + (passed_ratio * 0.5), 2)
+            if all_passed
+            else round(passed_ratio * 0.75, 2)
+        )
+        status_lit: Any = (
+            "verified"
+            if all_passed
+            else ("needs_revision" if passed_ratio >= 0.6 else "rejected")
+        )
 
         return TableVerificationReport(
             table_name=table_name,
@@ -823,7 +928,9 @@ def extract_and_ingest_tables_from_markdown(
         status = "success" if verif_report.is_valid else "warning"
 
         # Ambil sampel 3 data
-        sample_data = db_manager.execute_query(f'SELECT * FROM "{table_name}" LIMIT 3;').rows
+        sample_data = db_manager.execute_query(
+            f'SELECT * FROM "{table_name}" LIMIT 3;'
+        ).rows
 
         results.append(
             TableIngestionResult(
@@ -841,7 +948,9 @@ def extract_and_ingest_tables_from_markdown(
     return results
 
 
-def query_sqlite(sql_query: str, db_path: str | Path | None = None) -> TabularQueryResult:
+def query_sqlite(
+    sql_query: str, db_path: str | Path | None = None
+) -> TabularQueryResult:
     """Eksekusi query SQL praktis pada database dokumen."""
     manager = TabularDatabaseManager(db_path)
     return manager.execute_query(sql_query)

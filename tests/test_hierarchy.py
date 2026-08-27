@@ -61,8 +61,11 @@ def test_pembukaan_bukan_induk_batang_tubuh():
 def test_ayat_menomori_ulang_di_tiap_pasal():
     """Ayat kembali ke (1) di pasal berikutnya tanpa dianggap mundur."""
     events = [
-        ev("pasal", "1"), ev("ayat", "1"), ev("ayat", "2"),
-        ev("pasal", "2"), ev("ayat", "1"),
+        ev("pasal", "1"),
+        ev("ayat", "1"),
+        ev("ayat", "2"),
+        ev("pasal", "2"),
+        ev("ayat", "1"),
     ]
     assert audit(events) == []
 
@@ -86,12 +89,15 @@ def test_huruf_salah_baca_ikut_diperbaiki():
 def test_pasal_bersuffiks_hasil_amandemen():
     """Pasal 6A, 7B, 18B lazim pada UUD dan UU yang diamandemen."""
     urut = ["7", "7A", "7B", "7C", "8"]
-    assert audit([ev("pasal", o) for o in urut],
-                 cursor=Cursor(last_seen={"pasal": "6"})) == []
+    assert (
+        audit([ev("pasal", o) for o in urut], cursor=Cursor(last_seen={"pasal": "6"}))
+        == []
+    )
 
     # Suffiks tetap tunduk pada urutan: 6 langsung ke 6B berarti 6A hilang.
-    findings = audit([ev("pasal", "6"), ev("pasal", "6B")],
-                     cursor=Cursor(last_seen={"pasal": "5"}))
+    findings = audit(
+        [ev("pasal", "6"), ev("pasal", "6B")], cursor=Cursor(last_seen={"pasal": "5"})
+    )
     assert [f.severity for f in findings] == ["eskalasi"]
 
 
@@ -117,14 +123,20 @@ def test_parse_rupiah_beragam_format():
 
 def test_auditor_rupiah_menemukan_rincian_tak_sejumlah():
     machine = StackMachine()
-    machine.run([
-        ev("pasal", "4"),
-        ev("ayat", "1", text="Pembiayaan terdiri dari:"),
-        ev("huruf", "a", text="Penerimaan : Rp. 65.090.038.541,64"),
-        ev("ayat", "2", text="Penerimaan sebagaimana dimaksud pada ayat (1) huruf a terdiri dari:"),
-        ev("huruf", "a", text="SILPA : Rp. 65.090.038.541,64"),
-        ev("huruf", "e", text="Penerimaan kembali pinjaman : Rp. 1.500.000.000,00"),
-    ])
+    machine.run(
+        [
+            ev("pasal", "4"),
+            ev("ayat", "1", text="Pembiayaan terdiri dari:"),
+            ev("huruf", "a", text="Penerimaan : Rp. 65.090.038.541,64"),
+            ev(
+                "ayat",
+                "2",
+                text="Penerimaan sebagaimana dimaksud pada ayat (1) huruf a terdiri dari:",
+            ),
+            ev("huruf", "a", text="SILPA : Rp. 65.090.038.541,64"),
+            ev("huruf", "e", text="Penerimaan kembali pinjaman : Rp. 1.500.000.000,00"),
+        ]
+    )
     findings = audit_amounts(machine.root)
     assert len(findings) == 1
     assert "66,590,038,541.64" in findings[0].message
@@ -133,13 +145,15 @@ def test_auditor_rupiah_menemukan_rincian_tak_sejumlah():
 def test_indentasi_mengikuti_kedalaman_pohon():
     """Angka di bawah pembukaan rata kiri; angka di dalam ayat menjorok."""
     machine = StackMachine()
-    machine.run([
-        ev("pembukaan", label="Mengingat"),
-        ev("angka", "1", text="satu"),
-        ev("pasal", "1"),
-        ev("ayat", "1", text="ayat satu"),
-        ev("huruf", "a", text="huruf a"),
-    ])
+    machine.run(
+        [
+            ev("pembukaan", label="Mengingat"),
+            ev("angka", "1", text="satu"),
+            ev("pasal", "1"),
+            ev("ayat", "1", text="ayat satu"),
+            ev("huruf", "a", text="huruf a"),
+        ]
+    )
     markdown = render_markdown(machine.root, with_pages=False)
     assert "\n- 1. satu" in markdown
     assert "\n- (1) ayat satu" in markdown

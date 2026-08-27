@@ -1,6 +1,6 @@
 """
-Harness Deep Reasoning Agents untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking & Tabular SQLite Ingestion.
-Menggunakan arsitektur Master Orchestrator dengan 7 Sub-Agent terspesialisasi.
+Harness Deep Reasoning Agents untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking, Tabular SQLite Ingestion, & Diagram Mermaid.js.
+Menggunakan arsitektur Master Orchestrator dengan 8 Sub-Agent terspesialisasi.
 """
 
 from __future__ import annotations
@@ -14,6 +14,12 @@ from langchain_core.tools import tool
 
 from .agents import get_agent
 from .config import Settings, get_settings
+from .diagram import (
+    classify_diagram_convertibility,
+)
+from .diagram import (
+    extract_diagram_to_mermaid as run_extract_diagram,
+)
 from .extractor import VisionExtractor
 from .llm import build_vlm
 from .multi_page import preview_markdown_chunks
@@ -33,14 +39,15 @@ from .tabular_db import (
 
 def build_deep_agent(settings: Settings | None = None) -> Any:
     """
-    Bangun Deep Reasoning Agent utama dengan armada 7 Sub-Agent spesialis:
-      1. `ocr-specialist`           : Membaca teks mentah literal (ocr-lighton)
-      2. `layout-classifier`        : Mengklasifikasikan multi-trait dokumen
-      3. `markdown-extractor`       : Ekstraksi VLM multimodal ke Markdown
-      4. `presentation-specialist`  : Parsing file presentasi PowerPoint (.pptx / .ppt)
-      5. `pdf-orchestrator`         : Orkestrasi multi-halaman PDF & heading continuity
-      6. `chunking-simulator`       : Simulasi partisi teks Markdown siap RAG
-      7. `tabular-db-specialist`    : Deteksi tabel transaksional, ingesti ke SQLite, double-verification, & eksekusi SQL
+    Bangun Deep Reasoning Agent utama dengan armada 8 Sub-Agent spesialis:
+      1. `ocr-specialist`             : Membaca teks mentah literal (ocr-lighton)
+      2. `layout-classifier`          : Mengklasifikasikan multi-trait dokumen
+      3. `markdown-extractor`         : Ekstraksi VLM multimodal ke Markdown
+      4. `diagram-mermaid-specialist` : Evaluasi selektif & ekstraksi diagram ke sintaks Mermaid.js
+      5. `presentation-specialist`    : Parsing file presentasi PowerPoint (.pptx / .ppt)
+      6. `pdf-orchestrator`           : Orkestrasi multi-halaman PDF & heading continuity
+      7. `chunking-simulator`         : Simulasi partisi teks Markdown siap RAG
+      8. `tabular-db-specialist`      : Deteksi tabel transaksional, ingesti ke SQLite, double-verification, & eksekusi SQL
     """
     resolved_settings = settings or get_settings()
     vlm = build_vlm(resolved_settings)
@@ -78,6 +85,25 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
             ocr_text=ocr_text,
             previous_page_context=previous_context,
         )
+
+    @tool
+    def classify_diagram_suitability(image_path: str) -> str:
+        """Evaluasi kelayakan diagram visual pada dokumen: apakah cocok dikonversi menjadi kode Mermaid yang valid (flowchart, sequence, ERD, state, class, mindmap, block architecture) atau tidak cocok (grafik statistik kontinu, peta, foto, skematik sirkuit mikro)."""
+        proc = preprocess_image(image_path)
+        res = classify_diagram_convertibility(proc.processed_path, llm=vlm)
+        return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
+
+    @tool
+    def extract_diagram_to_mermaid(
+        image_path: str,
+        diagram_hint: str | None = None,
+    ) -> str:
+        """Ekstrak diagram visual pada dokumen menjadi kode Mermaid.js yang valid dan terstruktur, atau berikan deskripsi terstruktur jika diagram tidak cocok untuk Mermaid."""
+        proc = preprocess_image(image_path)
+        res = run_extract_diagram(
+            proc.processed_path, llm=vlm, forced_diagram_type=diagram_hint
+        )
+        return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
 
     @tool
     def extract_presentation_pptx(pptx_path: str) -> str:
@@ -121,21 +147,31 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         )
         return json.dumps(chunks, indent=2, ensure_ascii=False)
 
-    # --- New Tabular SQLite Tools ---
+    # --- Tabular SQLite Tools ---
 
     @tool
     def classify_table_storage(markdown_text: str) -> str:
         """Deteksi dan klasifikasikan tabel-tabel di dalam dokumen: apakah transaksional (harus disimpan ke SQLite untuk kalkulasi SUM/AVG/Filter) atau tabel naratif (bisa di-chunking ke Vector RAG)."""
         tables = parse_markdown_tables(markdown_text)
         if not tables:
-            return json.dumps({"status": "no_tables_found", "tables": []}, indent=2, ensure_ascii=False)
+            return json.dumps(
+                {"status": "no_tables_found", "tables": []},
+                indent=2,
+                ensure_ascii=False,
+            )
 
         results = []
         for t in tables:
-            cls_res = classify_table_heuristic(t["headers"], t["rows"], context=t.get("context", ""))
+            cls_res = classify_table_heuristic(
+                t["headers"], t["rows"], context=t.get("context", "")
+            )
             results.append(cls_res.model_dump())
 
-        return json.dumps({"total_tables": len(tables), "classifications": results}, indent=2, ensure_ascii=False)
+        return json.dumps(
+            {"total_tables": len(tables), "classifications": results},
+            indent=2,
+            ensure_ascii=False,
+        )
 
     @tool
     def ingest_table_to_sqlite(
@@ -153,7 +189,11 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
             llm=vlm,
         )
         serialized = [r.model_dump() for r in ingest_results]
-        return json.dumps({"total_tables_ingested": len(ingest_results), "results": serialized}, indent=2, ensure_ascii=False)
+        return json.dumps(
+            {"total_tables_ingested": len(ingest_results), "results": serialized},
+            indent=2,
+            ensure_ascii=False,
+        )
 
     @tool
     def verify_sqlite_table(
@@ -164,7 +204,9 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         """Lakukan verifikasi ganda (double-verification) terhadap tabel di SQLite: cek integritas baris, validitas tipe data numerik, tes kalkulasi agregat (SUM/AVG), kontinuitas saldo, dan catatan refleksi."""
         db_mgr = TabularDatabaseManager(db_path)
         verifier = TabularVerifier(db_mgr, llm=vlm)
-        report = verifier.verify_table(table_name, source_markdown_sample=sample_markdown)
+        report = verifier.verify_table(
+            table_name, source_markdown_sample=sample_markdown
+        )
         return json.dumps(report.model_dump(), indent=2, ensure_ascii=False)
 
     @tool
@@ -213,6 +255,25 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
             "Panggil tool extract_to_markdown dengan path gambar dan spesifikasi tata letak yang sesuai."
         ),
         "tools": [extract_to_markdown],
+    }
+
+    diagram_subagent: SubAgent = {
+        "name": "diagram-mermaid-specialist",
+        "description": (
+            "Spesialis evaluasi dan ekstraksi visual diagram: memutuskan secara selektif apakah diagram pada dokumen "
+            "cocok dikonversi ke kode Mermaid.js (flowchart, sequence, ERD, state machine, class UML, mindmap, block architecture) "
+            "atau menyajikannya dalam bentuk deskripsi struktural/tabel jika tidak cocok (grafik statistik, peta, foto)."
+        ),
+        "system_prompt": (
+            "Kamu adalah spesialis visualisasi diagram & sintaks Mermaid.js.\n"
+            "Tugasmu:\n"
+            "1. Panggil 'classify_diagram_suitability' untuk mengevaluasi apakah diagram pada dokumen cocok diubah ke Mermaid.\n"
+            "2. Untuk diagram yang cocok (flowchart, sequence, ERD, state diagram, class diagram, mindmap, block architecture): "
+            "panggil 'extract_diagram_to_mermaid' untuk menghasilkan kode Mermaid yang valid secara sintaks.\n"
+            "3. Untuk diagram yang tidak cocok (grafik scatter/line statistik numerik padat, peta geografis, foto, skematik sirkuit mikro, infografis seni bebas): "
+            "jangan paksakan ke Mermaid, berikan representasi tabel Markdown atau deskripsi struktural yang tepat."
+        ),
+        "tools": [classify_diagram_suitability, extract_diagram_to_mermaid],
     }
 
     ppt_subagent: SubAgent = {
@@ -268,6 +329,8 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         ocr_document,
         classify_layout,
         extract_to_markdown,
+        classify_diagram_suitability,
+        extract_diagram_to_mermaid,
         extract_presentation_pptx,
         extract_pdf_document,
         preview_chunks,
@@ -282,6 +345,7 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         ocr_subagent,
         classifier_subagent,
         markdown_subagent,
+        diagram_subagent,
         ppt_subagent,
         pdf_subagent,
         chunker_subagent,
@@ -293,8 +357,8 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         model=vlm,
         tools=all_tools,
         system_prompt=(
-            "Kamu adalah Master Deep Reasoning Agent untuk ekstraksi dokumen multi-modal dan pemrosesan data tabular terstruktur.\n"
-            "Tugasmu: Menganalisis file dokumen pengguna (PDF, PPTX, Scan, Gambar), menghasilkan teks Markdown bersih siap chunking, dan memisahkan tabel data transaksional ke database SQLite.\n\n"
+            "Kamu adalah Master Deep Reasoning Agent untuk ekstraksi dokumen multi-modal, diagram visual, dan pemrosesan data tabular terstruktur.\n"
+            "Tugasmu: Menganalisis file dokumen pengguna (PDF, PPTX, Scan, Gambar), menghasilkan teks Markdown bersih siap chunking, mengekstrak diagram visual ke kode Mermaid yang valid, dan memisahkan tabel data transaksional ke database SQLite.\n\n"
             "Strategi Eksekusi Otonom:\n"
             "1. Jika file berformat .pptx / .ppt: Delegasikan ke 'presentation-specialist'.\n"
             "2. Jika file berformat .pdf multi-halaman: Delegasikan ke 'pdf-orchestrator'.\n"
@@ -302,10 +366,12 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
             "   a. Panggil 'ocr-specialist' untuk teks mentah presisi tinggi.\n"
             "   b. Panggil 'layout-classifier' untuk menentukan spesifikasi layout.\n"
             "   c. Panggil 'markdown-extractor' untuk menyusun teks Markdown utuh.\n"
-            "4. Jika dokumen berisi tabel transaksional / log mutasi / rekening koran / laporan keuangan numerik yang memerlukan kalkulasi agregat (SUM, AVG, COUNT, date filter):\n"
+            "4. Jika dokumen/gambar mengandung diagram visual, bagan alur, sequence, ERD, arsitektur blok, state machine, atau mindmap:\n"
+            "   Delegasikan ke 'diagram-mermaid-specialist' untuk mengevaluasi kelayakan konversi ke kode Mermaid dan mengekstraknya secara terstruktur.\n"
+            "5. Jika dokumen berisi tabel transaksional / log mutasi / rekening koran / laporan keuangan numerik yang memerlukan kalkulasi agregat (SUM, AVG, COUNT, date filter):\n"
             "   Delegasikan ke 'tabular-db-specialist' untuk menyimpan tabel ke SQLite dan memverifikasi integritasnya.\n"
-            "5. Jika pengguna meminta simulasi chunking: Panggil 'chunking-simulator'.\n"
-            "6. Kembalikan teks Markdown dokumen dan laporkan status tabel database terstruktur bila ada."
+            "6. Jika pengguna meminta simulasi chunking: Panggil 'chunking-simulator'.\n"
+            "7. Kembalikan teks Markdown dokumen dan laporkan status diagram Mermaid serta tabel database bila ada."
         ),
         subagents=all_subagents,
     )
@@ -319,6 +385,7 @@ def run_deep_reasoning_agent(
     chunk_size: int = 1000,
     chunk_overlap: int = 150,
     ingest_tables_to_db: bool = True,
+    extract_diagrams_to_mermaid: bool = True,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     """
@@ -345,9 +412,11 @@ def run_deep_reasoning_agent(
         prompt_parts.append(
             "Jika dokumen mengandung tabel transaksional/keuangan/log mutasi, simpan tabel tersebut ke database SQLite dan lakukan verifikasi integritas data."
         )
-    prompt_parts.append(
-        "Pastikan output akhir terstruktur rapi."
-    )
+    if extract_diagrams_to_mermaid:
+        prompt_parts.append(
+            "Jika dokumen mengandung diagram alur/proses/relasi yang cocok untuk Mermaid, ekstrak menjadi kode Mermaid yang valid."
+        )
+    prompt_parts.append("Pastikan output akhir terstruktur rapi.")
 
     user_prompt = " ".join(prompt_parts)
     resp = agent.invoke({"messages": [{"role": "user", "content": user_prompt}]})

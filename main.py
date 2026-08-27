@@ -13,6 +13,7 @@ Contoh Penggunaan:
     python main.py dokumen.pdf --direct-graph                          # Gunakan pipeline deterministik LangGraph
     python main.py --scan-folders dataset                              # Pindai folder-folder dokumen
 """
+
 from __future__ import annotations
 
 import argparse
@@ -45,8 +46,15 @@ def build_parser() -> argparse.ArgumentParser:
         prog="vision-doc-extractor",
         description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking.",
     )
-    p.add_argument("document", nargs="?", help="Path file dokumen (PDF, PPTX, PPT, atau Gambar)")
-    p.add_argument("-o", "--out", default=None, help="Path file output .md untuk menyimpan hasil ekstraksi (atau direktori output batch)")
+    p.add_argument(
+        "document", nargs="?", help="Path file dokumen (PDF, PPTX, PPT, atau Gambar)"
+    )
+    p.add_argument(
+        "-o",
+        "--out",
+        default=None,
+        help="Path file output .md untuk menyimpan hasil ekstraksi (atau direktori output batch)",
+    )
     p.add_argument(
         "-t",
         "--type",
@@ -54,28 +62,103 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Paksa spesifikasi tata letak dokumen, bisa komposit dipisah koma (mis. 'journal,hierarchy', 'plain', 'presentation_slides')",
     )
-    p.add_argument("--vision", "--vlm", action="store_true", dest="vision", help="Kompatibilitas lama: PPT sekarang otomatis dirender ke gambar dan dikirim ke VLM")
-    p.add_argument("--ppt-native", action="store_true", help="Gunakan parser native python-pptx untuk PPT/PPTX tanpa render gambar dan tanpa VLM")
-    p.add_argument("--preview-chunks", action="store_true", help="Tampilkan simulasi pemecahan chunk")
-    p.add_argument("--chunk-size", type=int, default=1000, help="Ukuran chunk karakter untuk preview (default 1000)")
-    p.add_argument("--chunk-overlap", type=int, default=150, help="Overlap chunk karakter (default 150)")
-    p.add_argument("--dpi", type=int, default=200, help="DPI render untuk PDF (default 200)")
-    p.add_argument("--agent", action="store_true", help="Paksa gunakan Deep Reasoning Agent (memerlukan endpoint LLM aktif)")
-    p.add_argument("--direct-graph", action="store_true", help="Gunakan eksekusi grafik deterministik langsung")
-    p.add_argument("--ocr-only", action="store_true", help="Hanya jalankan model OCR tanpa VLM")
-    p.add_argument("--classify-only", action="store_true", help="Hanya klasifikasi karakteristik dokumen")
-    p.add_argument("--pdf-split-only", action="store_true", help="Hanya render PDF menjadi gambar per-halaman")
-    p.add_argument("--list-types", action="store_true", help="Daftar spesifikasi karakteristik dokumen yang didukung")
-    
+    p.add_argument(
+        "--vision",
+        "--vlm",
+        action="store_true",
+        dest="vision",
+        help="Kompatibilitas lama: PPT sekarang otomatis dirender ke gambar dan dikirim ke VLM",
+    )
+    p.add_argument(
+        "--ppt-native",
+        action="store_true",
+        help="Gunakan parser native python-pptx untuk PPT/PPTX tanpa render gambar dan tanpa VLM",
+    )
+    p.add_argument(
+        "--preview-chunks",
+        action="store_true",
+        help="Tampilkan simulasi pemecahan chunk",
+    )
+    p.add_argument(
+        "--chunk-size",
+        type=int,
+        default=1000,
+        help="Ukuran chunk karakter untuk preview (default 1000)",
+    )
+    p.add_argument(
+        "--chunk-overlap",
+        type=int,
+        default=150,
+        help="Overlap chunk karakter (default 150)",
+    )
+    p.add_argument(
+        "--dpi", type=int, default=200, help="DPI render untuk PDF (default 200)"
+    )
+    p.add_argument(
+        "--agent",
+        action="store_true",
+        help="Paksa gunakan Deep Reasoning Agent (memerlukan endpoint LLM aktif)",
+    )
+    p.add_argument(
+        "--direct-graph",
+        action="store_true",
+        help="Gunakan eksekusi grafik deterministik langsung",
+    )
+    p.add_argument(
+        "--ocr-only", action="store_true", help="Hanya jalankan model OCR tanpa VLM"
+    )
+    p.add_argument(
+        "--classify-only",
+        action="store_true",
+        help="Hanya klasifikasi karakteristik dokumen",
+    )
+    p.add_argument(
+        "--pdf-split-only",
+        action="store_true",
+        help="Hanya render PDF menjadi gambar per-halaman",
+    )
+    p.add_argument(
+        "--list-types",
+        action="store_true",
+        help="Daftar spesifikasi karakteristik dokumen yang didukung",
+    )
+
     # Logging options
-    p.add_argument("--debug", action="store_true", help="Aktifkan log DEBUG lengkap untuk melacak workflow & LLM requests")
-    p.add_argument("--log-level", default=None, help="Atur level logging (DEBUG, INFO, WARNING, ERROR)")
+    p.add_argument(
+        "--debug",
+        action="store_true",
+        help="Aktifkan log DEBUG lengkap untuk melacak workflow & LLM requests",
+    )
+    p.add_argument(
+        "--log-level",
+        default=None,
+        help="Atur level logging (DEBUG, INFO, WARNING, ERROR)",
+    )
 
     # Batch & Folder Scanning Options
-    p.add_argument("--scan-folders", nargs="?", const=".", help="Pindai direktori untuk mendeteksi folder-folder dokumen")
-    p.add_argument("--batch-folders", dest="batch_folders", help="Ekstrak batch dokumen dari folder-folder yang dipisah koma (mis. 'dataset/indonesian,dataset/english')")
-    p.add_argument("--limit", type=int, default=None, help="Batas total dokumen yang diproses pada batch")
-    p.add_argument("--limit-per-folder", type=int, default=None, help="Batas dokumen per-folder pada batch")
+    p.add_argument(
+        "--scan-folders",
+        nargs="?",
+        const=".",
+        help="Pindai direktori untuk mendeteksi folder-folder dokumen",
+    )
+    p.add_argument(
+        "--batch-folders",
+        dest="batch_folders",
+        help="Ekstrak batch dokumen dari folder-folder yang dipisah koma (mis. 'dataset/indonesian,dataset/english')",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Batas total dokumen yang diproses pada batch",
+    )
+    p.add_argument(
+        "--limit-per-folder",
+        type=int,
+        default=None,
+        help="Batas dokumen per-folder pada batch",
+    )
     return p
 
 
@@ -91,7 +174,9 @@ def main(argv: list[str] | None = None) -> int:
         setup_logging()
 
     if args.list_types:
-        print("Spesifikasi Tata Letak & Kemampuan Ekstraksi Dokumen (Dapat Dikombinasikan):")
+        print(
+            "Spesifikasi Tata Letak & Kemampuan Ekstraksi Dokumen (Dapat Dikombinasikan):"
+        )
         for name, agent in AGENT_REGISTRY.items():
             print(f"- {name:22s} : {agent.description}")
         return 0
@@ -103,10 +188,14 @@ def main(argv: list[str] | None = None) -> int:
         scan_root = args.scan_folders if args.scan_folders else "."
         try:
             folders = scan_document_directories(scan_root)
-            print(f"Hasil Pemindaian Direktori Dokumen di '{Path(scan_root).resolve()}':")
+            print(
+                f"Hasil Pemindaian Direktori Dokumen di '{Path(scan_root).resolve()}':"
+            )
             print(f"Ditemukan {len(folders)} folder berisi file dokumen:\n")
             for idx, f_info in enumerate(folders, 1):
-                ext_str = ", ".join(f"{k}: {v}" for k, v in f_info["extension_counts"].items())
+                ext_str = ", ".join(
+                    f"{k}: {v}" for k, v in f_info["extension_counts"].items()
+                )
                 print(f"[{idx}] {f_info['relative_path']}")
                 print(f"    Path Penuh: {f_info['folder_path']}")
                 print(f"    Total Dokumen: {f_info['total_documents']} ({ext_str})")
@@ -120,9 +209,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.batch_folders:
         out_target = args.out or "output/extracted_md"
         print(f"Menjalankan Batch Ekstraksi Dokumen dari: {args.batch_folders}")
-        print(f"Kuota: total_limit={args.limit}, limit_per_folder={args.limit_per_folder}")
+        print(
+            f"Kuota: total_limit={args.limit}, limit_per_folder={args.limit_per_folder}"
+        )
         print(f"Folder Output: {out_target}\n")
-        
+
         batch_res = batch_extract_documents(
             folders=args.batch_folders,
             limit=args.limit,
@@ -139,7 +230,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not args.document:
-        print("ERROR: argumen file 'document' wajib diisi (atau gunakan --scan-folders / --batch-folders)", file=sys.stderr)
+        print(
+            "ERROR: argumen file 'document' wajib diisi (atau gunakan --scan-folders / --batch-folders)",
+            file=sys.stderr,
+        )
         return 1
 
     input_path = Path(args.document)
@@ -164,7 +258,9 @@ def main(argv: list[str] | None = None) -> int:
                 pages = pdf_to_images(input_path, dpi=args.dpi)
                 full_ocr = []
                 for idx, pg in enumerate(pages, 1):
-                    full_ocr.append(f"--- Halaman {idx} ---\n{ocr.extract(str(pg)).text}")
+                    full_ocr.append(
+                        f"--- Halaman {idx} ---\n{ocr.extract(str(pg)).text}"
+                    )
                 res_text = "\n\n".join(full_ocr)
             else:
                 res_text = ocr.extract(str(input_path)).text
@@ -184,7 +280,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.ppt_native and not args.vision and not args.direct_graph:
                 markdown_content = process_presentation(input_path)
             else:
-                logger.info("Mengekstrak presentasi via rendering gambar kanvas per slide -> Vision Model (VLM)...")
+                logger.info(
+                    "Mengekstrak presentasi via rendering gambar kanvas per slide -> Vision Model (VLM)..."
+                )
                 pipeline = DocumentExtractionPipeline(settings)
                 markdown_content = process_presentation_vision(
                     pptx_path=input_path,
@@ -194,22 +292,31 @@ def main(argv: list[str] | None = None) -> int:
 
         # 7. Mode Agent (jika eksplisit diminta --agent)
         elif args.agent:
-            logger.info("Menjalankan Deep Reasoning Agent dengan model di %s...", settings.vlm_base_url)
+            logger.info(
+                "Menjalankan Deep Reasoning Agent dengan model di %s...",
+                settings.vlm_base_url,
+            )
             deep_agent = build_deep_agent(settings)
             instruction_parts = [
                 f"Tolong proses dan ekstrak file dokumen berikut secara lengkap: '{input_path.resolve()}'.",
                 "Analisis tata letak dan delegasikan ke sub-agent spesialis yang sesuai.",
             ]
             if args.doc_type:
-                instruction_parts.append(f"Spesifikasi tata letak dokumen yang dipaksakan: {args.doc_type}.")
+                instruction_parts.append(
+                    f"Spesifikasi tata letak dokumen yang dipaksakan: {args.doc_type}."
+                )
             if args.preview_chunks:
-                instruction_parts.append(f"Sertakan simulasi preview chunking (chunk_size={args.chunk_size}, overlap={args.chunk_overlap}).")
-            instruction_parts.append("Pastikan hasil akhir berupa teks Markdown bersih siap chunking.")
+                instruction_parts.append(
+                    f"Sertakan simulasi preview chunking (chunk_size={args.chunk_size}, overlap={args.chunk_overlap})."
+                )
+            instruction_parts.append(
+                "Pastikan hasil akhir berupa teks Markdown bersih siap chunking."
+            )
 
             user_instruction = " ".join(instruction_parts)
-            resp = deep_agent.invoke({
-                "messages": [{"role": "user", "content": user_instruction}]
-            })
+            resp = deep_agent.invoke(
+                {"messages": [{"role": "user", "content": user_instruction}]}
+            )
 
             messages = resp.get("messages", [])
             markdown_content = messages[-1].content if messages else str(resp)
@@ -253,10 +360,16 @@ def main(argv: list[str] | None = None) -> int:
                 chunk_overlap=args.chunk_overlap,
             )
             print("\n" + "=" * 60, file=sys.stderr)
-            print(f"--- PREVIEW CHUNKING ({len(chunks)} Potongan Chunk) ---", file=sys.stderr)
+            print(
+                f"--- PREVIEW CHUNKING ({len(chunks)} Potongan Chunk) ---",
+                file=sys.stderr,
+            )
             print("=" * 60, file=sys.stderr)
             for ch in chunks:
-                print(f"\n[Chunk #{ch['chunk_index']} | {ch['char_count']} chars | Meta: {ch['metadata']}]", file=sys.stderr)
+                print(
+                    f"\n[Chunk #{ch['chunk_index']} | {ch['char_count']} chars | Meta: {ch['metadata']}]",
+                    file=sys.stderr,
+                )
                 print(ch["content"], file=sys.stderr)
                 print("-" * 40, file=sys.stderr)
 

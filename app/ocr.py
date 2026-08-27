@@ -51,7 +51,11 @@ class OCRExtractor:
 
         text = resp.content if isinstance(resp.content, str) else str(resp.content)
         cleaned = text.strip()
-        logger.debug("[OCR] Pemanggilan model OCR selesai dalam %.2fs (Panjang teks: %d)", dt, len(cleaned))
+        logger.debug(
+            "[OCR] Pemanggilan model OCR selesai dalam %.2fs (Panjang teks: %d)",
+            dt,
+            len(cleaned),
+        )
         return OCRResult(text=cleaned)
 
 
