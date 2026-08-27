@@ -131,3 +131,6 @@ Server MCP berstandar resmi **MCP Python SDK v2.0** ([app/mcp_server.py](file://
 ## 🤖 Agent Mode (`app/mcp_agent_server.py`) — Tanpa OCR/VLM/LLM Endpoint
 
 Server MCP khusus untuk **agent model berbasis vision** (Gemini CLI, Claude Desktop, Cursor, dsb.) yang mengerjakan ekstraksi **secara mandiri tanpa memanggil endpoint model apa pun**. OCR, VLM, maupun LLM **dimatikan** — agent-lah yang membaca gambar dokumen dan menulis Markdown-nya sendiri; server hanya menyediakan alat bantu mekanis. Hasil yang disimpan melalui `save_extraction_result` otomatis mendeteksi tabel transaksional dan meng-ingest-nya ke database SQLite dengan verifikasi ganda.
+
+
+Test Test Test 
