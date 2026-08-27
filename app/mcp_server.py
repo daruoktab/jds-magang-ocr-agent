@@ -47,14 +47,12 @@ server = MCPServer(
     name="render_presentation_slides",
     description=(
         "Render seluruh halaman/slide file presentasi PowerPoint (.pptx / .ppt) menjadi file gambar PNG beresolusi tinggi "
-        "agar dapat dilihat dan dianalisis secara visual langsung oleh AI Multimodal / VLM. "
-        "Parameter renderer ('spire' atau 'libreoffice') opsional (default mengikuti konfigurasi terpusat PPT_RENDERER)."
+        "agar dapat dilihat dan dianalisis secara visual langsung oleh AI Multimodal / VLM (renderer: LibreOffice headless)."
     ),
 )
 def render_presentation_slides(
     pptx_path: str,
     output_dir: str | None = None,
-    renderer: str | None = None,
 ) -> str:
     """
     Render slide PPTX ke file gambar PNG per slide.
@@ -78,7 +76,7 @@ def render_presentation_slides(
 
         importlib.reload(app.ppt)
         images = app.ppt.render_presentation_slides_to_images(
-            path_obj, output_dir=out_dir, renderer=renderer
+            path_obj, output_dir=out_dir
         )
         return json.dumps(
             {

@@ -13,8 +13,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import shutil
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -66,25 +64,9 @@ def _bool_env(name: str, default: str) -> bool:
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
-def _detect_default_ppt_renderer() -> str:
-    """Deteksi renderer PPT default yang stabil di sistem."""
-    custom = _env("PPT_RENDERER", "").strip().lower()
-    if custom:
-        return custom
-    # Jika LibreOffice terpasang, utamakan LibreOffice untuk stabilitas memori (bebas WinError 1455 & tanpa batas 10 slide)
-    if (
-        shutil.which("libreoffice")
-        or shutil.which("soffice")
-        or Path(r"C:\Program Files\LibreOffice\program\soffice.exe").exists()
-        or Path(r"C:\Program Files (x86)\LibreOffice\program\soffice.exe").exists()
-    ):
-        return "libreoffice"
-    return "spire"
-
-
 @dataclass(frozen=True)
 class Settings:
-    """Pengaturan konfigurasi LLM, VLM, OCR, rendering, dan logging."""
+    """Pengaturan konfigurasi LLM, VLM, OCR, dan logging."""
 
     # --- Global Fallback ---
     llm_base_url: str = field(
@@ -128,10 +110,7 @@ class Settings:
         default_factory=lambda: _int_env("OCR_MAX_TOKENS", "500")
     )
 
-    # --- 3. PPT Renderer ('spire' atau 'libreoffice') ---
-    ppt_renderer: str = field(default_factory=_detect_default_ppt_renderer)
-
-    # --- 4. Logging Configuration ---
+    # --- 3. Logging Configuration ---
     log_level: str = field(
         default_factory=lambda: _env("LOG_LEVEL", "INFO").strip().upper() or "INFO"
     )
@@ -164,8 +143,3 @@ def setup_logging(level: str | None = None) -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-
-
-def get_ppt_renderer() -> str:
-    """Ambil renderer PPT aktif ('spire' atau 'libreoffice')."""
-    return get_settings().ppt_renderer

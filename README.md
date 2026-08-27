@@ -20,33 +20,23 @@ Sistem mendukung ekstraksi dengan satu atau **beberapa spesifikasi sekaligus sec
 
 ---
 
-## 🖼️ Rendering PPT di Server Linux
+## 🖼️ Rendering Presentasi (PPT/PPTX)
 
-Selain renderer Spire, pipeline menyediakan jalur tanpa Spire:
+Presentasi di-render menjadi gambar PNG per slide lalu dikirim ke model vision:
 
 ```text
 PPT/PPTX -> LibreOffice headless -> PDF -> PyMuPDF -> PNG per slide
 ```
 
-Instal dependency sistem di Debian/Ubuntu:
+Pipeline memakai **LibreOffice headless** sebagai satu-satunya renderer di semua platform (Windows, Linux, macOS) — tidak ada lagi dependensi Spire. Instalasi:
 
-```bash
-sudo apt-get update && sudo apt-get install -y libreoffice
-```
+- **Debian/Ubuntu:** `sudo apt-get install -y libreoffice`
+- **Windows:** installer LibreOffice resmi (pipelinenya otomatis mendeteksi lokasi instalasi standar).
+- Jika executable tidak berada di `PATH` atau tidak di lokasi standar, set env `LIBREOFFICE_BIN` ke path `soffice`/`libreoffice`.
 
-Gunakan secara langsung dari Python:
+Batching: rendering diproses bertahap per 10 slide (selaras strategi batch di pipeline PDF) untuk mengontrol memori, progres logging, dan keseragaman unit kerja — bukan karena batasan lisensi.
 
-```python
-from app.ppt import render_presentation_slides_to_images
-
-images = render_presentation_slides_to_images(
-    "input/presentation.pptx",
-    output_dir="output/rendered_slides",
-    renderer="libreoffice",
-)
-```
-
-MCP tool `render_presentation_slides` juga menerima parameter `renderer="libreoffice"`. Jika executable tidak berada di `PATH`, set `LIBREOFFICE_BIN` ke path `libreoffice` atau `soffice`.
+MCP tool: `render_presentation_slides` (lihat §MCP Tools di bawah).
 
 ---
 
@@ -79,7 +69,7 @@ Proyek ini dilengkapi dengan **Master Agent dan 7 Sub-Agent Spesialis** ([app/de
 | `ocr-specialist` | Pembacaan teks mentah literal tingkat tinggi tanpa halusinasi | `ocr_document` (`ocr-lighton`) |
 | `layout-classifier` | Deteksi multi-trait tata letak dokumen (kolom, hierarki, slide, tabel) | `classify_layout` |
 | `markdown-extractor` | Ekstraksi gambar multimodal ke Markdown bersih berbasis spesifikasi komposit | `extract_to_markdown` |
-| `presentation-specialist` | Ekstraksi slide PowerPoint (.pptx) dengan hierarki bullet, tabel, dan notes | `extract_presentation_pptx` |
+| `presentation-specialist` | Ekstraksi slide PowerPoint (.pptx/.ppt): render gambar per slide, lalu dibaca VLM menjadi Markdown | `extract_presentation_pptx` |
 | `pdf-orchestrator` | Orkestrasi pemrosesan PDF multi-halaman & penyambungan kontinuitas heading | `extract_pdf_document` |
 | `chunking-simulator` | Evaluasi kesiapan partisi Markdown dengan header splitter & recursive splitter | `preview_chunks` |
 | `tabular-db-specialist` | Deteksi tabel transaksional, simpan ke SQLite, verifikasi ganda, & eksekusi query SQL | `classify_table_storage`, `ingest_table_to_sqlite`, `verify_sqlite_table`, `query_tabular_database` |
@@ -96,12 +86,13 @@ Server MCP berstandar resmi **MCP Python SDK v2.0** ([app/mcp_server.py](file://
 3. **`extract_document_to_markdown`**: Ekstraksi file dokumen tunggal (PDF, PPTX, gambar) ke Markdown siap chunking.
 4. **`ocr_image`**: Grounding teks mentah presisi tinggi via model OCR `ocr-lighton`.
 5. **`classify_document_layout`**: Deteksi multi-trait spesifikasi tata letak dokumen.
-6. **`extract_presentation_pptx`**: Parser file PowerPoint (.pptx/.ppt) ke Markdown terstruktur.
-7. **`preview_markdown_chunks`**: Simulasi partisi teks Markdown dengan header metadata.
-8. **`ingest_markdown_tables_to_sqlite`**: Ingesti otomatis tabel transaksional ke SQLite dengan double-verification.
-9. **`query_tabular_database`**: Eksekusi SQL query untuk kalkulasi numerik (SUM, AVG, COUNT, date-filter) berpresisi 100%.
-10. **`inspect_tabular_database`**: Inspeksi daftar tabel, skema kolom, dan jumlah baris di SQLite.
-11. **`run_deep_reasoning_agent`**: Eksekusi Master Deep Reasoning Agent otonom.
+6. **`extract_presentation_pptx`**: Ekstraksi PowerPoint (.pptx/.ppt) ke Markdown terstruktur: slide dirender menjadi gambar lalu dibaca VLM.
+7. **`render_presentation_slides`**: Render slide presentasi (.pptx/.ppt) menjadi file gambar PNG beresolusi tinggi untuk dianalisis langsung oleh AI multimodal (LibreOffice headless).
+8. **`preview_markdown_chunks`**: Simulasi partisi teks Markdown dengan header metadata.
+9. **`ingest_markdown_tables_to_sqlite`**: Ingesti otomatis tabel transaksional ke SQLite dengan double-verification.
+10. **`query_tabular_database`**: Eksekusi SQL query untuk kalkulasi numerik (SUM, AVG, COUNT, date-filter) berpresisi 100%.
+11. **`inspect_tabular_database`**: Inspeksi daftar tabel, skema kolom, dan jumlah baris di SQLite.
+12. **`run_deep_reasoning_agent`**: Eksekusi Master Deep Reasoning Agent otonom.
 
 ### Konfigurasi `mcp_config.json`:
 ```json
@@ -125,6 +116,8 @@ Server MCP berstandar resmi **MCP Python SDK v2.0** ([app/mcp_server.py](file://
   }
 }
 ```
+
+> **Opsional:** variabel lingkungan `LIBREOFFICE_BIN` (jalur executable bila tidak terdeteksi otomatis) dan `LOG_LEVEL` (mis. `DEBUG`) didukung.
 
 ---
 

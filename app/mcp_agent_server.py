@@ -476,8 +476,7 @@ def _has_existing_gold(doc_path: Path, output_dir: str | Path) -> bool:
         "LANGSUNG ke model sebagai image content agar model dapat melihat dan membaca slide secara visual. "
         "Default output: output/rendered_slides/<nama_file_tanpa_ekstensi>/. "
         "Tool ini memproses DENGAN BATCH per 10 slide: gunakan 'start_slide' (1-based, default 1) "
-        "dan 'max_images' (default 10) untuk mengirim SATU BATCH per panggilan. "
-        "Parameter renderer ('spire' atau 'libreoffice') bersifat opsional (default mengikuti PPT_RENDERER)."
+        "dan 'max_images' (default 10) untuk mengirim SATU BATCH per panggilan (renderer: LibreOffice headless)."
     ),
 )
 def render_presentation_slides(
@@ -485,7 +484,6 @@ def render_presentation_slides(
     output_dir: str | None = None,
     start_slide: int = 1,
     max_images: int | None = None,
-    renderer: str | None = None,
 ) -> list[ContentBlock] | str:
     """
     Render slide PPTX ke file gambar PNG per slide dan kirim SATU BATCH gambar ke model.
@@ -499,7 +497,7 @@ def render_presentation_slides(
     ).resolve()
 
     try:
-        total_slides = count_presentation_slides(path_obj, renderer=renderer)
+        total_slides = count_presentation_slides(path_obj)
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat menghitung slide presentasi: {e}"
 
@@ -544,7 +542,6 @@ def render_presentation_slides(
             path_obj,
             output_dir=resolved_out,
             slides=window_indices,
-            renderer=renderer,
         )
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat merender slide presentasi: {e}"

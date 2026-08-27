@@ -100,14 +100,12 @@ class DocumentExtractionPipeline:
             )
             logger.info("================================================================================")
             return result
-        except Exception as exc:
+        except Exception:
             elapsed = time.perf_counter() - start_t
-            logger.error(
-                "[Workflow Gagal] Terjadi error pada pipeline setelah %.2fs untuk file '%s': %s",
+            logger.exception(
+                "[Workflow Gagal] Terjadi error pada pipeline setelah %.2fs untuk file '%s'",
                 elapsed,
                 image_path,
-                exc,
-                exc_info=True,
             )
             raise
 
@@ -126,7 +124,7 @@ class DocumentExtractionPipeline:
                 proc.dimensions,
             )
             return {"preprocessed_path": proc.processed_path}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             dt = time.perf_counter() - t0
             logger.warning(
                 "[Node 1/4: Preprocess] Gagal dalam %.2fs (%s). Menggunakan gambar asli: '%s'",
@@ -154,7 +152,7 @@ class DocumentExtractionPipeline:
                 preview if text_len > 0 else "",
             )
             return {"ocr_text": ocr_res.text}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             dt = time.perf_counter() - t0
             logger.warning(
                 "[Node 2/4: OCR] Panggilan OCR gagal/dilewati dalam %.2fs: %s",
@@ -179,7 +177,7 @@ class DocumentExtractionPipeline:
             dt = time.perf_counter() - t0
             logger.info("[Node 3/4: Classify] Selesai (%.2fs) | Terdeteksi: %s", dt, specs)
             return {"specs": specs, "doc_type": specs[0] if specs else "plain"}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             dt = time.perf_counter() - t0
             logger.warning(
                 "[Node 3/4: Classify] Klasifikasi otomatis gagal dalam %.2fs (%s). Fallback ke ['plain']",
@@ -213,13 +211,11 @@ class DocumentExtractionPipeline:
                 len(md_text.splitlines()),
             )
             return {"markdown_content": md_text}
-        except Exception as e:
+        except Exception:
             dt = time.perf_counter() - t0
-            logger.error(
-                "[Node 4/4: Extract] Gagal dalam %.2fs saat ekstraksi Markdown: %s",
+            logger.exception(
+                "[Node 4/4: Extract] Gagal dalam %.2fs saat ekstraksi Markdown",
                 dt,
-                e,
-                exc_info=True,
             )
             raise
 

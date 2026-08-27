@@ -1,0 +1,1026 @@
+{
+  "source_file": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+  "source_extension": ".pdf",
+  "specs": [
+    "plain"
+  ],
+  "extracted_by": "agent",
+  "ocr_used": false,
+  "saved_at": "2026-08-24T07:33:53.547673+00:00",
+  "markdown_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\test_sqlite\\08_bank-statement-SYNTHETIC.md",
+  "char_count": 44460,
+  "line_count": 368,
+  "total_pages_detected": 8,
+  "page_structure": [
+    {
+      "page_number": 1,
+      "type": "page",
+      "char_count": 5578
+    },
+    {
+      "page_number": 2,
+      "type": "page",
+      "char_count": 5551
+    },
+    {
+      "page_number": 3,
+      "type": "page",
+      "char_count": 5528
+    },
+    {
+      "page_number": 4,
+      "type": "page",
+      "char_count": 5547
+    },
+    {
+      "page_number": 5,
+      "type": "page",
+      "char_count": 5484
+    },
+    {
+      "page_number": 6,
+      "type": "page",
+      "char_count": 5531
+    },
+    {
+      "page_number": 7,
+      "type": "page",
+      "char_count": 5514
+    },
+    {
+      "page_number": 8,
+      "type": "page",
+      "char_count": 5576
+    }
+  ],
+  "tabular_database_tables": [
+    {
+      "status": "success",
+      "table_name": "col_08_bank_statement_synthetic_t2",
+      "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+      "total_rows_ingested": 31,
+      "columns": [
+        "posting_date",
+        "transaction_description",
+        "reference_cheque_no",
+        "value_date",
+        "detail",
+        "debit_amount",
+        "credit_amount",
+        "balance"
+      ],
+      "verification_report": {
+        "table_name": "col_08_bank_statement_synthetic_t2",
+        "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+        "is_valid": true,
+        "confidence_score": 1.0,
+        "verification_status": "verified",
+        "checks": [
+          {
+            "check_name": "row_count_integrity",
+            "passed": true,
+            "details": "SQLite memiliki 31 baris (Ekspektasi: 31 baris).",
+            "metric_value": 31
+          },
+          {
+            "check_name": "columns_registered",
+            "passed": true,
+            "details": "Tabel memiliki 8 kolom terdefinisi: ['posting_date', 'transaction_description', 'reference_cheque_no', 'value_date', 'detail', 'debit_amount', 'credit_amount', 'balance']",
+            "metric_value": 8
+          },
+          {
+            "check_name": "numeric_aggregation_sanity",
+            "passed": true,
+            "details": "Query kalkulasi agregat (SUM & AVG) berjalan sukses tanpa error: {'sum_posting_date': 607206436, 'avg_posting_date': 20240214.533333335, 'sum_reference_cheque_no': 2206531037676756504, 'avg_reference_cheque_no': 7.355103458922522e+16, 'sum_value_date': 607206436, 'avg_value_date': 20240214.533333335, 'sum_detail': 166180116760, 'avg_detail': 5539337225.333333, 'sum_debit_amount': 3841020148.03, 'avg_debit_amount': 225942361.64882353, 'sum_credit_amount': 5764966347.08, 'avg_credit_amount': 443458949.7753846, 'sum_balance': 197389627466.24, 'avg_balance': 6367407337.620645}",
+            "metric_value": null
+          },
+          {
+            "check_name": "balance_arithmetic_consistency",
+            "passed": true,
+            "details": "Pemeriksaan kontinuitas saldo (Balance[n-1] + Kredit - Debit = Balance[n]): 0 ketidaksesuaian dari 20 baris sampel.",
+            "metric_value": 0
+          }
+        ],
+        "summary": "Verifikasi data tabel 'col_08_bank_statement_synthetic_t2' selesai dengan status 'verified'. Total 4 pemeriksaan dijalankan (4 passed).",
+        "verified_row_count": 31,
+        "test_queries": [
+          {
+            "query": "SELECT COUNT(*) FROM \"col_08_bank_statement_synthetic_t2\"",
+            "result": 31,
+            "success": true
+          },
+          {
+            "query": "SELECT SUM(\"posting_date\") as sum_posting_date, AVG(\"posting_date\") as avg_posting_date, SUM(\"reference_cheque_no\") as sum_reference_cheque_no, AVG(\"reference_cheque_no\") as avg_reference_cheque_no, SUM(\"value_date\") as sum_value_date, AVG(\"value_date\") as avg_value_date, SUM(\"detail\") as sum_detail, AVG(\"detail\") as avg_detail, SUM(\"debit_amount\") as sum_debit_amount, AVG(\"debit_amount\") as avg_debit_amount, SUM(\"credit_amount\") as sum_credit_amount, AVG(\"credit_amount\") as avg_credit_amount, SUM(\"balance\") as sum_balance, AVG(\"balance\") as avg_balance FROM \"col_08_bank_statement_synthetic_t2\";",
+            "result": {
+              "sum_posting_date": 607206436,
+              "avg_posting_date": 20240214.533333335,
+              "sum_reference_cheque_no": 2206531037676756504,
+              "avg_reference_cheque_no": 7.355103458922522e+16,
+              "sum_value_date": 607206436,
+              "avg_value_date": 20240214.533333335,
+              "sum_detail": 166180116760,
+              "avg_detail": 5539337225.333333,
+              "sum_debit_amount": 3841020148.03,
+              "avg_debit_amount": 225942361.64882353,
+              "sum_credit_amount": 5764966347.08,
+              "avg_credit_amount": 443458949.7753846,
+              "sum_balance": 197389627466.24,
+              "avg_balance": 6367407337.620645
+            },
+            "success": true
+          }
+        ],
+        "llm_reflection": null
+      },
+      "sample_data": [
+        {
+          "_row_id": 1,
+          "posting_date": null,
+          "transaction_description": "BALANCE AT PERIODE START",
+          "reference_cheque_no": null,
+          "value_date": null,
+          "detail": null,
+          "debit_amount": null,
+          "credit_amount": null,
+          "balance": 4218640517.32,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.322666+00:00"
+        },
+        {
+          "_row_id": 2,
+          "posting_date": 20240201,
+          "transaction_description": "INCOMING SKN",
+          "reference_cheque_no": 24341261889198,
+          "value_date": 20240201,
+          "detail": 6120003377,
+          "debit_amount": null,
+          "credit_amount": 948649162.96,
+          "balance": 5167289680.28,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.322666+00:00"
+        },
+        {
+          "_row_id": 3,
+          "posting_date": 20240201,
+          "transaction_description": "TAX ON INTEREST",
+          "reference_cheque_no": 628541227017908,
+          "value_date": 20240201,
+          "detail": 3170004411,
+          "debit_amount": 131780.65,
+          "credit_amount": null,
+          "balance": 5167157899.63,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.322666+00:00"
+        }
+      ],
+      "message": "Tabel 'col_08_bank_statement_synthetic_t2' berhasil disimpan (31 baris)."
+    },
+    {
+      "status": "success",
+      "table_name": "col_08_bank_statement_synthetic_t4",
+      "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+      "total_rows_ingested": 30,
+      "columns": [
+        "posting_date",
+        "transaction_description",
+        "reference_cheque_no",
+        "value_date",
+        "detail",
+        "debit_amount",
+        "credit_amount",
+        "balance"
+      ],
+      "verification_report": {
+        "table_name": "col_08_bank_statement_synthetic_t4",
+        "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+        "is_valid": true,
+        "confidence_score": 1.0,
+        "verification_status": "verified",
+        "checks": [
+          {
+            "check_name": "row_count_integrity",
+            "passed": true,
+            "details": "SQLite memiliki 30 baris (Ekspektasi: 30 baris).",
+            "metric_value": 30
+          },
+          {
+            "check_name": "columns_registered",
+            "passed": true,
+            "details": "Tabel memiliki 8 kolom terdefinisi: ['posting_date', 'transaction_description', 'reference_cheque_no', 'value_date', 'detail', 'debit_amount', 'credit_amount', 'balance']",
+            "metric_value": 8
+          },
+          {
+            "check_name": "numeric_aggregation_sanity",
+            "passed": true,
+            "details": "Query kalkulasi agregat (SUM & AVG) berjalan sukses tanpa error: {'sum_posting_date': 607206520, 'avg_posting_date': 20240217.333333332, 'sum_reference_cheque_no': 8906381210407856232, 'avg_reference_cheque_no': 2.968793736802619e+17, 'sum_value_date': 607206520, 'avg_value_date': 20240217.333333332, 'sum_detail': 135900109681, 'avg_detail': 4530003656.033334, 'sum_debit_amount': 4537667379.8, 'avg_debit_amount': 283604211.2375, 'sum_credit_amount': 5424874043.48, 'avg_credit_amount': 387491003.10571426, 'sum_balance': 208869549918.28, 'avg_balance': 6962318330.609333}",
+            "metric_value": null
+          },
+          {
+            "check_name": "balance_arithmetic_consistency",
+            "passed": true,
+            "details": "Pemeriksaan kontinuitas saldo (Balance[n-1] + Kredit - Debit = Balance[n]): 0 ketidaksesuaian dari 20 baris sampel.",
+            "metric_value": 0
+          }
+        ],
+        "summary": "Verifikasi data tabel 'col_08_bank_statement_synthetic_t4' selesai dengan status 'verified'. Total 4 pemeriksaan dijalankan (4 passed).",
+        "verified_row_count": 30,
+        "test_queries": [
+          {
+            "query": "SELECT COUNT(*) FROM \"col_08_bank_statement_synthetic_t4\"",
+            "result": 30,
+            "success": true
+          },
+          {
+            "query": "SELECT SUM(\"posting_date\") as sum_posting_date, AVG(\"posting_date\") as avg_posting_date, SUM(\"reference_cheque_no\") as sum_reference_cheque_no, AVG(\"reference_cheque_no\") as avg_reference_cheque_no, SUM(\"value_date\") as sum_value_date, AVG(\"value_date\") as avg_value_date, SUM(\"detail\") as sum_detail, AVG(\"detail\") as avg_detail, SUM(\"debit_amount\") as sum_debit_amount, AVG(\"debit_amount\") as avg_debit_amount, SUM(\"credit_amount\") as sum_credit_amount, AVG(\"credit_amount\") as avg_credit_amount, SUM(\"balance\") as sum_balance, AVG(\"balance\") as avg_balance FROM \"col_08_bank_statement_synthetic_t4\";",
+            "result": {
+              "sum_posting_date": 607206520,
+              "avg_posting_date": 20240217.333333332,
+              "sum_reference_cheque_no": 8906381210407856232,
+              "avg_reference_cheque_no": 2.968793736802619e+17,
+              "sum_value_date": 607206520,
+              "avg_value_date": 20240217.333333332,
+              "sum_detail": 135900109681,
+              "avg_detail": 4530003656.033334,
+              "sum_debit_amount": 4537667379.8,
+              "avg_debit_amount": 283604211.2375,
+              "sum_credit_amount": 5424874043.48,
+              "avg_credit_amount": 387491003.10571426,
+              "sum_balance": 208869549918.28,
+              "avg_balance": 6962318330.609333
+            },
+            "success": true
+          }
+        ],
+        "llm_reflection": null
+      },
+      "sample_data": [
+        {
+          "_row_id": 1,
+          "posting_date": 20240204,
+          "transaction_description": "TRANSFER",
+          "reference_cheque_no": 2741247607312,
+          "value_date": 20240204,
+          "detail": 1150003307,
+          "debit_amount": null,
+          "credit_amount": 207099554.49,
+          "balance": 6349686270.86,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.352134+00:00"
+        },
+        {
+          "_row_id": 2,
+          "posting_date": 20240204,
+          "transaction_description": "OUTGOING RTGS",
+          "reference_cheque_no": 1541228741626,
+          "value_date": 20240204,
+          "detail": 5250000917,
+          "debit_amount": 88756570.2,
+          "credit_amount": null,
+          "balance": 6260929700.66,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.352134+00:00"
+        },
+        {
+          "_row_id": 3,
+          "posting_date": 20240205,
+          "transaction_description": "TRANSFER",
+          "reference_cheque_no": 3263541264244676,
+          "value_date": 20240205,
+          "detail": 8830002194,
+          "debit_amount": null,
+          "credit_amount": 442907259.57,
+          "balance": 6703836960.23,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.352134+00:00"
+        }
+      ],
+      "message": "Tabel 'col_08_bank_statement_synthetic_t4' berhasil disimpan (30 baris)."
+    },
+    {
+      "status": "success",
+      "table_name": "col_08_bank_statement_synthetic_t6",
+      "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+      "total_rows_ingested": 30,
+      "columns": [
+        "posting_date",
+        "transaction_description",
+        "reference_cheque_no",
+        "value_date",
+        "detail",
+        "debit_amount",
+        "credit_amount",
+        "balance"
+      ],
+      "verification_report": {
+        "table_name": "col_08_bank_statement_synthetic_t6",
+        "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+        "is_valid": true,
+        "confidence_score": 1.0,
+        "verification_status": "verified",
+        "checks": [
+          {
+            "check_name": "row_count_integrity",
+            "passed": true,
+            "details": "SQLite memiliki 30 baris (Ekspektasi: 30 baris).",
+            "metric_value": 30
+          },
+          {
+            "check_name": "columns_registered",
+            "passed": true,
+            "details": "Tabel memiliki 8 kolom terdefinisi: ['posting_date', 'transaction_description', 'reference_cheque_no', 'value_date', 'detail', 'debit_amount', 'credit_amount', 'balance']",
+            "metric_value": 8
+          },
+          {
+            "check_name": "numeric_aggregation_sanity",
+            "passed": true,
+            "details": "Query kalkulasi agregat (SUM & AVG) berjalan sukses tanpa error: {'sum_posting_date': 607206595, 'avg_posting_date': 20240219.833333332, 'sum_reference_cheque_no': 109541037724161912, 'avg_reference_cheque_no': 3651367924138730.5, 'sum_value_date': 607206595, 'avg_value_date': 20240219.833333332, 'sum_detail': 146390148631, 'avg_detail': 4879671621.033334, 'sum_debit_amount': 4267898978.7999997, 'avg_debit_amount': 266743686.17499998, 'sum_credit_amount': 4216776959.43, 'avg_credit_amount': 301198354.245, 'sum_balance': 203357918505.09, 'avg_balance': 6778597283.503}",
+            "metric_value": null
+          },
+          {
+            "check_name": "balance_arithmetic_consistency",
+            "passed": true,
+            "details": "Pemeriksaan kontinuitas saldo (Balance[n-1] + Kredit - Debit = Balance[n]): 0 ketidaksesuaian dari 20 baris sampel.",
+            "metric_value": 0
+          }
+        ],
+        "summary": "Verifikasi data tabel 'col_08_bank_statement_synthetic_t6' selesai dengan status 'verified'. Total 4 pemeriksaan dijalankan (4 passed).",
+        "verified_row_count": 30,
+        "test_queries": [
+          {
+            "query": "SELECT COUNT(*) FROM \"col_08_bank_statement_synthetic_t6\"",
+            "result": 30,
+            "success": true
+          },
+          {
+            "query": "SELECT SUM(\"posting_date\") as sum_posting_date, AVG(\"posting_date\") as avg_posting_date, SUM(\"reference_cheque_no\") as sum_reference_cheque_no, AVG(\"reference_cheque_no\") as avg_reference_cheque_no, SUM(\"value_date\") as sum_value_date, AVG(\"value_date\") as avg_value_date, SUM(\"detail\") as sum_detail, AVG(\"detail\") as avg_detail, SUM(\"debit_amount\") as sum_debit_amount, AVG(\"debit_amount\") as avg_debit_amount, SUM(\"credit_amount\") as sum_credit_amount, AVG(\"credit_amount\") as avg_credit_amount, SUM(\"balance\") as sum_balance, AVG(\"balance\") as avg_balance FROM \"col_08_bank_statement_synthetic_t6\";",
+            "result": {
+              "sum_posting_date": 607206595,
+              "avg_posting_date": 20240219.833333332,
+              "sum_reference_cheque_no": 109541037724161912,
+              "avg_reference_cheque_no": 3651367924138730.5,
+              "sum_value_date": 607206595,
+              "avg_value_date": 20240219.833333332,
+              "sum_detail": 146390148631,
+              "avg_detail": 4879671621.033334,
+              "sum_debit_amount": 4267898978.7999997,
+              "avg_debit_amount": 266743686.17499998,
+              "sum_credit_amount": 4216776959.43,
+              "avg_credit_amount": 301198354.245,
+              "sum_balance": 203357918505.09,
+              "avg_balance": 6778597283.503
+            },
+            "success": true
+          }
+        ],
+        "llm_reflection": null
+      },
+      "sample_data": [
+        {
+          "_row_id": 1,
+          "posting_date": 20240207,
+          "transaction_description": "TAX ON INTEREST",
+          "reference_cheque_no": 5807641280972802,
+          "value_date": 20240207,
+          "detail": 9940006612,
+          "debit_amount": 25150.94,
+          "credit_amount": null,
+          "balance": 7029768229.11,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.377242+00:00"
+        },
+        {
+          "_row_id": 2,
+          "posting_date": 20240207,
+          "transaction_description": "BI FAST PAYMENT CR",
+          "reference_cheque_no": 26241243888565,
+          "value_date": 20240207,
+          "detail": 3170007788,
+          "debit_amount": null,
+          "credit_amount": 131025708.66,
+          "balance": 7160793937.77,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.377242+00:00"
+        },
+        {
+          "_row_id": 3,
+          "posting_date": 20240208,
+          "transaction_description": "ADM FEE",
+          "reference_cheque_no": 18341267607051,
+          "value_date": 20240208,
+          "detail": 8830002194,
+          "debit_amount": 32016.79,
+          "credit_amount": null,
+          "balance": 7160761920.98,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.377242+00:00"
+        }
+      ],
+      "message": "Tabel 'col_08_bank_statement_synthetic_t6' berhasil disimpan (30 baris)."
+    },
+    {
+      "status": "success",
+      "table_name": "col_08_bank_statement_synthetic_t8",
+      "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+      "total_rows_ingested": 30,
+      "columns": [
+        "posting_date",
+        "transaction_description",
+        "reference_cheque_no",
+        "value_date",
+        "detail",
+        "debit_amount",
+        "credit_amount",
+        "balance"
+      ],
+      "verification_report": {
+        "table_name": "col_08_bank_statement_synthetic_t8",
+        "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+        "is_valid": true,
+        "confidence_score": 1.0,
+        "verification_status": "verified",
+        "checks": [
+          {
+            "check_name": "row_count_integrity",
+            "passed": true,
+            "details": "SQLite memiliki 30 baris (Ekspektasi: 30 baris).",
+            "metric_value": 30
+          },
+          {
+            "check_name": "columns_registered",
+            "passed": true,
+            "details": "Tabel memiliki 8 kolom terdefinisi: ['posting_date', 'transaction_description', 'reference_cheque_no', 'value_date', 'detail', 'debit_amount', 'credit_amount', 'balance']",
+            "metric_value": 8
+          },
+          {
+            "check_name": "numeric_aggregation_sanity",
+            "passed": true,
+            "details": "Query kalkulasi agregat (SUM & AVG) berjalan sukses tanpa error: {'sum_posting_date': 607206661, 'avg_posting_date': 20240222.033333335, 'sum_reference_cheque_no': 7910823837475820067, 'avg_reference_cheque_no': 2.6369412791586067e+17, 'sum_value_date': 607206661, 'avg_value_date': 20240222.033333335, 'sum_detail': 139920124730, 'avg_detail': 4664004157.666667, 'sum_debit_amount': 8886103852.52, 'avg_debit_amount': 423147802.5009524, 'sum_credit_amount': 3327476004.98, 'avg_credit_amount': 369719556.10888886, 'sum_balance': 114028800134.29, 'avg_balance': 3800960004.476333}",
+            "metric_value": null
+          },
+          {
+            "check_name": "balance_arithmetic_consistency",
+            "passed": true,
+            "details": "Pemeriksaan kontinuitas saldo (Balance[n-1] + Kredit - Debit = Balance[n]): 0 ketidaksesuaian dari 20 baris sampel.",
+            "metric_value": 0
+          }
+        ],
+        "summary": "Verifikasi data tabel 'col_08_bank_statement_synthetic_t8' selesai dengan status 'verified'. Total 4 pemeriksaan dijalankan (4 passed).",
+        "verified_row_count": 30,
+        "test_queries": [
+          {
+            "query": "SELECT COUNT(*) FROM \"col_08_bank_statement_synthetic_t8\"",
+            "result": 30,
+            "success": true
+          },
+          {
+            "query": "SELECT SUM(\"posting_date\") as sum_posting_date, AVG(\"posting_date\") as avg_posting_date, SUM(\"reference_cheque_no\") as sum_reference_cheque_no, AVG(\"reference_cheque_no\") as avg_reference_cheque_no, SUM(\"value_date\") as sum_value_date, AVG(\"value_date\") as avg_value_date, SUM(\"detail\") as sum_detail, AVG(\"detail\") as avg_detail, SUM(\"debit_amount\") as sum_debit_amount, AVG(\"debit_amount\") as avg_debit_amount, SUM(\"credit_amount\") as sum_credit_amount, AVG(\"credit_amount\") as avg_credit_amount, SUM(\"balance\") as sum_balance, AVG(\"balance\") as avg_balance FROM \"col_08_bank_statement_synthetic_t8\";",
+            "result": {
+              "sum_posting_date": 607206661,
+              "avg_posting_date": 20240222.033333335,
+              "sum_reference_cheque_no": 7910823837475820067,
+              "avg_reference_cheque_no": 2.6369412791586067e+17,
+              "sum_value_date": 607206661,
+              "avg_value_date": 20240222.033333335,
+              "sum_detail": 139920124730,
+              "avg_detail": 4664004157.666667,
+              "sum_debit_amount": 8886103852.52,
+              "avg_debit_amount": 423147802.5009524,
+              "sum_credit_amount": 3327476004.98,
+              "avg_credit_amount": 369719556.10888886,
+              "sum_balance": 114028800134.29,
+              "avg_balance": 3800960004.476333
+            },
+            "success": true
+          }
+        ],
+        "llm_reflection": null
+      },
+      "sample_data": [
+        {
+          "_row_id": 1,
+          "posting_date": 20240210,
+          "transaction_description": "CLEARING DEBIT",
+          "reference_cheque_no": 9441234803119,
+          "value_date": 20240210,
+          "detail": 3170007788,
+          "debit_amount": 245742103.18,
+          "credit_amount": null,
+          "balance": 6732929257.5,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.403547+00:00"
+        },
+        {
+          "_row_id": 2,
+          "posting_date": 20240210,
+          "transaction_description": "OUTGOING RTGS",
+          "reference_cheque_no": 771441206645819,
+          "value_date": 20240210,
+          "detail": 2260008845,
+          "debit_amount": 447105324.35,
+          "credit_amount": null,
+          "balance": 6285823933.15,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.403547+00:00"
+        },
+        {
+          "_row_id": 3,
+          "posting_date": 20240211,
+          "transaction_description": "CLEARING DEBIT",
+          "reference_cheque_no": 141239641639,
+          "value_date": 20240211,
+          "detail": 3170000482,
+          "debit_amount": 161207481.2,
+          "credit_amount": null,
+          "balance": 6124616451.95,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.403547+00:00"
+        }
+      ],
+      "message": "Tabel 'col_08_bank_statement_synthetic_t8' berhasil disimpan (30 baris)."
+    },
+    {
+      "status": "success",
+      "table_name": "col_08_bank_statement_synthetic_t10",
+      "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+      "total_rows_ingested": 30,
+      "columns": [
+        "posting_date",
+        "transaction_description",
+        "reference_cheque_no",
+        "value_date",
+        "detail",
+        "debit_amount",
+        "credit_amount",
+        "balance"
+      ],
+      "verification_report": {
+        "table_name": "col_08_bank_statement_synthetic_t10",
+        "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+        "is_valid": true,
+        "confidence_score": 1.0,
+        "verification_status": "verified",
+        "checks": [
+          {
+            "check_name": "row_count_integrity",
+            "passed": true,
+            "details": "SQLite memiliki 30 baris (Ekspektasi: 30 baris).",
+            "metric_value": 30
+          },
+          {
+            "check_name": "columns_registered",
+            "passed": true,
+            "details": "Tabel memiliki 8 kolom terdefinisi: ['posting_date', 'transaction_description', 'reference_cheque_no', 'value_date', 'detail', 'debit_amount', 'credit_amount', 'balance']",
+            "metric_value": 8
+          },
+          {
+            "check_name": "numeric_aggregation_sanity",
+            "passed": true,
+            "details": "Query kalkulasi agregat (SUM & AVG) berjalan sukses tanpa error: {'sum_posting_date': 607206718, 'avg_posting_date': 20240223.933333334, 'sum_reference_cheque_no': 2089047737408650099, 'avg_reference_cheque_no': 6.963492458028834e+16, 'sum_value_date': 607206718, 'avg_value_date': 20240223.933333334, 'sum_detail': 129330143580, 'avg_detail': 4311004786.0, 'sum_debit_amount': 5087136294.0, 'avg_debit_amount': 267744015.47368422, 'sum_credit_amount': 5822652495.28, 'avg_credit_amount': 529332045.0254545, 'sum_balance': 84457130174.46, 'avg_balance': 2815237672.4820004}",
+            "metric_value": null
+          },
+          {
+            "check_name": "balance_arithmetic_consistency",
+            "passed": true,
+            "details": "Pemeriksaan kontinuitas saldo (Balance[n-1] + Kredit - Debit = Balance[n]): 0 ketidaksesuaian dari 20 baris sampel.",
+            "metric_value": 0
+          }
+        ],
+        "summary": "Verifikasi data tabel 'col_08_bank_statement_synthetic_t10' selesai dengan status 'verified'. Total 4 pemeriksaan dijalankan (4 passed).",
+        "verified_row_count": 30,
+        "test_queries": [
+          {
+            "query": "SELECT COUNT(*) FROM \"col_08_bank_statement_synthetic_t10\"",
+            "result": 30,
+            "success": true
+          },
+          {
+            "query": "SELECT SUM(\"posting_date\") as sum_posting_date, AVG(\"posting_date\") as avg_posting_date, SUM(\"reference_cheque_no\") as sum_reference_cheque_no, AVG(\"reference_cheque_no\") as avg_reference_cheque_no, SUM(\"value_date\") as sum_value_date, AVG(\"value_date\") as avg_value_date, SUM(\"detail\") as sum_detail, AVG(\"detail\") as avg_detail, SUM(\"debit_amount\") as sum_debit_amount, AVG(\"debit_amount\") as avg_debit_amount, SUM(\"credit_amount\") as sum_credit_amount, AVG(\"credit_amount\") as avg_credit_amount, SUM(\"balance\") as sum_balance, AVG(\"balance\") as avg_balance FROM \"col_08_bank_statement_synthetic_t10\";",
+            "result": {
+              "sum_posting_date": 607206718,
+              "avg_posting_date": 20240223.933333334,
+              "sum_reference_cheque_no": 2089047737408650099,
+              "avg_reference_cheque_no": 6.963492458028834e+16,
+              "sum_value_date": 607206718,
+              "avg_value_date": 20240223.933333334,
+              "sum_detail": 129330143580,
+              "avg_detail": 4311004786.0,
+              "sum_debit_amount": 5087136294.0,
+              "avg_debit_amount": 267744015.47368422,
+              "sum_credit_amount": 5822652495.28,
+              "avg_credit_amount": 529332045.0254545,
+              "sum_balance": 84457130174.46,
+              "avg_balance": 2815237672.4820004
+            },
+            "success": true
+          }
+        ],
+        "llm_reflection": null
+      },
+      "sample_data": [
+        {
+          "_row_id": 1,
+          "posting_date": 20240213,
+          "transaction_description": "BI FAST PAYMENT DB",
+          "reference_cheque_no": 941259542251,
+          "value_date": 20240213,
+          "detail": 3170007788,
+          "debit_amount": 438661946.61,
+          "credit_amount": null,
+          "balance": 981381566.53,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.438827+00:00"
+        },
+        {
+          "_row_id": 2,
+          "posting_date": 20240213,
+          "transaction_description": "BI FAST PAYMENT CR",
+          "reference_cheque_no": 44341255297533,
+          "value_date": 20240213,
+          "detail": 3170004411,
+          "debit_amount": null,
+          "credit_amount": 803051636.74,
+          "balance": 1784433203.27,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.438827+00:00"
+        },
+        {
+          "_row_id": 3,
+          "posting_date": 20240214,
+          "transaction_description": "BI FAST PAYMENT CR",
+          "reference_cheque_no": 729741257623001,
+          "value_date": 20240214,
+          "detail": 3170007788,
+          "debit_amount": null,
+          "credit_amount": 661411809.28,
+          "balance": 2445845012.55,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.438827+00:00"
+        }
+      ],
+      "message": "Tabel 'col_08_bank_statement_synthetic_t10' berhasil disimpan (30 baris)."
+    },
+    {
+      "status": "success",
+      "table_name": "col_08_bank_statement_synthetic_t12",
+      "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+      "total_rows_ingested": 30,
+      "columns": [
+        "posting_date",
+        "transaction_description",
+        "reference_cheque_no",
+        "value_date",
+        "detail",
+        "debit_amount",
+        "credit_amount",
+        "balance"
+      ],
+      "verification_report": {
+        "table_name": "col_08_bank_statement_synthetic_t12",
+        "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+        "is_valid": true,
+        "confidence_score": 1.0,
+        "verification_status": "verified",
+        "checks": [
+          {
+            "check_name": "row_count_integrity",
+            "passed": true,
+            "details": "SQLite memiliki 30 baris (Ekspektasi: 30 baris).",
+            "metric_value": 30
+          },
+          {
+            "check_name": "columns_registered",
+            "passed": true,
+            "details": "Tabel memiliki 8 kolom terdefinisi: ['posting_date', 'transaction_description', 'reference_cheque_no', 'value_date', 'detail', 'debit_amount', 'credit_amount', 'balance']",
+            "metric_value": 8
+          },
+          {
+            "check_name": "numeric_aggregation_sanity",
+            "passed": true,
+            "details": "Query kalkulasi agregat (SUM & AVG) berjalan sukses tanpa error: {'sum_posting_date': 607206766, 'avg_posting_date': 20240225.533333335, 'sum_reference_cheque_no': 658563837560526492, 'avg_reference_cheque_no': 2.1952127918684216e+16, 'sum_value_date': 607206766, 'avg_value_date': 20240225.533333335, 'sum_detail': 147980141748, 'avg_detail': 4932671391.6, 'sum_debit_amount': 3593050250.34, 'avg_debit_amount': 224565640.64625, 'sum_credit_amount': 6529100455.33, 'avg_credit_amount': 466364318.23785716, 'sum_balance': 103199412938.22, 'avg_balance': 3439980431.274}",
+            "metric_value": null
+          },
+          {
+            "check_name": "balance_arithmetic_consistency",
+            "passed": true,
+            "details": "Pemeriksaan kontinuitas saldo (Balance[n-1] + Kredit - Debit = Balance[n]): 0 ketidaksesuaian dari 20 baris sampel.",
+            "metric_value": 0
+          }
+        ],
+        "summary": "Verifikasi data tabel 'col_08_bank_statement_synthetic_t12' selesai dengan status 'verified'. Total 4 pemeriksaan dijalankan (4 passed).",
+        "verified_row_count": 30,
+        "test_queries": [
+          {
+            "query": "SELECT COUNT(*) FROM \"col_08_bank_statement_synthetic_t12\"",
+            "result": 30,
+            "success": true
+          },
+          {
+            "query": "SELECT SUM(\"posting_date\") as sum_posting_date, AVG(\"posting_date\") as avg_posting_date, SUM(\"reference_cheque_no\") as sum_reference_cheque_no, AVG(\"reference_cheque_no\") as avg_reference_cheque_no, SUM(\"value_date\") as sum_value_date, AVG(\"value_date\") as avg_value_date, SUM(\"detail\") as sum_detail, AVG(\"detail\") as avg_detail, SUM(\"debit_amount\") as sum_debit_amount, AVG(\"debit_amount\") as avg_debit_amount, SUM(\"credit_amount\") as sum_credit_amount, AVG(\"credit_amount\") as avg_credit_amount, SUM(\"balance\") as sum_balance, AVG(\"balance\") as avg_balance FROM \"col_08_bank_statement_synthetic_t12\";",
+            "result": {
+              "sum_posting_date": 607206766,
+              "avg_posting_date": 20240225.533333335,
+              "sum_reference_cheque_no": 658563837560526492,
+              "avg_reference_cheque_no": 2.1952127918684216e+16,
+              "sum_value_date": 607206766,
+              "avg_value_date": 20240225.533333335,
+              "sum_detail": 147980141748,
+              "avg_detail": 4932671391.6,
+              "sum_debit_amount": 3593050250.34,
+              "avg_debit_amount": 224565640.64625,
+              "sum_credit_amount": 6529100455.33,
+              "avg_credit_amount": 466364318.23785716,
+              "sum_balance": 103199412938.22,
+              "avg_balance": 3439980431.274
+            },
+            "success": true
+          }
+        ],
+        "llm_reflection": null
+      },
+      "sample_data": [
+        {
+          "_row_id": 1,
+          "posting_date": 20240216,
+          "transaction_description": "TAX ON INTEREST",
+          "reference_cheque_no": 86241219399603,
+          "value_date": 20240216,
+          "detail": 7710005520,
+          "debit_amount": 88389.65,
+          "credit_amount": null,
+          "balance": 2155471324.77,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.471247+00:00"
+        },
+        {
+          "_row_id": 2,
+          "posting_date": 20240216,
+          "transaction_description": "TAX ON INTEREST",
+          "reference_cheque_no": 22741259875072,
+          "value_date": 20240216,
+          "detail": 2260008845,
+          "debit_amount": 31490.89,
+          "credit_amount": null,
+          "balance": 2155439833.88,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.471247+00:00"
+        },
+        {
+          "_row_id": 3,
+          "posting_date": 20240217,
+          "transaction_description": "BI FAST PAYMENT DB",
+          "reference_cheque_no": 69623441225926248,
+          "value_date": 20240217,
+          "detail": 5250009183,
+          "debit_amount": 444054215.7,
+          "credit_amount": null,
+          "balance": 1711385618.18,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.471247+00:00"
+        }
+      ],
+      "message": "Tabel 'col_08_bank_statement_synthetic_t12' berhasil disimpan (30 baris)."
+    },
+    {
+      "status": "success",
+      "table_name": "col_08_bank_statement_synthetic_t14",
+      "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+      "total_rows_ingested": 30,
+      "columns": [
+        "posting_date",
+        "transaction_description",
+        "reference_cheque_no",
+        "value_date",
+        "detail",
+        "debit_amount",
+        "credit_amount",
+        "balance"
+      ],
+      "verification_report": {
+        "table_name": "col_08_bank_statement_synthetic_t14",
+        "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+        "is_valid": true,
+        "confidence_score": 1.0,
+        "verification_status": "verified",
+        "checks": [
+          {
+            "check_name": "row_count_integrity",
+            "passed": true,
+            "details": "SQLite memiliki 30 baris (Ekspektasi: 30 baris).",
+            "metric_value": 30
+          },
+          {
+            "check_name": "columns_registered",
+            "passed": true,
+            "details": "Tabel memiliki 8 kolom terdefinisi: ['posting_date', 'transaction_description', 'reference_cheque_no', 'value_date', 'detail', 'debit_amount', 'credit_amount', 'balance']",
+            "metric_value": 8
+          },
+          {
+            "check_name": "numeric_aggregation_sanity",
+            "passed": true,
+            "details": "Query kalkulasi agregat (SUM & AVG) berjalan sukses tanpa error: {'sum_posting_date': 607206805, 'avg_posting_date': 20240226.833333332, 'sum_reference_cheque_no': 1022467837630304888, 'avg_reference_cheque_no': 3.4082261254343496e+16, 'sum_value_date': 607206805, 'avg_value_date': 20240226.833333332, 'sum_detail': 144060099764, 'avg_detail': 4802003325.466666, 'sum_debit_amount': 7614758529.01, 'avg_debit_amount': 362607549.0004762, 'sum_credit_amount': 2867582456.26, 'avg_credit_amount': 318620272.9177778, 'sum_balance': 68154115995.82, 'avg_balance': 2271803866.5273333}",
+            "metric_value": null
+          },
+          {
+            "check_name": "balance_arithmetic_consistency",
+            "passed": true,
+            "details": "Pemeriksaan kontinuitas saldo (Balance[n-1] + Kredit - Debit = Balance[n]): 0 ketidaksesuaian dari 20 baris sampel.",
+            "metric_value": 0
+          }
+        ],
+        "summary": "Verifikasi data tabel 'col_08_bank_statement_synthetic_t14' selesai dengan status 'verified'. Total 4 pemeriksaan dijalankan (4 passed).",
+        "verified_row_count": 30,
+        "test_queries": [
+          {
+            "query": "SELECT COUNT(*) FROM \"col_08_bank_statement_synthetic_t14\"",
+            "result": 30,
+            "success": true
+          },
+          {
+            "query": "SELECT SUM(\"posting_date\") as sum_posting_date, AVG(\"posting_date\") as avg_posting_date, SUM(\"reference_cheque_no\") as sum_reference_cheque_no, AVG(\"reference_cheque_no\") as avg_reference_cheque_no, SUM(\"value_date\") as sum_value_date, AVG(\"value_date\") as avg_value_date, SUM(\"detail\") as sum_detail, AVG(\"detail\") as avg_detail, SUM(\"debit_amount\") as sum_debit_amount, AVG(\"debit_amount\") as avg_debit_amount, SUM(\"credit_amount\") as sum_credit_amount, AVG(\"credit_amount\") as avg_credit_amount, SUM(\"balance\") as sum_balance, AVG(\"balance\") as avg_balance FROM \"col_08_bank_statement_synthetic_t14\";",
+            "result": {
+              "sum_posting_date": 607206805,
+              "avg_posting_date": 20240226.833333332,
+              "sum_reference_cheque_no": 1022467837630304888,
+              "avg_reference_cheque_no": 3.4082261254343496e+16,
+              "sum_value_date": 607206805,
+              "avg_value_date": 20240226.833333332,
+              "sum_detail": 144060099764,
+              "avg_detail": 4802003325.466666,
+              "sum_debit_amount": 7614758529.01,
+              "avg_debit_amount": 362607549.0004762,
+              "sum_credit_amount": 2867582456.26,
+              "avg_credit_amount": 318620272.9177778,
+              "sum_balance": 68154115995.82,
+              "avg_balance": 2271803866.5273333
+            },
+            "success": true
+          }
+        ],
+        "llm_reflection": null
+      },
+      "sample_data": [
+        {
+          "_row_id": 1,
+          "posting_date": 20240219,
+          "transaction_description": "TRANSFER",
+          "reference_cheque_no": 409441276938835,
+          "value_date": 20240219,
+          "detail": 4180000265,
+          "debit_amount": null,
+          "credit_amount": 822336270.47,
+          "balance": 5913946189.88,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.493199+00:00"
+        },
+        {
+          "_row_id": 2,
+          "posting_date": 20240219,
+          "transaction_description": "TAX ON INTEREST",
+          "reference_cheque_no": 73041268756718,
+          "value_date": 20240219,
+          "detail": 3170000482,
+          "debit_amount": 104979.83,
+          "credit_amount": null,
+          "balance": 5913841210.05,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.493199+00:00"
+        },
+        {
+          "_row_id": 3,
+          "posting_date": 20240220,
+          "transaction_description": "OUTGOING RTGS",
+          "reference_cheque_no": 41203367503,
+          "value_date": 20240220,
+          "detail": 9940006612,
+          "debit_amount": 893185329.21,
+          "credit_amount": null,
+          "balance": 5020655880.84,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.493199+00:00"
+        }
+      ],
+      "message": "Tabel 'col_08_bank_statement_synthetic_t14' berhasil disimpan (30 baris)."
+    },
+    {
+      "status": "success",
+      "table_name": "col_08_bank_statement_synthetic_t16",
+      "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+      "total_rows_ingested": 30,
+      "columns": [
+        "posting_date",
+        "transaction_description",
+        "reference_cheque_no",
+        "value_date",
+        "detail",
+        "debit_amount",
+        "credit_amount",
+        "balance"
+      ],
+      "verification_report": {
+        "table_name": "col_08_bank_statement_synthetic_t16",
+        "database_path": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\output\\databases\\08_bank-statement-SYNTHETIC.sqlite",
+        "is_valid": true,
+        "confidence_score": 1.0,
+        "verification_status": "verified",
+        "checks": [
+          {
+            "check_name": "row_count_integrity",
+            "passed": true,
+            "details": "SQLite memiliki 30 baris (Ekspektasi: 30 baris).",
+            "metric_value": 30
+          },
+          {
+            "check_name": "columns_registered",
+            "passed": true,
+            "details": "Tabel memiliki 8 kolom terdefinisi: ['posting_date', 'transaction_description', 'reference_cheque_no', 'value_date', 'detail', 'debit_amount', 'credit_amount', 'balance']",
+            "metric_value": 8
+          },
+          {
+            "check_name": "numeric_aggregation_sanity",
+            "passed": true,
+            "details": "Query kalkulasi agregat (SUM & AVG) berjalan sukses tanpa error: {'sum_posting_date': 607206835, 'avg_posting_date': 20240227.833333332, 'sum_reference_cheque_no': 116989937466790355, 'avg_reference_cheque_no': 3899664582226345.0, 'sum_value_date': 607206835, 'avg_value_date': 20240227.833333332, 'sum_detail': 151020103369, 'avg_detail': 5034003445.633333, 'sum_debit_amount': 8300624333.16, 'avg_debit_amount': 461145796.28666663, 'sum_credit_amount': 5434632053.07, 'avg_credit_amount': 452886004.42249995, 'sum_balance': -18023673865.09, 'avg_balance': -600789128.8363334}",
+            "metric_value": null
+          },
+          {
+            "check_name": "balance_arithmetic_consistency",
+            "passed": true,
+            "details": "Pemeriksaan kontinuitas saldo (Balance[n-1] + Kredit - Debit = Balance[n]): 0 ketidaksesuaian dari 20 baris sampel.",
+            "metric_value": 0
+          }
+        ],
+        "summary": "Verifikasi data tabel 'col_08_bank_statement_synthetic_t16' selesai dengan status 'verified'. Total 4 pemeriksaan dijalankan (4 passed).",
+        "verified_row_count": 30,
+        "test_queries": [
+          {
+            "query": "SELECT COUNT(*) FROM \"col_08_bank_statement_synthetic_t16\"",
+            "result": 30,
+            "success": true
+          },
+          {
+            "query": "SELECT SUM(\"posting_date\") as sum_posting_date, AVG(\"posting_date\") as avg_posting_date, SUM(\"reference_cheque_no\") as sum_reference_cheque_no, AVG(\"reference_cheque_no\") as avg_reference_cheque_no, SUM(\"value_date\") as sum_value_date, AVG(\"value_date\") as avg_value_date, SUM(\"detail\") as sum_detail, AVG(\"detail\") as avg_detail, SUM(\"debit_amount\") as sum_debit_amount, AVG(\"debit_amount\") as avg_debit_amount, SUM(\"credit_amount\") as sum_credit_amount, AVG(\"credit_amount\") as avg_credit_amount, SUM(\"balance\") as sum_balance, AVG(\"balance\") as avg_balance FROM \"col_08_bank_statement_synthetic_t16\";",
+            "result": {
+              "sum_posting_date": 607206835,
+              "avg_posting_date": 20240227.833333332,
+              "sum_reference_cheque_no": 116989937466790355,
+              "avg_reference_cheque_no": 3899664582226345.0,
+              "sum_value_date": 607206835,
+              "avg_value_date": 20240227.833333332,
+              "sum_detail": 151020103369,
+              "avg_detail": 5034003445.633333,
+              "sum_debit_amount": 8300624333.16,
+              "avg_debit_amount": 461145796.28666663,
+              "sum_credit_amount": 5434632053.07,
+              "avg_credit_amount": 452886004.42249995,
+              "sum_balance": -18023673865.09,
+              "avg_balance": -600789128.8363334
+            },
+            "success": true
+          }
+        ],
+        "llm_reflection": null
+      },
+      "sample_data": [
+        {
+          "_row_id": 1,
+          "posting_date": 20240222,
+          "transaction_description": "INCOMING SKN",
+          "reference_cheque_no": 6641287500601,
+          "value_date": 20240222,
+          "detail": 2260008845,
+          "debit_amount": null,
+          "credit_amount": 306825627.86,
+          "balance": 651259474.52,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.529741+00:00"
+        },
+        {
+          "_row_id": 2,
+          "posting_date": 20240222,
+          "transaction_description": "BI FAST PAYMENT CR",
+          "reference_cheque_no": 341226664460,
+          "value_date": 20240222,
+          "detail": 2260008845,
+          "debit_amount": null,
+          "credit_amount": 727388825.89,
+          "balance": 1378648300.41,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.529741+00:00"
+        },
+        {
+          "_row_id": 3,
+          "posting_date": 20240223,
+          "transaction_description": "OUTGOING RTGS",
+          "reference_cheque_no": 6841206494108,
+          "value_date": 20240223,
+          "detail": 8830002194,
+          "debit_amount": 827391134.17,
+          "credit_amount": null,
+          "balance": 551257166.24,
+          "_source_doc": "C:\\Users\\HYPE AMD\\Documents\\Coding\\jds-magang\\input\\test-utama-sekarang\\08_bank-statement-SYNTHETIC.pdf",
+          "_ingested_at": "2026-08-24T07:33:53.529741+00:00"
+        }
+      ],
+      "message": "Tabel 'col_08_bank_statement_synthetic_t16' berhasil disimpan (30 baris)."
+    }
+  ]
+}

@@ -22,10 +22,10 @@ import sys
 from pathlib import Path
 
 # Pastikan output stream di Windows menggunakan encoding UTF-8
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+for _stream in (sys.stdout, sys.stderr):
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if callable(_reconfigure):
+        _reconfigure(encoding="utf-8", errors="replace")
 
 from app.agents import AGENT_REGISTRY
 from app.batch import batch_extract_documents, scan_document_directories
@@ -112,8 +112,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    Total Dokumen: {f_info['total_documents']} ({ext_str})")
                 print(f"    Contoh File: {', '.join(f_info['sample_files'][:3])}\n")
             return 0
-        except Exception as e:  # noqa: BLE001
-            logger.error("Gagal saat memindai folder: %s", e, exc_info=True)
+        except Exception:
+            logger.exception("Gagal saat memindai folder")
             return 1
 
     # 2. Mode Batch Ekstraksi dari Folder Terpilih (--batch-folders)
@@ -260,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(ch["content"], file=sys.stderr)
                 print("-" * 40, file=sys.stderr)
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error(
             "Terjadi kesalahan saat memproses '%s': %s\n"
             "Info konfigurasi endpoint: VLM_BASE_URL='%s', VLM_MODEL='%s'.\n"

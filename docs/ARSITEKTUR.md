@@ -4,7 +4,7 @@ Dokumen rujukan untuk seluruh logika di repo ini: apa yang dikerjakan tiap modul
 algoritma apa yang dipakai, dari mana asalnya, dan bagian mana dari sitasi itu
 yang benar-benar dipakai.
 
-Status per 21 Agustus 2026, cabang `main`.
+Status per 27 Agustus 2026, cabang `main`.
 
 ---
 
@@ -44,7 +44,7 @@ main.py / mcp_server.py
 
 | Modul | Tugas | Catatan algoritma |
 |---|---|---|
-| `config.py` | Loader `.env` minimal tanpa dependensi | `Settings` beku (`frozen=True`), singleton lazy |
+| `config.py` | Loader `.env` minimal tanpa dependensi | `Settings` beku (`frozen=True`), singleton lazy; `setup_logging` terpusat |
 | `preprocess.py` | Auto-orientasi EXIF, autocontrast, paksa RGB | `ImageOps.autocontrast(cutoff=0.5)` + `ImageEnhance.Contrast(1.2)` |
 | `llm.py` | Builder `ChatOpenAI` untuk endpoint OpenAI-compatible | `enable_thinking` dikirim lewat `extra_body`, bukan `model_kwargs` |
 | `ocr.py` | OCR grounding lewat VLM kecil | Dipakai sebagai *referensi ejaan*, bukan sumber utama |
@@ -53,11 +53,13 @@ main.py / mcp_server.py
 | `agents.py` | Registry agent per spec, mendukung kombinasi | Spec majemuk membentuk agent komposit `a+b` |
 | `graph.py` | Orkestrasi 4 node | Tiap node menangkap exception dan turun ke fallback |
 | `pdf.py` | Render & orkestrasi PDF multi-halaman | Batch 10 halaman, konteks 400 karakter terakhir dioper |
-| `ppt.py` | Ekstraksi PPTX/PPT | Batch 10 slide (workaround limit lisensi Spire Free) |
+| `ppt.py` | Ekstraksi PPTX/PPT | Renderer LibreOffice headless (satu-satunya backend; PPT/PPTX → PDF → PyMuPDF → PNG); jalur utama render→VLM (`process_presentation_vision`), parser native di balik `--ppt-native`; batching bertahap per 10 slide untuk memori & progres log |
 | `multi_page.py` | Jahit halaman, bersihkan artefak, simulasi chunking | Regex nomor halaman, penyambungan paragraf terpotong |
 | `batch.py` | Pemindaian folder & ekstraksi massal | — |
-| `deep_agent.py` | Harness `deepagents` dengan 6 sub-agent | Master orchestrator mendelegasi per jenis file |
-| `mcp_server.py`, `mcp_agent_server.py` | Antarmuka MCP | 935 baris untuk agent server (tooling anotasi/gold set) |
+| `schemas.py` | Kontrak data Pydantic seluruh pipeline | Dokumen & chunking; klasifikasi tabel, skema SQL, laporan verifikasi |
+| `tabular_db.py` | Tabel transaksional → SQLite + verifikasi ganda | Heuristik densitas angka/tanggal, normalisasi format angka ID/US, cek kontinuitas saldo |
+| `deep_agent.py` | Harness `deepagents` dengan 7 sub-agent | Master orchestrator mendelegasi per jenis file; `tabular-db-specialist` memegang jalur SQLite |
+| `mcp_server.py`, `mcp_agent_server.py` | Antarmuka MCP | 1023 baris untuk agent server (tooling anotasi/gold set) |
 
 **Algoritma penting di jalur ini**
 
@@ -86,8 +88,9 @@ surveyor.py   (geometri, tanpa LLM)  →  SurveyReport
 hierarchy.py  (struktur, tanpa LLM)  →  pohon + audit + Markdown
 ```
 
-Belum tersambung ke `graph.py`; keduanya masih berdiri sendiri dan dijalankan
-lewat CLI. Rencana penyatuannya ada di §7.
+Belum tersambung ke `graph.py`; keduanya masih berdiri sendiri: `surveyor.py`
+dijalankan lewat CLI (`python -m app.surveyor`), `hierarchy.py` dipakai sebagai
+pustaka dan diuji lewat `tests/test_hierarchy.py`. Rencana penyatuannya ada di §7.
 
 ---
 
