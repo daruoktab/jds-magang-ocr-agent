@@ -145,28 +145,23 @@ server = MCPServer(
         "sebagai gold data example, serta pemisahan data tabular ke SQLite dengan double-verification."
     ),
     instructions=(
-        "Alur kerja wajib agent saat membuat gold data example:\n"
+        "Alur kerja wajib agent saat membuat gold data example (Batch-by-Batch Pipeline):\n"
         "1. Panggil 'scan_document_folders' untuk menampilkan daftar folder dokumen yang tersedia.\n"
         "2. TANYAKAN KE USER folder mana yang datanya ingin diproses (user memilih, mis. 'input/ppt/english').\n"
         "3. TANYAKAN KE USER berapa banyak data random yang ingin dibuat (tanpa duplikasi).\n"
         "4. Panggil 'select_random_documents' dengan pilihan folder dan jumlah dari user.\n"
-        "5. PROSES SATU DOKUMEN PER SATU HINGGA SELESAI SEMUA BATCH-NYA (jangan pindah ke dokumen\n"
-        "   berikutnya sebelum dokumen ini disimpan):\n"
-        "   a. Untuk PPTX: 'render_presentation_slides' (start_slide=1) — tool mengirim 10 slide per batch.\n"
-        "      Baca gambar secara visual, tulis Markdown batch itu (sertakan penanda halaman/slide\n"
-        "      standar: <!-- SLIDE: N -->). Jika summary has_more=true, ulangi panggilan dengan\n"
-        "      start_slide = next_start_slide hingga has_more=false. Gabungkan Markdown kumulatif.\n"
-        "   b. Untuk PDF: 'convert_pdf_to_images' (start_page=1) — sama, ulangi dengan\n"
-        "      start_page = next_start_page hingga has_more=false, kumulatifkan Markdown-nya.\n"
-        "      Gunakan 'preprocess_image' bila gambar perlu diperbaiki orientasi/kontras (juga mengirim\n"
-        "      gambar hasil ke model).\n"
-        "   c. Tulis sendiri Markdown-nya dari gambar yang dilihat (OCR/ekstraksi teks tidak tersedia\n"
-        "      di server ini).\n"
-        "   d. Setelah SEMUA BATCH SELESAI (has_more=false), simpan Markdown kumulatif LEBIH DARI SATU\n"
-        "      HALAMAN/SLIDE ke 'save_extraction_result' (file sumber = dokumen asli, bukan gambar).\n"
-        "   e. BARU setelah save_extraction_result mengembalikan status success, lanjut ke dokumen\n"
-        "      berikutnya dari daftar yang dipilih.\n"
-        "6. Gunakan 'preview_markdown_chunks' untuk validasi kesiapan chunking sebelum disimpan.\n"
+        "5. PROSES DOKUMEN SECARA INKREMENTAL PER-BATCH (10 halaman/slide setiap kali baca & tulis):\n"
+        "   a. Untuk PPTX / PDF: Panggil 'render_presentation_slides' (start_slide=1) atau\n"
+        "      'convert_pdf_to_images' (start_page=1) — tool mengirim maksimal 10 gambar per batch.\n"
+        "   b. Baca 10 gambar tersebut secara visual, tulis Markdown untuk batch halaman/slide tersebut\n"
+        "      (sertakan penanda standar: <!-- SLIDE: N --> atau <!-- PAGE: N -->).\n"
+        "   c. LANGSUNG SIMPAN batch tersebut ke 'save_extraction_result' (file sumber = dokumen asli,\n"
+        "      bukan gambar). Server secara otomatis menggabungkan (merge & append) halaman ke file disk.\n"
+        "   d. Jika respon 'has_more=true', ulangi langkah (a-c) dengan start_slide / start_page berikutnya\n"
+        "      (mis. start=11, lalu start=21, dst.) hingga seluruh dokumen selesai.\n"
+        "   e. Setelah seluruh halaman selesai tersimpan (status=success, is_complete=true), baru pindah\n"
+        "      ke dokumen berikutnya dari daftar yang dipilih.\n"
+        "6. Gunakan 'preview_markdown_chunks' jika ingin memeriksa simulasi chunking Markdown.\n"
         "7. Jangan pernah memilih folder atau jumlah data sendiri tanpa persetujuan user."
     ),
     version="0.1.0",
@@ -559,10 +554,10 @@ def render_presentation_slides(
         "has_more": has_more,
         "next_start_slide": next_start,
         "instruction": (
-            "Batch ini selesai. Lanjutkan dengan start_slide="
-            f"{next_start} hingga has_more=false, lalu simpan Markdown ke 'save_extraction_result'."
+            f"Batch slide {first}..{last} selesai dirender. Silakan tulis Markdown untuk batch ini "
+            f"dan panggil 'save_extraction_result'. Jika has_more=true, lanjutkan ke start_slide={next_start}."
             if has_more
-            else "Seluruh slide dokumen ini selesai. Sekarang simpan Markdown kumulatif ke 'save_extraction_result'."
+            else "Seluruh slide dokumen selesai. Simpan batch ini ke 'save_extraction_result' untuk finalisasi dokumen."
         ),
     }
     return _build_image_result(summary, images, max_images=None)
@@ -576,9 +571,8 @@ def render_presentation_slides(
         "membaca halaman PDF secara visual. Default output: output/rendered_pages/<nama_file_tanpa_ekstensi>/. "
         "Gunakan 'dpi' untuk mengatur resolusi (default 200), 'start_page' (1-based, default 1) untuk "
         "memulai batch, dan 'max_images' (default 10) untuk jumlah halaman per batch. "
-        "Ulangi panggilan dengan start_page = next_start_page hingga has_more=false (seluruh halaman "
-        "selesai) sebelum menyimpan Markdown ke 'save_extraction_result'. Proses SATU FILE sampai "
-        "selesai semua batch-nya, BARU pindah ke file berikutnya."
+        "Setelah setiap batch, tulis Markdown batch tersebut dan panggil 'save_extraction_result'. "
+        "Ulangi panggilan dengan start_page = next_start_page hingga has_more=false."
     ),
 )
 def convert_pdf_to_images(
@@ -648,10 +642,10 @@ def convert_pdf_to_images(
         "has_more": has_more,
         "next_start_page": next_start,
         "instruction": (
-            "Batch ini selesai. Lanjutkan dengan start_page="
-            f"{next_start} hingga has_more=false, lalu simpan Markdown ke 'save_extraction_result'."
+            f"Batch halaman {first}..{last} selesai dirender. Silakan tulis Markdown untuk batch ini "
+            f"dan panggil 'save_extraction_result'. Jika has_more=true, lanjutkan ke start_page={next_start}."
             if has_more
-            else "Seluruh halaman dokumen ini selesai. Sekarang simpan Markdown kumulatif ke 'save_extraction_result'."
+            else "Seluruh halaman dokumen selesai. Simpan batch ini ke 'save_extraction_result' untuk finalisasi dokumen."
         ),
     }
     return _build_image_result(summary, images, max_images=None)
@@ -874,10 +868,9 @@ def inspect_tabular_database(
     name="save_extraction_result",
     description=(
         "Simpan hasil ekstraksi Markdown yang telah ditulis sendiri oleh agent (hasil membaca gambar dokumen "
-        "secara visual) sebagai gold data example untuk melatih agent/LLM lokal. File disimpan sebagai "
-        "<nama_dokumen>.md di output_dir, disertai sidecar <nama_dokumen>.meta.json berisi metadata "
-        "(file sumber, spesifikasi layout, struktur per-halaman/slide yang terdeteksi secara sistem, "
-        "informasi tabel SQLite jika ada data transaksional, timestamp, statistik)."
+        "secara visual) sebagai gold data example untuk melatih agent/LLM lokal. Mendukung penyimpanan "
+        "inkremental per batch 10 halaman/slide (otomatis di-merge dan di-append ke file <nama_dokumen>.md). "
+        "Menyimpan sidecar <nama_dokumen>.meta.json serta mengekstrak data tabular ke SQLite ketika seluruh dokumen selesai."
     ),
 )
 def save_extraction_result(
@@ -889,10 +882,11 @@ def save_extraction_result(
 ) -> str:
     """
     Simpan Markdown hasil ekstraksi agent beserta metadata gold data, struktur halaman, dan ingesti SQLite jika ada tabel transaksional.
+    Mendukung penyimpanan inkremental per-batch.
 
     Args:
         source_file: Path file dokumen sumber yang telah dibaca agent.
-        markdown: Konten Markdown hasil ekstraksi yang ditulis agent.
+        markdown: Konten batch/dokumen Markdown hasil ekstraksi yang ditulis agent.
         specs: Spesifikasi layout yang digunakan ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides', atau komposit).
         output_dir: Direktori tujuan penyimpanan gold data.
         ingest_transactional_tables: Otomatis ingest tabel transaksional ke database SQLite jika terdeteksi.
@@ -905,18 +899,26 @@ def save_extraction_result(
         return f"ERROR: File sumber tidak ditemukan: {src}"
 
     try:
-        from .multi_page import split_markdown_by_pages
+        from .multi_page import merge_and_stitch_markdown_pages
 
         out_base = Path(output_dir).resolve()
         out_base.mkdir(parents=True, exist_ok=True)
 
-        clean_md = markdown.strip() + "\n"
-        pages_parsed = split_markdown_by_pages(clean_md)
-
-        # --- Gate riil: validasi kelengkapan batch ---
         ext = src.suffix.lower()
+        is_slide = ext in (".pptx", ".ppt")
+
+        out_md = out_base / f"{src.stem}.md"
+        existing_md = out_md.read_text(encoding="utf-8") if out_md.exists() else None
+
+        clean_incoming = markdown.strip() + "\n"
+        merged_md, pages_parsed = merge_and_stitch_markdown_pages(
+            existing_md, clean_incoming, is_slide=is_slide
+        )
+
+        out_md.write_text(merged_md, encoding="utf-8")
+
         total_pages: int | None = None
-        if ext in (".pptx", ".ppt"):
+        if is_slide:
             try:
                 from .ppt import count_presentation_slides
 
@@ -931,30 +933,13 @@ def save_extraction_result(
             except Exception:  # noqa: BLE001
                 total_pages = None
 
-        if total_pages is not None and total_pages > 1:
-            got_numbers = sorted({p["page_number"] for p in pages_parsed})
-            missing = [n for n in range(1, total_pages + 1) if n not in got_numbers]
-            if missing:
-                return json.dumps(
-                    {
-                        "status": "error",
-                        "message": (
-                            "Markdown BELUM lengkap: file sumber punya "
-                            f"{total_pages} halaman/slide, tetapi Markdown hanya mencakup "
-                            f"{len(got_numbers)} (nomor yang hilang: {missing}). "
-                            "Lanjutkan proses batch berikutnya (has_more=false) hingga semua "
-                            "slide/halaman terbaca, lalu simpan lagi."
-                        ),
-                        "total_pages_in_source": total_pages,
-                        "pages_in_markdown": got_numbers,
-                        "missing_pages": missing,
-                    },
-                    indent=2,
-                    ensure_ascii=False,
-                )
-
-        out_md = out_base / f"{src.stem}.md"
-        out_md.write_text(clean_md, encoding="utf-8")
+        got_numbers = sorted({p["page_number"] for p in pages_parsed})
+        missing = (
+            [n for n in range(1, total_pages + 1) if n not in got_numbers]
+            if (total_pages is not None and total_pages > 1)
+            else []
+        )
+        is_complete = not bool(missing)
 
         page_structure = [
             {
@@ -965,15 +950,14 @@ def save_extraction_result(
             for p in pages_parsed
         ]
 
-        # Otomatis deteksi & ingesti tabel transaksional ke SQLite jika ada
         tabular_info: list[dict[str, Any]] = []
-        if ingest_transactional_tables:
+        if is_complete and ingest_transactional_tables:
             try:
                 db_target_dir = Path("output/databases").resolve()
                 db_target_dir.mkdir(parents=True, exist_ok=True)
                 db_file = db_target_dir / f"{src.stem}.sqlite"
                 ingest_res = extract_and_ingest_tables_from_markdown(
-                    markdown_text=clean_md,
+                    markdown_text=merged_md,
                     source_file=str(src),
                     db_path=db_file,
                 )
@@ -986,15 +970,19 @@ def save_extraction_result(
 
         metadata = {
             "source_file": str(src),
-            "source_extension": src.suffix.lower(),
+            "source_extension": ext,
             "specs": [s.strip() for s in specs.split(",") if s.strip()],
             "extracted_by": "agent",
             "ocr_used": False,
             "saved_at": datetime.now(UTC).isoformat(),
             "markdown_path": str(out_md),
-            "char_count": len(clean_md),
-            "line_count": len(clean_md.splitlines()),
+            "char_count": len(merged_md),
+            "line_count": len(merged_md.splitlines()),
             "total_pages_detected": len(pages_parsed),
+            "total_pages_in_source": total_pages,
+            "is_complete": is_complete,
+            "pages_saved": got_numbers,
+            "missing_pages": missing,
             "page_structure": page_structure,
             "tabular_database_tables": tabular_info,
         }
@@ -1004,8 +992,22 @@ def save_extraction_result(
             json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
+        status_str = "success" if is_complete else "batch_saved"
+        msg = (
+            "Seluruh halaman/slide dokumen telah selesai diekstraksi dan disimpan secara lengkap."
+            if is_complete
+            else f"Batch berhasil digabungkan ke disk ({len(got_numbers)} dari {total_pages} halaman/slide tersimpan). Lanjutkan batch berikutnya untuk nomor: {missing[:10]}..."
+        )
+
         return json.dumps(
-            {"status": "success", **metadata}, indent=2, ensure_ascii=False
+            {
+                "status": status_str,
+                "is_complete": is_complete,
+                "message": msg,
+                **metadata,
+            },
+            indent=2,
+            ensure_ascii=False,
         )
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat menyimpan hasil ekstraksi: {e}"

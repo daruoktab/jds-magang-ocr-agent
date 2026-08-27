@@ -83,6 +83,68 @@ def split_markdown_by_pages(markdown: str) -> list[dict[str, Any]]:
     return pages
 
 
+def extract_preamble(markdown: str) -> str:
+    """Ekstrak teks/judul sebelum penanda halaman pertama jika ada."""
+    m = PAGE_DELIMITER_RE.search(markdown)
+    if m:
+        return markdown[: m.start()].strip()
+    return ""
+
+
+def merge_and_stitch_markdown_pages(
+    existing_markdown: str | None,
+    incoming_markdown: str,
+    *,
+    is_slide: bool = False,
+) -> tuple[str, list[dict[str, Any]]]:
+    """
+    Gabungkan potongan Markdown halaman/slide yang baru diproses dengan Markdown
+    yang sudah ada sebelumnya (inkremental per batch 10 halaman).
+
+    Args:
+        existing_markdown: Konten Markdown yang sudah ada di disk (atau None/kosong jika baru).
+        incoming_markdown: Konten batch Markdown baru dari agent.
+        is_slide: True jika dokumen adalah presentasi (menggunakan tag SLIDE).
+
+    Returns:
+        tuple berisi (merged_full_markdown, sorted_pages_metadata_list).
+    """
+    incoming_pages = split_markdown_by_pages(incoming_markdown)
+    incoming_preamble = extract_preamble(incoming_markdown)
+
+    pages_dict: dict[int, dict[str, Any]] = {}
+    preamble = incoming_preamble
+
+    if existing_markdown and existing_markdown.strip():
+        existing_pages = split_markdown_by_pages(existing_markdown)
+        existing_preamble = extract_preamble(existing_markdown)
+        if not preamble and existing_preamble:
+            preamble = existing_preamble
+        for p in existing_pages:
+            pages_dict[p["page_number"]] = p
+
+    # Timpa atau sisipkan halaman dari batch incoming
+    for p in incoming_pages:
+        pages_dict[p["page_number"]] = p
+
+    sorted_page_numbers = sorted(pages_dict.keys())
+    sorted_pages = [pages_dict[num] for num in sorted_page_numbers]
+
+    blocks: list[str] = []
+    if preamble:
+        blocks.append(preamble)
+
+    for p in sorted_pages:
+        delimiter = format_page_delimiter(p["page_number"], is_slide=is_slide)
+        raw_content = p["content"].strip()
+        cleaned_content = re.sub(r"^(\s*---\s*\n)+", "", raw_content)
+        cleaned_content = re.sub(r"(\n\s*---\s*)+$", "", cleaned_content).strip()
+        blocks.append(f"{delimiter}\n{cleaned_content}")
+
+    merged_full_markdown = "\n\n---\n\n".join(blocks).strip() + "\n"
+    return merged_full_markdown, sorted_pages
+
+
 def stitch_pages_to_markdown(
     pages_markdown: list[str],
     *,
