@@ -21,6 +21,7 @@ dependencies = [
     "python-pptx>=1.0.2",
     "mcp>=1.0.0",
     "requests>=2",
+    "streamlit>=1.40",
 ]
 
 [tool.hatch.build.targets.wheel]
