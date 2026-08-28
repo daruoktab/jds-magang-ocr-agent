@@ -51,7 +51,11 @@ def format_page_delimiter(page_number: int, is_slide: bool = False) -> str:
     return f"<!-- {tag}: {page_number} -->"
 
 
-def split_markdown_by_pages(markdown: str) -> list[dict[str, Any]]:
+def split_markdown_by_pages(
+    markdown: str,
+    default_page_number: int = 1,
+    default_type: str = "page",
+) -> list[dict[str, Any]]:
     """
     Pisahkan teks Markdown berdasarkan penanda halaman/slide standar sistem
     (mis. `<!-- PAGE: 1 -->` atau `<!-- SLIDE: 1 -->`).
@@ -61,7 +65,13 @@ def split_markdown_by_pages(markdown: str) -> list[dict[str, Any]]:
     """
     matches = list(PAGE_DELIMITER_RE.finditer(markdown))
     if not matches:
-        return [{"page_number": 1, "type": "page", "content": markdown.strip()}]
+        return [
+            {
+                "page_number": default_page_number,
+                "type": default_type,
+                "content": markdown.strip(),
+            }
+        ]
 
     pages: list[dict[str, Any]] = []
     for i, m in enumerate(matches):
@@ -95,6 +105,7 @@ def merge_and_stitch_markdown_pages(
     existing_markdown: str | None,
     incoming_markdown: str,
     *,
+    default_page_number: int = 1,
     is_slide: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
     """
@@ -104,19 +115,27 @@ def merge_and_stitch_markdown_pages(
     Args:
         existing_markdown: Konten Markdown yang sudah ada di disk (atau None/kosong jika baru).
         incoming_markdown: Konten batch Markdown baru dari agent.
+        default_page_number: Nomor halaman/slide default jika incoming_markdown tidak memiliki penanda delimiter.
         is_slide: True jika dokumen adalah presentasi (menggunakan tag SLIDE).
 
     Returns:
         tuple berisi (merged_full_markdown, sorted_pages_metadata_list).
     """
-    incoming_pages = split_markdown_by_pages(incoming_markdown)
+    tag_default = "slide" if is_slide else "page"
+    incoming_pages = split_markdown_by_pages(
+        incoming_markdown,
+        default_page_number=default_page_number,
+        default_type=tag_default,
+    )
     incoming_preamble = extract_preamble(incoming_markdown)
 
     pages_dict: dict[int, dict[str, Any]] = {}
     preamble = incoming_preamble
 
     if existing_markdown and existing_markdown.strip():
-        existing_pages = split_markdown_by_pages(existing_markdown)
+        existing_pages = split_markdown_by_pages(
+            existing_markdown, default_type=tag_default
+        )
         existing_preamble = extract_preamble(existing_markdown)
         if not preamble and existing_preamble:
             preamble = existing_preamble

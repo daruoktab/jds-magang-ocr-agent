@@ -75,6 +75,22 @@ TRANSACTIONAL_HEADER_KEYWORDS: set[str] = {
     "fee",
     "biaya",
     "mutasi",
+    "tds",
+    "dhl",
+    "ph",
+    "suhu",
+    "temperature",
+    "elevasi",
+    "elevation",
+    "skor",
+    "score",
+    "nilai",
+    "value",
+    "persentase",
+    "percentage",
+    "korelasi",
+    "correlation",
+    "volume",
 }
 
 # ==============================================================================
@@ -340,6 +356,12 @@ def classify_table_heuristic(
         reasoning_points.append(
             f"Rasio keyword transaksional tinggi ({keyword_ratio:.1%}) dan kepadatan angka/tanggal {numeric_density + date_density:.1%}. "
         )
+    elif numeric_density >= 0.40 and total_rows >= 3 and avg_cell_len <= 45:
+        is_transactional = True
+        table_type = "transactional_log"
+        reasoning_points.append(
+            f"Kepadatan numerik tinggi ({numeric_density:.1%}) pada tabel terstruktur ({total_rows} baris, {total_cols} kolom)."
+        )
     elif avg_cell_len > 70 or (numeric_density < 0.15 and not has_financial_headers):
         is_transactional = False
         table_type = "narrative_matrix"
@@ -493,6 +515,7 @@ class TabularDatabaseManager:
             col_defs = [f'"{col.name}" {col.sql_type}' for col in schema.columns]
             col_defs.insert(0, '"_row_id" INTEGER PRIMARY KEY AUTOINCREMENT')
             col_defs.append('"_source_doc" TEXT')
+            col_defs.append('"_page_number" INTEGER')
             col_defs.append('"_ingested_at" TEXT')
 
             exist_clause = "" if replace else ("IF NOT EXISTS" if if_not_exists else "")
@@ -521,19 +544,24 @@ class TabularDatabaseManager:
         headers: list[str],
         rows: list[list[str]],
         source_doc: str = "",
+        page_number: int | None = None,
         replace: bool = True,
     ) -> int:
         """
         Ingest baris-baris data mentah ke tabel SQLite dengan transformasi tipe data otomatis.
+        Jika replace=False, baris baru di-append ke tabel yang sudah ada.
         """
         self.create_table(schema, if_not_exists=True, replace=replace)
 
         col_names = [col.name for col in schema.columns]
         col_types = {col.name: col.sql_type for col in schema.columns}
 
-        placeholders = ", ".join(["?"] * (len(col_names) + 2))
+        header_to_idx = {sanitize_identifier(h): i for i, h in enumerate(headers)}
+
+        placeholders = ", ".join(["?"] * (len(col_names) + 3))
         insert_cols = ", ".join(
-            [f'"{c}"' for c in col_names] + ['"_source_doc"', '"_ingested_at"']
+            [f'"{c}"' for c in col_names]
+            + ['"_source_doc"', '"_page_number"', '"_ingested_at"']
         )
         insert_sql = (
             f'INSERT INTO "{schema.table_name}" ({insert_cols}) VALUES ({placeholders})'
@@ -544,8 +572,13 @@ class TabularDatabaseManager:
 
         for row_idx, r in enumerate(rows):
             row_values: list[Any] = []
-            for c_idx, col in enumerate(schema.columns):
-                raw_val = r[c_idx] if c_idx < len(r) else ""
+            for col in schema.columns:
+                c_idx = header_to_idx.get(col.name)
+                raw_val = (
+                    r[c_idx]
+                    if (c_idx is not None and c_idx < len(r))
+                    else (r[len(row_values)] if len(row_values) < len(r) else "")
+                )
                 sql_t = col_types.get(col.name, "TEXT")
 
                 if sql_t in ("REAL", "NUMERIC", "INTEGER"):
@@ -558,6 +591,7 @@ class TabularDatabaseManager:
                     row_values.append(clean_cell_text(raw_val))
 
             row_values.append(source_doc)
+            row_values.append(page_number)
             row_values.append(ingested_at)
             prepared_rows.append(tuple(row_values))
 
@@ -566,6 +600,119 @@ class TabularDatabaseManager:
             conn.commit()
 
         return len(prepared_rows)
+
+    def find_matching_table(
+        self,
+        headers: list[str],
+        threshold: float = 0.70,
+    ) -> tuple[str, TableSchema] | None:
+        """
+        Cari tabel eksisting di database yang memiliki kecocokan skema kolom >= threshold.
+        Mengembalikan (table_name, TableSchema) jika ditemukan, atau None jika skema baru.
+        """
+        sanitized_incoming = {sanitize_identifier(h) for h in headers if h.strip()}
+        if not sanitized_incoming:
+            return None
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
+            )
+            tables = [row["name"] for row in cursor.fetchall()]
+
+            best_match: str | None = None
+            best_score: float = 0.0
+            best_schema: TableSchema | None = None
+
+            for t in tables:
+                col_cur = conn.execute(f"PRAGMA table_info('{t}');")
+                cols = [dict(c) for c in col_cur.fetchall()]
+                existing_cols = {
+                    c["name"] for c in cols if not c["name"].startswith("_")
+                }
+                if not existing_cols:
+                    continue
+
+                # Jaccard similarity & overlap
+                intersection = sanitized_incoming.intersection(existing_cols)
+                score = len(intersection) / max(
+                    len(sanitized_incoming), len(existing_cols)
+                )
+
+                if score >= threshold and score > best_score:
+                    best_score = score
+                    best_match = t
+                    valid_sql_types = {
+                        "TEXT",
+                        "INTEGER",
+                        "REAL",
+                        "NUMERIC",
+                        "DATE",
+                        "DATETIME",
+                    }
+                    schema_cols = [
+                        TableColumnSchema(
+                            name=c["name"],
+                            original_name=c["name"],
+                            sql_type=(
+                                c["type"]
+                                if c["type"].upper() in valid_sql_types
+                                else "TEXT"
+                            ),
+                            is_nullable=not bool(c["notnull"]),
+                            description="",
+                            sample_values=[],
+                        )
+                        for c in cols
+                        if not c["name"].startswith("_")
+                    ]
+                    best_schema = TableSchema(
+                        table_name=t,
+                        source_file="",
+                        columns=schema_cols,
+                        primary_key=None,
+                        metadata={"is_continuation": True},
+                    )
+
+            if best_match and best_schema:
+                return best_match, best_schema
+        return None
+
+    def get_active_tables_summary(self) -> list[dict[str, Any]]:
+        """Ambil snapshot ringkas seluruh tabel aktif untuk feedback konteks ke agent."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
+            )
+            tables = [row["name"] for row in cursor.fetchall()]
+
+            summary: list[dict[str, Any]] = []
+            for t in tables:
+                col_cur = conn.execute(f"PRAGMA table_info('{t}');")
+                cols = [dict(c) for c in col_cur.fetchall()]
+                count_cur = conn.execute(f"SELECT COUNT(*) as cnt FROM '{t}';")
+                cnt = count_cur.fetchone()["cnt"]
+                sample_cur = conn.execute(
+                    f"SELECT * FROM '{t}' ORDER BY rowid DESC LIMIT 1;"
+                )
+                last_row = sample_cur.fetchone()
+                last_dict = (
+                    {k: v for k, v in dict(last_row).items() if not k.startswith("_")}
+                    if last_row
+                    else None
+                )
+
+                summary.append(
+                    {
+                        "table_name": t,
+                        "columns": [
+                            c["name"] for c in cols if not c["name"].startswith("_")
+                        ],
+                        "total_rows": cnt,
+                        "last_row": last_dict,
+                    }
+                )
+            return summary
 
     def execute_query(self, sql_query: str, max_rows: int = 100) -> TabularQueryResult:
         """
@@ -639,6 +786,7 @@ class TabularDatabaseManager:
         return {
             "database_path": str(self.db_path),
             "tables": table_details,
+            "active_tables_summary": self.get_active_tables_summary(),
         }
 
 
@@ -868,10 +1016,12 @@ def extract_and_ingest_tables_from_markdown(
     source_file: str = "",
     db_path: str | Path | None = None,
     table_name_prefix: str | None = None,
+    page_number: int | None = None,
+    append_if_matching: bool = True,
     llm: BaseChatModel | None = None,
 ) -> list[TableIngestionResult]:
     """
-    Ekstrak semua tabel dari Markdown, filter tabel transaksional, simpan ke database SQLite,
+    Ekstrak semua tabel dari Markdown, filter tabel transaksional, simpan/append ke database SQLite,
     dan jalankan double-verification otomatis.
     """
     parsed_tables = parse_markdown_tables(markdown_text)
@@ -897,31 +1047,41 @@ def extract_and_ingest_tables_from_markdown(
         if not classification.is_transactional:
             continue
 
-        # 3. Buat skema SQLite
-        table_name = f"{base_prefix}_t{idx}"
-        schema = infer_table_schema(
-            table_name=table_name,
-            headers=headers,
-            rows=rows,
-            source_file=source_file,
-            metadata={"context": context, "original_index": idx},
+        # 3. Cek apakah ada tabel eksisting yang cocok skemanya untuk di-append (kontinuitas multi-halaman)
+        matched = (
+            db_manager.find_matching_table(headers) if append_if_matching else None
         )
 
-        # 4. Ingest data
+        if matched:
+            table_name, schema = matched
+            is_append = True
+        else:
+            table_name = f"{base_prefix}_t{idx}"
+            schema = infer_table_schema(
+                table_name=table_name,
+                headers=headers,
+                rows=rows,
+                source_file=source_file,
+                metadata={"context": context, "original_index": idx},
+            )
+            is_append = False
+
+        # 4. Ingest data (append jika tabel cocok, replace jika tabel baru)
         rows_ingested = db_manager.ingest_records(
             table_name=table_name,
             schema=schema,
             headers=headers,
             rows=rows,
             source_doc=source_file,
-            replace=True,
+            page_number=page_number,
+            replace=not is_append,
         )
 
         # 5. Double-Verification
         sample_md = "\n".join(["|".join(headers)] + ["|".join(r) for r in rows[:5]])
         verif_report = verifier.verify_table(
             table_name=table_name,
-            expected_row_count=len(rows),
+            expected_row_count=None if is_append else len(rows),
             source_markdown_sample=sample_md,
         )
 
@@ -941,7 +1101,11 @@ def extract_and_ingest_tables_from_markdown(
                 columns=[col.name for col in schema.columns],
                 verification_report=verif_report,
                 sample_data=sample_data,
-                message=f"Tabel '{table_name}' berhasil disimpan ({rows_ingested} baris).",
+                message=(
+                    f"Tabel bersambung '{table_name}' berhasil ditambahkan (+{rows_ingested} baris)."
+                    if is_append
+                    else f"Tabel baru '{table_name}' berhasil dibuat ({rows_ingested} baris)."
+                ),
             )
         )
 

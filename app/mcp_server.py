@@ -70,7 +70,7 @@ def render_presentation_slides(
 
     out_dir = Path(output_dir or f"output/rendered_slides/{path_obj.stem}").resolve()
     if out_dir.exists():
-        for old_f in out_dir.glob("slide_*_img_*.*"):
+        for old_f in out_dir.glob("slide_*.*"):
             try:
                 old_f.unlink(missing_ok=True)
             except OSError:
@@ -83,7 +83,7 @@ def render_presentation_slides(
 
         importlib.reload(app.ppt)
         images = app.ppt.render_presentation_slides_to_images(
-            path_obj, output_dir=out_dir
+            path_obj, output_dir=out_dir, image_ext=".jpg"
         )
         return json.dumps(
             {

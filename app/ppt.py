@@ -195,16 +195,18 @@ def render_presentation_slides_to_images(
     output_dir: str | Path | None = None,
     slides: list[int] | None = None,
     dpi: int = 200,
+    image_ext: str = ".jpg",
 ) -> list[Path]:
-    """Render kanvas slide PowerPoint menjadi gambar PNG per slide via LibreOffice -> PDF -> PyMuPDF.
+    """Render kanvas slide PowerPoint menjadi gambar per slide via LibreOffice -> PDF -> PyMuPDF.
 
     Args:
         presentation_path: Path file presentasi (.pptx / .ppt).
         output_dir: Direktori penyimpanan gambar (default: <folder_pptx>/<stem>_slides).
         slides: Daftar indeks slide 0-based yang ingin dirender (None = seluruh slide).
         dpi: Resolusi gambar hasil render (default 200 DPI).
+        image_ext: Format ekstensi gambar (.jpg / .png, default .jpg).
 
-    Nama file: `slide_<N>.png` (N mulai dari 1, sesuai nomor slide asli).
+    Nama file: `slide_<N>.<ext>` (N mulai dari 1, sesuai nomor slide asli).
     Mengembalikan daftar path gambar yang dihasilkan (berurutan).
     """
     import pymupdf
@@ -219,6 +221,8 @@ def render_presentation_slides_to_images(
         else (source.parent / f"{source.stem}_slides").resolve()
     )
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = image_ext if image_ext.startswith(".") else f".{image_ext}"
 
     with tempfile.TemporaryDirectory(prefix="libreoffice_pdf_") as temp_pdf_dir:
         pdf_path = convert_presentation_to_pdf(source, temp_pdf_dir)
@@ -243,7 +247,7 @@ def render_presentation_slides_to_images(
             page = doc[idx]
             pix = page.get_pixmap(matrix=matrix, alpha=False)
             slide_num = idx + 1
-            img_path = out_dir / f"slide_{slide_num}.png"
+            img_path = out_dir / f"slide_{slide_num}{ext}"
             pix.save(str(img_path))
             generated_paths.append(img_path)
             # Progres per batch (SLIDE_BATCH_SIZE) untuk dokumen besar.
