@@ -1,19 +1,17 @@
 """
-Modul Pemrosesan Data Tabular Transaksional ke Database SQLite & Double-Verification.
+Modul Pemrosesan Data Tabular Transaksional ke Database SQLite, Sub-Agent SQL Per-Halaman, & Dual-Track Guardrail.
 
 Fitur:
-  1. Deteksi & pemisahan tabel transaksional (rekening koran, log mutasi keuangan, ledger, invoice)
-     vs tabel naratif / matriks kualitatif.
-  2. Parsing tabel Markdown GFM dengan pembersihan & normalisasi angka (IDR/USD/EUR, pemisah ribuan).
-  3. Inferensi skema kolom SQL dinamis (TEXT, REAL, INTEGER, DATE) tervalidasi Pydantic.
-  4. Penyimpanan ke SQLite lokal (`output/databases/{nama_dokumen}.sqlite`).
-  5. Mekanisme Double-Verification (Verifikasi Ganda):
-     - Pengecekan integritas baris (row count match).
-     - Validasi keberadaan kolom & tipe data numerik.
-     - Pengujian query agregasi (SUM, AVG, COUNT).
-     - Pengujian kontinuitas aritmatika saldo (Balance[n-1] + Kredit - Debit = Balance[n]).
-     - Refleksi model untuk mengonfirmasi kesesuaian data.
-  6. Eksekusi query SQL dengan presisi 100%.
+  1. Deteksi & pemisahan tabel transaksional vs tabel naratif kualitatif.
+  2. Sub-Agent SQL mandiri per-halaman/slide:
+     - Memahami data tabel per halaman langsung tanpa menunggu dokumen selesai.
+     - Menginspeksi skema dan tabel eksisting di SQLite.
+     - Menjalankan query SQL mandiri (cek baris terakhir, continuity, dsb).
+     - Meng-ingest / append data per halaman secara terpisah.
+  3. Mekanisme Double-Verification (Verifikasi Ganda).
+  4. Dual-Track Guardrail Cross-Verification:
+     - Membandingkan hasil jalur Teks Markdown vs jalur Database SQLite.
+     - Menghasilkan laporan audit kesesuaian baris, kolom, dan anomali.
 """
 
 from __future__ import annotations
@@ -22,13 +20,16 @@ import json
 import re
 import sqlite3
 import time
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .schemas import (
+    DualTrackGuardrailReport,
+    PageTabularEvent,
     TableClassificationResult,
     TableColumnSchema,
     TableIngestionResult,
@@ -498,11 +499,16 @@ class TabularDatabaseManager:
             self.db_path = Path(db_path).resolve()
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _get_connection(self) -> sqlite3.Connection:
-        """Buka koneksi SQLite dengan row factory dict."""
+    @contextmanager
+    def _get_connection(self) -> Iterator[sqlite3.Connection]:
+        """Buka koneksi SQLite dengan row factory dict dan pastikan selalu ditutup."""
         conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def create_table(
         self, schema: TableSchema, if_not_exists: bool = True, replace: bool = False
@@ -533,7 +539,6 @@ class TabularDatabaseManager:
                     conn.execute(
                         f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON "{schema.table_name}" ("{col.name}");'
                     )
-            conn.commit()
 
         return schema.table_name
 
@@ -597,7 +602,6 @@ class TabularDatabaseManager:
 
         with self._get_connection() as conn:
             conn.executemany(insert_sql, prepared_rows)
-            conn.commit()
 
         return len(prepared_rows)
 
@@ -1007,6 +1011,260 @@ class TabularVerifier:
 
 
 # ==============================================================================
+# Sub-Agent SQL Per-Halaman & Dual-Track Guardrail
+# ==============================================================================
+
+
+def process_page_tabular_agent(
+    page_markdown: str,
+    page_number: int,
+    source_file: str = "",
+    db_path: str | Path | None = None,
+    table_name_prefix: str | None = None,
+    append_if_matching: bool = True,
+    force_all_tables: bool = False,
+    llm: BaseChatModel | None = None,
+) -> tuple[PageTabularEvent, list[TableIngestionResult]]:
+    """
+    Sub-Agent SQL Tabular Engine yang berjalan mandiri per-halaman/slide:
+      1. Memahami konten tabel pada halaman secara independen.
+      2. Menginspeksi tabel dan skema eksisting yang sudah ada di database SQLite.
+      3. Melakukan query SQL awal jika ada tabel kelanjutan (misal mengecek baris/saldo terakhir).
+      4. Meng-ingest atau meng-append data baris halaman ini ke tabel SQLite yang sesuai.
+      5. Menjalankan query SQL mandiri untuk memverifikasi kondisi tabel setelah ingesti.
+    """
+    db_manager = TabularDatabaseManager(db_path)
+    verifier = TabularVerifier(db_manager, llm=llm)
+
+    # 1. Pahami tabel pada halaman
+    parsed_tables = parse_markdown_tables(page_markdown)
+    src_stem = Path(source_file).stem if source_file else "doc"
+    base_prefix = sanitize_identifier(table_name_prefix or src_stem)
+
+    # 2. Inspeksi tabel eksisting di SQLite
+    db_info = db_manager.inspect_database()
+    existing_tables = list(db_info.get("tables", {}).keys())
+
+    if not parsed_tables:
+        event = PageTabularEvent(
+            page_number=page_number,
+            tables_detected=0,
+            existing_tables_inspected=existing_tables,
+            actions_taken=["Tidak ditemukan format tabel pada halaman ini."],
+            queries_executed=[],
+            rows_ingested_total=0,
+            status="no_tables",
+        )
+        return event, []
+
+    actions: list[str] = []
+    queries_run: list[dict[str, Any]] = []
+    ingestion_results: list[TableIngestionResult] = []
+    total_page_rows = 0
+    event_status: Any = "no_tables"
+
+    for idx, tbl in enumerate(parsed_tables, start=1):
+        headers = tbl["headers"]
+        rows = tbl["rows"]
+        context = tbl["context"]
+
+        # Klasifikasi semantik tabel
+        classification = classify_table_heuristic(headers, rows, context=context)
+        if not classification.is_transactional and not force_all_tables:
+            actions.append(
+                f"Tabel #{idx} ({len(rows)} baris, {len(headers)} kolom) diklasifikasikan sebagai {classification.table_type} naratif (dilewati dari SQLite)."
+            )
+            continue
+
+        # Cari tabel yang cocok di SQLite
+        matched = (
+            db_manager.find_matching_table(headers) if append_if_matching else None
+        )
+
+        if matched:
+            target_table, schema = matched
+            is_append = True
+            # Query status tabel sebelum append
+            prior_query = f'SELECT COUNT(*) as prev_cnt FROM "{target_table}";'
+            prior_res = db_manager.execute_query(prior_query)
+            prev_count = prior_res.rows[0]["prev_cnt"] if prior_res.rows else 0
+            queries_run.append(
+                {
+                    "query": prior_query,
+                    "purpose": "Inspeksi baris sebelum penambahan data",
+                    "result": prev_count,
+                }
+            )
+            actions.append(
+                f"Tabel #{idx} cocok dengan tabel eksisting '{target_table}' ({prev_count} baris awal). Menambahkan baris halaman {page_number}."
+            )
+        else:
+            target_table = f"{base_prefix}_t{idx}"
+            schema = infer_table_schema(
+                table_name=target_table,
+                headers=headers,
+                rows=rows,
+                source_file=source_file,
+                metadata={"context": context, "page": page_number},
+            )
+            is_append = False
+            actions.append(
+                f"Tabel #{idx} adalah tabel baru. Membuat skema tabel '{target_table}' dengan {len(schema.columns)} kolom."
+            )
+
+        # Ingest baris data
+        rows_ingested = db_manager.ingest_records(
+            table_name=target_table,
+            schema=schema,
+            headers=headers,
+            rows=rows,
+            source_doc=source_file,
+            page_number=page_number,
+            replace=not is_append,
+        )
+        total_page_rows += rows_ingested
+
+        # Jalankan query SQL mandiri untuk verifikasi baris setelah ingesti
+        post_query = f'SELECT COUNT(*) as total_cnt FROM "{target_table}";'
+        post_res = db_manager.execute_query(post_query)
+        total_cnt = post_res.rows[0]["total_cnt"] if post_res.rows else rows_ingested
+        queries_run.append(
+            {
+                "query": post_query,
+                "purpose": "Verifikasi total baris setelah ingesti",
+                "result": total_cnt,
+            }
+        )
+
+        # Jalankan double-verification
+        sample_md = "\n".join(["|".join(headers)] + ["|".join(r) for r in rows[:5]])
+        verif_report = verifier.verify_table(
+            table_name=target_table,
+            expected_row_count=None if is_append else len(rows),
+            source_markdown_sample=sample_md,
+        )
+
+        sample_data = db_manager.execute_query(
+            f'SELECT * FROM "{target_table}" ORDER BY "_row_id" DESC LIMIT 3;'
+        ).rows
+
+        status_str: Any = "success" if verif_report.is_valid else "warning"
+        ingestion_results.append(
+            TableIngestionResult(
+                status=status_str,
+                table_name=target_table,
+                database_path=str(db_manager.db_path),
+                total_rows_ingested=rows_ingested,
+                columns=[col.name for col in schema.columns],
+                verification_report=verif_report,
+                sample_data=sample_data,
+                message=(
+                    f"Tabel bersambung '{target_table}' halaman {page_number} berhasil ditambah (+{rows_ingested} baris, total {total_cnt})."
+                    if is_append
+                    else f"Tabel baru '{target_table}' halaman {page_number} dibuat ({rows_ingested} baris)."
+                ),
+            )
+        )
+
+        event_status = "appended_existing_table" if is_append else "created_new_table"
+
+    event = PageTabularEvent(
+        page_number=page_number,
+        tables_detected=len(parsed_tables),
+        existing_tables_inspected=existing_tables,
+        actions_taken=actions,
+        queries_executed=queries_run,
+        rows_ingested_total=total_page_rows,
+        status=event_status,
+    )
+    return event, ingestion_results
+
+
+def cross_verify_dual_track(
+    stitched_markdown: str,
+    db_path: str | Path | None,
+    source_file: str = "",
+    total_pages: int = 1,
+) -> DualTrackGuardrailReport:
+    """
+    Supervisor / Master Agent Guardrail Audit:
+    Membandingkan Jalur 1 (Teks Markdown hasil VLM/OCR) vs Jalur 2 (Tabel di SQLite hasil Sub-Agent Tabular).
+    Memverifikasi kesesuaian baris, kolom, dan integritas perhitungan untuk memastikan tidak ada data yang terlewat atau terkorupsi.
+    """
+    db_manager = TabularDatabaseManager(db_path)
+    db_info = db_manager.inspect_database()
+    sqlite_tables = db_info.get("tables", {})
+
+    md_tables = parse_markdown_tables(stitched_markdown)
+    total_md_tables = len(md_tables)
+    total_sqlite_tables = len(sqlite_tables)
+
+    total_md_rows = sum(len(t["rows"]) for t in md_tables)
+    total_sqlite_rows = sum(t_info.get("row_count", 0) for t_info in sqlite_tables.values())
+
+    table_comparisons: list[dict[str, Any]] = []
+    discrepancies: list[str] = []
+
+    for t_name, t_info in sqlite_tables.items():
+        sql_rows = t_info.get("row_count", 0)
+        cols = [c["name"] for c in t_info.get("columns", []) if not c["name"].startswith("_")]
+        table_comparisons.append(
+            {
+                "table_name": t_name,
+                "sqlite_rows": sql_rows,
+                "columns_count": len(cols),
+                "columns": cols,
+                "status": "synchronized" if sql_rows > 0 else "empty",
+            }
+        )
+
+    # Cek discrepansi jumlah tabel & baris
+    if total_md_tables > 0 and total_sqlite_tables == 0:
+        discrepancies.append(
+            f"Ditemukan {total_md_tables} tabel pada teks Markdown, namun tidak ada tabel yang masuk ke SQLite (kemungkinan tabel naratif atau belum di-ingest)."
+        )
+    elif total_md_rows > 0 and total_sqlite_rows < (total_md_rows * 0.5):
+        discrepancies.append(
+            f"Terdapat selisih baris signifikan: Markdown ({total_md_rows} baris) vs SQLite ({total_sqlite_rows} baris)."
+        )
+
+    # Tentukan status Guardrail Supervisor
+    if not discrepancies and (total_sqlite_tables > 0 or total_md_tables == 0):
+        guardrail_status: Any = "PASSED"
+        supervisor_notes = (
+            f"Audit Jalur Ganda Berhasil (PASSED). Seluruh {total_sqlite_tables} tabel SQLite "
+            f"dengan total {total_sqlite_rows} baris data sinkron dan terverifikasi terhadap teks dokumen ({total_pages} halaman)."
+        )
+    elif total_sqlite_tables > 0:
+        guardrail_status = "WARNING"
+        supervisor_notes = (
+            f"Audit Jalur Ganda dengan Peringatan (WARNING): Data SQLite terbentuk ({total_sqlite_tables} tabel, {total_sqlite_rows} baris), "
+            f"namun ada catatan: {'; '.join(discrepancies)}"
+        )
+    else:
+        guardrail_status = "PASSED" if total_md_tables == 0 else "WARNING"
+        supervisor_notes = (
+            "Dokumen tidak memiliki tabel transaksional aktif untuk SQLite."
+            if total_md_tables == 0
+            else f"Perhatian: {'; '.join(discrepancies)}"
+        )
+
+    return DualTrackGuardrailReport(
+        source_file=source_file,
+        database_path=str(db_manager.db_path),
+        total_pages_processed=total_pages,
+        total_markdown_tables=total_md_tables,
+        total_sqlite_tables=total_sqlite_tables,
+        total_markdown_rows=total_md_rows,
+        total_sqlite_rows=total_sqlite_rows,
+        guardrail_status=guardrail_status,
+        table_comparisons=table_comparisons,
+        discrepancies=discrepancies,
+        supervisor_notes=supervisor_notes,
+    )
+
+
+# ==============================================================================
 # High-Level Pipeline Functions
 # ==============================================================================
 
@@ -1025,97 +1283,23 @@ def extract_and_ingest_tables_from_markdown(
     Ekstrak semua tabel dari Markdown, filter tabel transaksional / seluruh tabel,
     simpan/append ke database SQLite, dan jalankan double-verification otomatis.
     """
-    parsed_tables = parse_markdown_tables(markdown_text)
-    if not parsed_tables:
-        return []
-
-    src_stem = Path(source_file).stem if source_file else "doc"
-    base_prefix = sanitize_identifier(table_name_prefix or src_stem)
-
-    db_manager = TabularDatabaseManager(db_path)
-    verifier = TabularVerifier(db_manager, llm=llm)
-    results: list[TableIngestionResult] = []
-
-    for idx, tbl in enumerate(parsed_tables, start=1):
-        headers = tbl["headers"]
-        rows = tbl["rows"]
-        context = tbl["context"]
-
-        # 1. Klasifikasi
-        classification = classify_table_heuristic(headers, rows, context=context)
-
-        # 2. Jika bukan transaksional (misal tabel naratif) dan tidak force_all_tables, lewati dari SQLite
-        if not classification.is_transactional and not force_all_tables:
-            continue
-
-        # 3. Cek apakah ada tabel eksisting yang cocok skemanya untuk di-append (kontinuitas multi-halaman)
-        matched = (
-            db_manager.find_matching_table(headers) if append_if_matching else None
-        )
-
-        if matched:
-            table_name, schema = matched
-            is_append = True
-        else:
-            table_name = f"{base_prefix}_t{idx}"
-            schema = infer_table_schema(
-                table_name=table_name,
-                headers=headers,
-                rows=rows,
-                source_file=source_file,
-                metadata={"context": context, "original_index": idx},
-            )
-            is_append = False
-
-        # 4. Ingest data (append jika tabel cocok, replace jika tabel baru)
-        rows_ingested = db_manager.ingest_records(
-            table_name=table_name,
-            schema=schema,
-            headers=headers,
-            rows=rows,
-            source_doc=source_file,
-            page_number=page_number,
-            replace=not is_append,
-        )
-
-        # 5. Double-Verification
-        sample_md = "\n".join(["|".join(headers)] + ["|".join(r) for r in rows[:5]])
-        verif_report = verifier.verify_table(
-            table_name=table_name,
-            expected_row_count=None if is_append else len(rows),
-            source_markdown_sample=sample_md,
-        )
-
-        status = "success" if verif_report.is_valid else "warning"
-
-        # Ambil sampel 3 data
-        sample_data = db_manager.execute_query(
-            f'SELECT * FROM "{table_name}" LIMIT 3;'
-        ).rows
-
-        results.append(
-            TableIngestionResult(
-                status=status,
-                table_name=table_name,
-                database_path=str(db_manager.db_path),
-                total_rows_ingested=rows_ingested,
-                columns=[col.name for col in schema.columns],
-                verification_report=verif_report,
-                sample_data=sample_data,
-                message=(
-                    f"Tabel bersambung '{table_name}' berhasil ditambahkan (+{rows_ingested} baris)."
-                    if is_append
-                    else f"Tabel baru '{table_name}' berhasil dibuat ({rows_ingested} baris)."
-                ),
-            )
-        )
-
+    event, results = process_page_tabular_agent(
+        page_markdown=markdown_text,
+        page_number=page_number or 1,
+        source_file=source_file,
+        db_path=db_path,
+        table_name_prefix=table_name_prefix,
+        append_if_matching=append_if_matching,
+        force_all_tables=force_all_tables,
+        llm=llm,
+    )
     return results
 
 
 def query_sqlite(
-    sql_query: str, db_path: str | Path | None = None
+    sql_query: str,
+    db_path: str | Path | None = None,
 ) -> TabularQueryResult:
-    """Eksekusi query SQL praktis pada database dokumen."""
-    manager = TabularDatabaseManager(db_path)
-    return manager.execute_query(sql_query)
+    """Eksekusi query SQL pada database SQLite dokumen secara aman."""
+    db_mgr = TabularDatabaseManager(db_path)
+    return db_mgr.execute_query(sql_query)

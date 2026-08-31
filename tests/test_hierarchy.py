@@ -1,6 +1,9 @@
-"""Tes mesin tumpukan & auditor hirarki peraturan."""
+"""Tes mesin tumpukan & auditor hirarki peraturan serta Sub-Agent SQL Dual-Track."""
 
 from __future__ import annotations
+
+import tempfile
+from pathlib import Path
 
 from app.hierarchy import (
     Cursor,
@@ -10,6 +13,12 @@ from app.hierarchy import (
     audit_amounts,
     parse_rupiah,
     render_markdown,
+)
+from app.schemas import DualTrackGuardrailReport, PageTabularEvent
+from app.tabular_db import (
+    TabularDatabaseManager,
+    cross_verify_dual_track,
+    process_page_tabular_agent,
 )
 
 
@@ -158,3 +167,102 @@ def test_indentasi_mengikuti_kedalaman_pohon():
     assert "\n- 1. satu" in markdown
     assert "\n- (1) ayat satu" in markdown
     assert "\n  - a. huruf a" in markdown
+
+
+def test_process_page_tabular_agent_multipage_append() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test_mutasi.sqlite"
+
+        # Halaman 1: Mutasi Rekening bagian 1
+        page_1_md = """
+# Laporan Mutasi Rekening Halaman 1
+Berikut adalah tabel transaksi:
+
+| Tanggal | Deskripsi | Debit | Kredit | Saldo |
+|---|---|---|---|---|
+| 2024-01-01 | Setoran Awal | 0 | 10,000,000 | 10,000,000 |
+| 2024-01-02 | Transfer Keluar | 1,000,000 | 0 | 9,000,000 |
+"""
+        event1, res1 = process_page_tabular_agent(
+            page_markdown=page_1_md,
+            page_number=1,
+            source_file="rekening_koran.pdf",
+            db_path=db_path,
+            table_name_prefix="rekening_koran",
+            append_if_matching=True,
+            force_all_tables=False,
+        )
+
+        assert isinstance(event1, PageTabularEvent)
+        assert event1.page_number == 1
+        assert event1.tables_detected == 1
+        assert event1.rows_ingested_total == 2
+        assert event1.status == "created_new_table"
+        assert len(res1) == 1
+        assert res1[0].verification_report is not None
+        assert res1[0].verification_report.is_valid is True
+
+        # Halaman 2: Lanjutan transaksi (skema sama)
+        page_2_md = """
+# Laporan Mutasi Rekening Halaman 2 (Lanjutan)
+
+| Tanggal | Deskripsi | Debit | Kredit | Saldo |
+|---|---|---|---|---|
+| 2024-01-03 | Biaya Admin | 25,000 | 0 | 8,975,000 |
+| 2024-01-04 | Penerimaan Bunga | 0 | 50,000 | 9,025,000 |
+"""
+        event2, res2 = process_page_tabular_agent(
+            page_markdown=page_2_md,
+            page_number=2,
+            source_file="rekening_koran.pdf",
+            db_path=db_path,
+            table_name_prefix="rekening_koran",
+            append_if_matching=True,
+            force_all_tables=False,
+        )
+
+        assert event2.page_number == 2
+        assert event2.tables_detected == 1
+        assert event2.rows_ingested_total == 2
+        assert event2.status == "appended_existing_table"
+        assert len(res2) == 1
+
+        # Cek database total baris
+        db_mgr = TabularDatabaseManager(db_path)
+        cnt_res = db_mgr.execute_query(
+            f'SELECT COUNT(*) as cnt FROM "{res1[0].table_name}";'
+        )
+        assert cnt_res.rows[0]["cnt"] == 4
+
+        # Jalankan Guardrail Cross-Verification oleh Master Supervisor
+        stitched_md = f"{page_1_md}\n\n---\n\n{page_2_md}"
+        guard_report = cross_verify_dual_track(
+            stitched_markdown=stitched_md,
+            db_path=db_path,
+            source_file="rekening_koran.pdf",
+            total_pages=2,
+        )
+
+        assert isinstance(guard_report, DualTrackGuardrailReport)
+        assert guard_report.guardrail_status == "PASSED"
+        assert guard_report.total_markdown_tables == 2
+        assert guard_report.total_sqlite_tables == 1
+        assert guard_report.total_sqlite_rows == 4
+        assert len(guard_report.discrepancies) == 0
+
+
+def test_process_page_tabular_agent_no_table() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "empty.sqlite"
+        page_md = "Halaman ini hanya berisi teks narasi biasa tanpa tabel apapun."
+
+        event, res = process_page_tabular_agent(
+            page_markdown=page_md,
+            page_number=1,
+            source_file="surat.pdf",
+            db_path=db_path,
+        )
+
+        assert event.tables_detected == 0
+        assert event.status == "no_tables"
+        assert len(res) == 0

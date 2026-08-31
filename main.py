@@ -4,12 +4,12 @@ CLI Document Vision OCR & Text Extractor (Ready for Chunking).
 Secara default, mengeksekusi ekstraksi dokumen:
   - File PPTX / PPT   : Dirender otomatis menjadi gambar kanvas per slide dan dikirim ke VLM (default), atau via `--ppt-native` untuk parser cepat tanpa VLM.
   - File Gambar / PDF : Diekstrak via pipeline Vision OCR / Deep Reasoning Agent.
-  - Data Tabular / DB : Otomatis mengekstrak tabel ke database SQLite (`output/databases/{nama_dokumen}.sqlite`) dengan double-verification.
+  - Data Tabular / DB : Sub-Agent SQL aktif mandiri per-halaman/slide untuk memahami, menginspeksi, meng-ingest tabel ke SQLite (`output/databases/{nama_dokumen}.sqlite`), serta diakhiri Guardrail Cross-Verification oleh Agent Pusat.
 
 Contoh Penggunaan:
     python main.py input/presentasi.pptx -o output/ppt01.md            # Ekstrak PPTX via gambar slide -> Model Vision (VLM)
     python main.py input/presentasi.pptx --ppt-native -o output/ppt01.md # Ekstrak PPTX native (cepat, tanpa VLM)
-    python main.py dokumen.pdf -o output/dokumen.md                    # Ekstrak PDF otomatis via VLM & simpan SQLite
+    python main.py dokumen.pdf -o output/dokumen.md                    # Ekstrak PDF multi-halaman via Dual-Track
     python main.py scan.jpg --debug                                    # Ekstrak gambar dengan log lengkap
     python main.py dokumen.pdf --force-all-tables                      # Ingest seluruh tabel ke SQLite
     python main.py --scan-folders dataset                              # Pindai folder-folder dokumen
@@ -38,7 +38,7 @@ from app.multi_page import preview_markdown_chunks
 from app.ocr import build_ocr_extractor
 from app.pdf import pdf_to_images, process_multipage_pdf
 from app.ppt import process_presentation, process_presentation_vision
-from app.tabular_db import extract_and_ingest_tables_from_markdown
+from app.tabular_db import cross_verify_dual_track, process_page_tabular_agent
 
 logger = logging.getLogger("app.cli")
 
@@ -46,7 +46,7 @@ logger = logging.getLogger("app.cli")
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vision-doc-extractor",
-        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking & Database Tabular SQLite.",
+        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking & Database Tabular SQLite via Dual-Track Sub-Agent.",
     )
     p.add_argument(
         "document", nargs="?", help="Path file dokumen (PDF, PPTX, PPT, atau Gambar)"
@@ -262,6 +262,16 @@ def main(argv: list[str] | None = None) -> int:
 
     ext = input_path.suffix.lower()
 
+    # Tentukan path target database SQLite
+    if args.db_path:
+        db_target_file: Path | None = Path(args.db_path).resolve()
+    elif args.out:
+        db_dir = Path(args.out).parent / "databases"
+        db_target_file = db_dir / f"{input_path.stem}.sqlite"
+    else:
+        db_dir = Path("output/databases").resolve()
+        db_target_file = db_dir / f"{input_path.stem}.sqlite"
+
     try:
         # 3. Mode Render PDF Halaman saja
         if args.pdf_split_only and ext == ".pdf":
@@ -300,13 +310,16 @@ def main(argv: list[str] | None = None) -> int:
                 markdown_content = process_presentation(input_path)
             else:
                 logger.info(
-                    "Mengekstrak presentasi via rendering gambar kanvas per slide -> Vision Model (VLM)..."
+                    "Mengekstrak presentasi via rendering gambar kanvas per slide -> Dual-Track Vision & Sub-Agent SQL..."
                 )
                 pipeline = DocumentExtractionPipeline(settings)
                 markdown_content = process_presentation_vision(
                     pptx_path=input_path,
                     pipeline=pipeline,
                     forced_specs=args.doc_type or "presentation_slides",
+                    db_path=db_target_file,
+                    auto_tabular_db=not args.no_db,
+                    force_all_tables=args.force_all_tables,
                 )
 
         # 7. Mode Agent (jika eksplisit diminta --agent)
@@ -340,7 +353,7 @@ def main(argv: list[str] | None = None) -> int:
             messages = resp.get("messages", [])
             markdown_content = messages[-1].content if messages else str(resp)
 
-        # 8. Mode Pipeline Standar (PDF & Gambar)
+        # 8. Mode Pipeline Standar (PDF Multi-Halaman & Gambar)
         else:
             if ext == ".pdf":
                 pipeline = DocumentExtractionPipeline(settings)
@@ -349,12 +362,50 @@ def main(argv: list[str] | None = None) -> int:
                     pipeline=pipeline,
                     dpi=args.dpi,
                     forced_specs=args.doc_type,
+                    db_path=db_target_file,
+                    auto_tabular_db=not args.no_db,
+                    force_all_tables=args.force_all_tables,
                 )
                 markdown_content = extracted_doc.markdown_content
+
+                if extracted_doc.guardrail_report:
+                    rep = extracted_doc.guardrail_report
+                    logger.info(
+                        "[Supervisor Guardrail Audit] Status: %s | Markdown Tables: %d (%d rows) | SQLite Tables: %d (%d rows)",
+                        rep.guardrail_status,
+                        rep.total_markdown_tables,
+                        rep.total_markdown_rows,
+                        rep.total_sqlite_tables,
+                        rep.total_sqlite_rows,
+                    )
             else:
                 pipeline = DocumentExtractionPipeline(settings)
                 res = pipeline.run(str(input_path), forced_specs=args.doc_type)
                 markdown_content = res["markdown_content"]
+
+                # Single-Image Dual-Track
+                if not args.no_db and db_target_file:
+                    tab_event, _ = process_page_tabular_agent(
+                        page_markdown=markdown_content,
+                        page_number=1,
+                        source_file=str(input_path.resolve()),
+                        db_path=db_target_file,
+                        table_name_prefix=input_path.stem,
+                        force_all_tables=args.force_all_tables,
+                    )
+                    guard_rep = cross_verify_dual_track(
+                        stitched_markdown=markdown_content,
+                        db_path=db_target_file,
+                        source_file=str(input_path.resolve()),
+                        total_pages=1,
+                    )
+                    if tab_event.tables_detected > 0:
+                        logger.info(
+                            "[Sub-Agent SQL Single-Page] Terdeteksi %d tabel | SQLite: %s | Guardrail: %s",
+                            tab_event.tables_detected,
+                            db_target_file,
+                            guard_rep.guardrail_status,
+                        )
 
         # Simpan ke file jika diminta (-o / --out), atau tampilkan ke terminal jika tidak ada -o
         if args.out:
@@ -370,54 +421,6 @@ def main(argv: list[str] | None = None) -> int:
         else:
             # Tampilkan teks markdown di stdout hanya jika user tidak menentukan file output
             print(markdown_content)
-
-        # Auto-ingest data tabel ke database SQLite jika ditemukan tabel pada Markdown
-        if not args.no_db:
-            if args.db_path:
-                db_target_file = Path(args.db_path).resolve()
-            elif args.out:
-                db_dir = Path(args.out).parent / "databases"
-                db_target_file = db_dir / f"{input_path.stem}.sqlite"
-            else:
-                db_dir = Path("output/databases").resolve()
-                db_target_file = db_dir / f"{input_path.stem}.sqlite"
-
-            db_target_file.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                ingest_res = extract_and_ingest_tables_from_markdown(
-                    markdown_text=markdown_content,
-                    source_file=str(input_path.resolve()),
-                    db_path=db_target_file,
-                    table_name_prefix=input_path.stem,
-                    append_if_matching=True,
-                    force_all_tables=args.force_all_tables,
-                )
-                if ingest_res:
-                    logger.info(
-                        "[Tabular SQL] Berhasil mengekstrak %d tabel ke SQLite: %s",
-                        len(ingest_res),
-                        db_target_file,
-                    )
-                    for r in ingest_res:
-                        verif_status = (
-                            r.verification_report.verification_status
-                            if r.verification_report
-                            else "N/A"
-                        )
-                        logger.info(
-                            "  -> Tabel '%s' (%d baris) | Status Verifikasi: %s",
-                            r.table_name,
-                            r.total_rows_ingested,
-                            verif_status,
-                        )
-                else:
-                    logger.debug(
-                        "[Tabular SQL] Tidak ada tabel transaksional terdeteksi untuk di-ingest."
-                    )
-            except Exception as e:  # noqa: BLE001
-                logger.warning(
-                    "[Tabular SQL] Gagal melakukan ekstraksi tabel ke SQLite: %s", e
-                )
 
         # Preview Chunks jika diminta
         if args.preview_chunks:

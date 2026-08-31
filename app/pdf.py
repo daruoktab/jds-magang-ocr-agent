@@ -3,12 +3,15 @@ Konversi PDF menjadi gambar per-halaman & pemrosesan dokumen PDF multi-halaman.
 
 Menyediakan:
   - `pdf_to_images`: Konversi PDF menjadi gambar beresolusi optimal (~200 DPI).
-  - `process_multipage_pdf`: Mengekstrak seluruh halaman PDF, menjaga kontinuitas header,
-    dan menyatukannya menjadi `ExtractedDocument` Markdown yang siap di-chunking.
+  - `process_multipage_pdf`: Mengekstrak seluruh halaman PDF dengan arsitektur Dual-Track:
+    Jalur 1: Kontinuitas teks Markdown VLM per halaman.
+    Jalur 2: Sub-Agent SQL mandiri per-halaman yang menginspeksi DB, skema, dan meng-ingest tabel langsung.
+    Tahap Akhir: Guardrail Cross-Verification oleh Agent Pusat.
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -16,10 +19,13 @@ import pymupdf
 
 from .multi_page import stitch_pages_to_markdown
 from .prompts import normalize_specs
-from .schemas import DocumentPage, ExtractedDocument
+from .schemas import DocumentPage, ExtractedDocument, PageTabularEvent
+from .tabular_db import cross_verify_dual_track, process_page_tabular_agent
 
 if TYPE_CHECKING:
     from .graph import DocumentExtractionPipeline
+
+logger = logging.getLogger("app.pdf")
 
 # 200 DPI adalah titik seimbang: cukup tajam untuk teks/OCR, wajar ukurannya.
 DEFAULT_DPI: int = 200
@@ -114,16 +120,6 @@ def extract_pdf_with_pymupdf4llm(
     """
     Ekstrak dokumen PDF digital langsung menjadi Markdown menggunakan pymupdf4llm.
     Mendukung deteksi tabel GFM, urutan baca multi-kolom, dan chunking per halaman.
-
-    Args:
-        pdf_path: Path file PDF.
-        page_chunks: Jika True, mengembalikan list chunk per-halaman lengkap dengan metadata.
-        write_images: Jika True, simpan gambar/grafik yang diekstrak dari PDF ke image_path.
-        image_path: Direktori penyimpanan gambar jika write_images=True.
-        pages: Daftar indeks halaman (0-indexed) yang ingin diekstrak.
-
-    Returns:
-        List dictionary per-halaman jika page_chunks=True, atau string Markdown utuh jika False.
     """
     import pymupdf4llm
 
@@ -169,10 +165,14 @@ def process_multipage_pdf(
     dpi: int = DEFAULT_DPI,
     forced_specs: list[str] | str | None = None,
     forced_doc_type: str | None = None,
+    db_path: str | Path | None = None,
+    auto_tabular_db: bool = True,
+    force_all_tables: bool = False,
 ) -> ExtractedDocument:
     """
     Proses seluruh halaman PDF dan gabungkan hasil ekstraksi menjadi teks Markdown utuh siap chunking.
-    Mendukung multi-spesifikasi komposit per-halaman.
+    Mengeksekusi Sub-Agent SQL mandiri per-halaman untuk memahami & meng-ingest tabel ke SQLite secara langsung,
+    serta melakukan audit Guardrail jalur ganda di tahap akhir.
     """
     pdf_path = Path(pdf_path)
     total_pages = pdf_page_count(pdf_path)
@@ -180,12 +180,23 @@ def process_multipage_pdf(
     pages: list[DocumentPage] = []
     pages_md: list[str] = []
     all_page_specs: list[list[str]] = []
+    tabular_events: list[PageTabularEvent] = []
     previous_context: str | None = None
 
     active_forced = forced_specs or forced_doc_type
 
+    # Tentukan path target database SQLite
+    if db_path:
+        resolved_db_path: Path | None = Path(db_path).resolve()
+    elif output_dir:
+        resolved_db_path = Path(output_dir).resolve() / "databases" / f"{pdf_path.stem}.sqlite"
+    else:
+        resolved_db_path = Path("output/databases").resolve() / f"{pdf_path.stem}.sqlite"
+
+    if resolved_db_path:
+        resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Proses BERTAHAP per batch 10 halaman: render batch -> ekstrak batch -> lanjut.
-    # Konsisten dengan strategi "proses per 10 pages" dan meminimalkan beban memori/disk.
     for b_start in range(0, total_pages, PDF_PAGE_BATCH):
         b_end = min(b_start + PDF_PAGE_BATCH, total_pages)
         page_images = pdf_to_images(
@@ -196,7 +207,9 @@ def process_multipage_pdf(
         )
 
         for idx, img_path in enumerate(page_images, start=b_start + 1):
-            # Jalankan pipeline per halaman dengan membawa konteks halaman sebelumnya
+            logger.info("Memproses Halaman %d / %d dari '%s'...", idx, total_pages, pdf_path.name)
+
+            # Jalur 1: Ekstraksi Teks Markdown VLM dengan konteks halaman sebelumnya
             res = pipeline.run(
                 str(img_path),
                 forced_specs=active_forced,
@@ -221,6 +234,27 @@ def process_multipage_pdf(
                 )
             )
 
+            # Jalur 2: Sub-Agent SQL Tabular Engine mandiri per-halaman
+            if auto_tabular_db and resolved_db_path:
+                tab_event, _ = process_page_tabular_agent(
+                    page_markdown=page_md,
+                    page_number=idx,
+                    source_file=str(pdf_path.resolve()),
+                    db_path=resolved_db_path,
+                    table_name_prefix=pdf_path.stem,
+                    append_if_matching=True,
+                    force_all_tables=force_all_tables,
+                )
+                tabular_events.append(tab_event)
+                if tab_event.tables_detected > 0:
+                    logger.info(
+                        "[Sub-Agent SQL Page %d] Terdeteksi %d tabel | Status: %s | Baris: %d",
+                        idx,
+                        tab_event.tables_detected,
+                        tab_event.status,
+                        tab_event.rows_ingested_total,
+                    )
+
     # Kumpulkan seluruh spesifikasi unik dokumen
     if active_forced:
         overall_specs = normalize_specs(active_forced)
@@ -235,12 +269,30 @@ def process_multipage_pdf(
     # Gabungkan halaman dengan kontinuitas heading
     stitched_markdown = stitch_pages_to_markdown(pages_md)
 
+    # Pengawasan Tahap Akhir: Agent Utama Guardrail Cross-Verification
+    guardrail_report = None
+    if auto_tabular_db and resolved_db_path:
+        guardrail_report = cross_verify_dual_track(
+            stitched_markdown=stitched_markdown,
+            db_path=resolved_db_path,
+            source_file=str(pdf_path.resolve()),
+            total_pages=total_pages,
+        )
+        logger.info(
+            "[Master Agent Guardrail] Status: %s | Markdown Tables: %d | SQLite Tables: %d",
+            guardrail_report.guardrail_status,
+            guardrail_report.total_markdown_tables,
+            guardrail_report.total_sqlite_tables,
+        )
+
     return ExtractedDocument(
         file_path=str(pdf_path),
         specs=overall_specs,
         total_pages=total_pages,
         markdown_content=stitched_markdown,
         pages=pages,
+        tabular_events=tabular_events,
+        guardrail_report=guardrail_report,
         metadata={
             "source_type": "pdf",
             "dpi": dpi,

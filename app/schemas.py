@@ -59,53 +59,6 @@ class DocumentPage(BaseModel):
     )
 
 
-class ExtractedDocument(BaseModel):
-    """
-    Hasil ekstraksi lengkap seluruh dokumen dalam format Markdown utuh siap chunking.
-    """
-
-    file_path: str = Field(..., description="Path file input dokumen (PDF/PPTX/Image)")
-    specs: list[str] = Field(
-        default_factory=lambda: ["plain"],
-        description="Daftar karakteristik layout dokumen yang terdeteksi",
-    )
-    total_pages: int = Field(default=1, description="Jumlah total halaman / slide")
-    markdown_content: str = Field(
-        ..., description="Teks Markdown utuh dari awal sampai akhir, siap di-chunking"
-    )
-    pages: list[DocumentPage] = Field(
-        default_factory=list, description="Detail ekstraksi per-halaman"
-    )
-    metadata: dict[str, Any] = Field(
-        default_factory=dict, description="Metadata tambahan dokumen"
-    )
-
-    @property
-    def doc_type(self) -> str:
-        """String gabungan spesifikasi (kompatibilitas)."""
-        return ", ".join(self.specs) if self.specs else "plain"
-
-
-class ChunkItem(BaseModel):
-    """Satu potongan chunk hasil text splitting."""
-
-    chunk_index: int = Field(..., description="Indeks urutan chunk")
-    char_count: int = Field(..., description="Jumlah karakter dalam chunk")
-    metadata: dict[str, Any] = Field(
-        default_factory=dict, description="Metadata header/halaman dari chunk"
-    )
-    content: str = Field(..., description="Isi teks chunk")
-
-
-class ChunkingPreview(BaseModel):
-    """Hasil simulasi chunking pada dokumen."""
-
-    total_chunks: int = Field(..., description="Jumlah total potongan chunk")
-    chunks: list[ChunkItem] = Field(
-        default_factory=list, description="Daftar potongan chunk"
-    )
-
-
 # ==============================================================================
 # Tabular & SQLite Ingestion / Verification Schemas
 # ==============================================================================
@@ -284,6 +237,124 @@ class TabularQueryResult(BaseModel):
     )
     error_message: str | None = Field(
         default=None, description="Pesan error jika query gagal"
+    )
+
+
+class PageTabularEvent(BaseModel):
+    """Event pemrosesan mandiri Sub-Agent SQL per-halaman/slide."""
+
+    page_number: int = Field(..., description="Nomor halaman/slide yang diproses")
+    tables_detected: int = Field(
+        default=0, description="Jumlah tabel yang ditemukan pada halaman ini"
+    )
+    existing_tables_inspected: list[str] = Field(
+        default_factory=list,
+        description="Daftar tabel eksisting di SQLite yang diperiksa sebelum ingesti",
+    )
+    actions_taken: list[str] = Field(
+        default_factory=list,
+        description="Daftar tindakan yang dieksekusi (cek skema, append baris, buat tabel baru)",
+    )
+    queries_executed: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Query SQL mandiri yang dijalankan oleh sub-agent untuk validasi state tabel",
+    )
+    rows_ingested_total: int = Field(
+        default=0, description="Total baris data yang di-ingest dari halaman ini"
+    )
+    status: Literal["no_tables", "created_new_table", "appended_existing_table", "error"] = Field(
+        default="no_tables", description="Status hasil pemrosesan halaman"
+    )
+
+
+class DualTrackGuardrailReport(BaseModel):
+    """Laporan Guardrail & Audit Komparatif Jalur Ganda (Markdown Track vs SQLite Tabular Track)."""
+
+    source_file: str = Field(..., description="File sumber dokumen")
+    database_path: str = Field(..., description="Path database SQLite yang diaudit")
+    total_pages_processed: int = Field(default=1, description="Total halaman yang diproses")
+    total_markdown_tables: int = Field(
+        default=0, description="Total tabel yang terdeteksi di teks Markdown"
+    )
+    total_sqlite_tables: int = Field(
+        default=0, description="Total tabel yang tersimpan di SQLite database"
+    )
+    total_markdown_rows: int = Field(
+        default=0, description="Total baris data dari seluruh tabel di Markdown"
+    )
+    total_sqlite_rows: int = Field(
+        default=0, description="Total baris data yang berhasil tercatat di SQLite"
+    )
+    guardrail_status: Literal["PASSED", "WARNING", "FAILED"] = Field(
+        default="PASSED",
+        description="Status verifikasi akhir pengawasan agent utama",
+    )
+    table_comparisons: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Rincian komparasi tiap tabel (nama tabel, baris MD, baris SQLite, status)",
+    )
+    discrepancies: list[str] = Field(
+        default_factory=list,
+        description="Daftar anomali atau perbedaan antara jalur Markdown dan SQLite",
+    )
+    supervisor_notes: str = Field(
+        default="",
+        description="Catatan pengawasan dan evaluasi kualitas dari Master Supervisor Agent",
+    )
+
+
+class ExtractedDocument(BaseModel):
+    """
+    Hasil ekstraksi lengkap seluruh dokumen dalam format Markdown utuh siap chunking.
+    """
+
+    file_path: str = Field(..., description="Path file input dokumen (PDF/PPTX/Image)")
+    specs: list[str] = Field(
+        default_factory=lambda: ["plain"],
+        description="Daftar karakteristik layout dokumen yang terdeteksi",
+    )
+    total_pages: int = Field(default=1, description="Jumlah total halaman / slide")
+    markdown_content: str = Field(
+        ..., description="Teks Markdown utuh dari awal sampai akhir, siap di-chunking"
+    )
+    pages: list[DocumentPage] = Field(
+        default_factory=list, description="Detail ekstraksi per-halaman"
+    )
+    tabular_events: list[PageTabularEvent] = Field(
+        default_factory=list,
+        description="Log eksekusi pemahaman Sub-Agent Tabular per-halaman",
+    )
+    guardrail_report: DualTrackGuardrailReport | None = Field(
+        default=None,
+        description="Laporan audit guardrail komparatif Markdown vs SQLite",
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict, description="Metadata tambahan dokumen"
+    )
+
+    @property
+    def doc_type(self) -> str:
+        """String gabungan spesifikasi (kompatibilitas)."""
+        return ", ".join(self.specs) if self.specs else "plain"
+
+
+class ChunkItem(BaseModel):
+    """Satu potongan chunk hasil text splitting."""
+
+    chunk_index: int = Field(..., description="Indeks urutan chunk")
+    char_count: int = Field(..., description="Jumlah karakter dalam chunk")
+    metadata: dict[str, Any] = Field(
+        default_factory=dict, description="Metadata header/halaman dari chunk"
+    )
+    content: str = Field(..., description="Isi teks chunk")
+
+
+class ChunkingPreview(BaseModel):
+    """Hasil simulasi chunking pada dokumen."""
+
+    total_chunks: int = Field(..., description="Jumlah total potongan chunk")
+    chunks: list[ChunkItem] = Field(
+        default_factory=list, description="Daftar potongan chunk"
     )
 
 

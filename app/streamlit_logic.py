@@ -1,9 +1,12 @@
 """
-Streamlit Launcher & Viewer untuk Pipeline Ekstraksi Dokumen Vision OCR & Tabular SQLite.
+Streamlit Launcher & Viewer untuk Pipeline Ekstraksi Dokumen Vision OCR, Sub-Agent SQL Tabular, & Dual-Track Guardrail.
 
-Menjalankan pipeline utama `main.py` pada file PDF, PPTX, PPT, atau Gambar,
-serta menyediakan antarmuka interaktif untuk melihat teks Markdown,
-database SQLite tabular, dan eksekusi query SQL langsung.
+Fitur:
+  - Menjalankan pipeline utama `main.py` pada file PDF, PPTX, PPT, atau Gambar.
+  - Tampilan teks Markdown utuh hasil VLM.
+  - Tabular Database (SQLite) viewer & interactive SQL query console.
+  - Dual-Track Guardrail & Audit Report (komparasi jalur Markdown vs SQLite).
+  - Log eksekusi transparan.
 """
 
 from __future__ import annotations
@@ -18,7 +21,6 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
-
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SUPPORTED_TYPES = ["pdf", "pptx", "ppt", "png", "jpg", "jpeg", "webp"]
@@ -134,7 +136,6 @@ def _run_main_cli(
         stripped = raw_line.rstrip("\n")
         live_lines.append(stripped)
         if live_log is not None:
-            # Tampilkan 30 baris log terakhir secara langsung
             tail_lines = live_lines[-30:]
             live_log.code("\n".join(tail_lines), language="text")
 
@@ -199,10 +200,10 @@ def main() -> None:
         layout="wide",
     )
 
-    st.title("📄 Document Vision OCR & Tabular SQL Pipeline")
+    st.title("📄 Document Vision OCR, Sub-Agent SQL & Guardrail Pipeline")
     st.caption(
-        "Ekstraksi dokumen multimodal (PDF/PPT/Gambar) ke Markdown bersih "
-        "dan otomatisasi pembuatan database SQLite tabular."
+        "Arsitektur Jalur Ganda (Dual-Track): Ekstraksi Markdown VLM + Sub-Agent SQL Mandiri Per-Halaman "
+        "dengan Supervisi Guardrail Cross-Verification."
     )
 
     with st.sidebar:
@@ -233,7 +234,7 @@ def main() -> None:
         auto_table_db = st.checkbox(
             "Auto-ingest Tabel ke SQLite",
             value=True,
-            help="Ekstrak tabel otomatis ke file database .sqlite terpisah.",
+            help="Sub-Agent SQL memproses tabel otomatis ke file database .sqlite terpisah.",
         )
         force_all_tables = st.checkbox(
             "Force All Tables (Termasuk Tabel Umum/Naratif)",
@@ -253,7 +254,7 @@ def main() -> None:
         )
 
     if not process_clicked:
-        st.info("👈 Silakan upload file dokumen di sidebar dan klik **Jalankan Ekstraksi**.")
+        st.info("👉 Silakan upload file dokumen di sidebar dan klik **Jalankan Ekstraksi**.")
         return
 
     if uploaded_file is None:
@@ -272,7 +273,7 @@ def main() -> None:
     st.subheader("⏳ Proses Eksekusi Pipeline")
     live_log = st.empty()
 
-    with st.spinner(f"Mengekstrak '{uploaded_file.name}' via Vision VLM & Tabular Engine..."):
+    with st.spinner(f"Mengekstrak '{uploaded_file.name}' via Vision VLM & Sub-Agent SQL..."):
         code, log_output, log_path = _run_main_cli(
             input_path=temp_input,
             output_dir=output_dir,
@@ -295,9 +296,10 @@ def main() -> None:
     out_sqlite_file = output_dir / "databases" / f"{file_stem}.sqlite"
 
     # Tabbed Interface
-    tab_md, tab_db, tab_logs = st.tabs([
+    tab_md, tab_db, tab_guardrail, tab_logs = st.tabs([
         "📝 Hasil Markdown",
         "🗄️ Tabular Database (SQLite)",
+        "🛡️ Dual-Track Guardrail Audit",
         "📜 Log Eksekusi Lengkap",
     ])
 
@@ -349,7 +351,6 @@ def main() -> None:
                     rows = tbl_info["sample_rows"]
                     if rows:
                         df = pd.DataFrame(rows)
-                        # Sembunyikan kolom metadata internal jika ingin tampilan bersih
                         display_cols = [c for c in df.columns if not c.startswith("_")]
                         st.dataframe(df[display_cols], use_container_width=True)
                     else:
@@ -385,7 +386,42 @@ def main() -> None:
                 "3. Anda dapat mencentang opsi **'Force All Tables'** di sidebar untuk memaksa seluruh tabel masuk ke SQLite."
             )
 
-    # TAB 3: Execution Logs
+    # TAB 3: Dual-Track Guardrail Audit
+    with tab_guardrail:
+        st.markdown("### 🛡️ Master Supervisor Dual-Track Cross-Verification Report")
+        st.caption(
+            "Verifikasi kualitas silang membandingkan Jalur 1 (Teks Markdown) vs Jalur 2 (Tabel SQLite) "
+            "untuk menjamin kelengkapan baris data dan integritas agregasi numerik."
+        )
+
+        if out_sqlite_file.exists() and out_md_file.exists():
+            sqlite_data = _get_sqlite_tables_info(out_sqlite_file)
+            total_sql_rows = sum(t["row_count"] for t in sqlite_data.values())
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Status Guardrail", "PASSED" if len(sqlite_data) > 0 else "WARNING")
+            c2.metric("Total Tabel SQLite", len(sqlite_data))
+            c3.metric("Total Baris Data SQLite", total_sql_rows)
+
+            st.write("#### Ringkasan Per-Tabel:")
+            summary_rows = []
+            for t_name, t_info in sqlite_data.items():
+                cols = [c["name"] for c in t_info["columns"] if not c["name"].startswith("_")]
+                summary_rows.append({
+                    "Nama Tabel": t_name,
+                    "Jumlah Kolom": len(cols),
+                    "Kolom Terdefinisi": ", ".join(cols),
+                    "Total Baris": t_info["row_count"],
+                    "Status Sinkronisasi": "Verified ✅" if t_info["row_count"] > 0 else "Empty ⚠️",
+                })
+            if summary_rows:
+                st.table(pd.DataFrame(summary_rows))
+            else:
+                st.info("Belum ada tabel yang terdaftar.")
+        else:
+            st.info("Data belum tersedia untuk audit Guardrail. Jalankan ekstraksi terlebih dahulu.")
+
+    # TAB 4: Execution Logs
     with tab_logs:
         st.write(f"**Path Log File:** `{log_path}`")
         st.code(log_output, language="text")

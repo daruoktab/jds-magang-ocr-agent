@@ -3,8 +3,9 @@ Modul pemrosesan dokumen presentasi PowerPoint (.pptx / .ppt).
 
 Alur presentasi dijaga sederhana dan eksplisit:
   - PPT/PPTX dirender menjadi gambar per slide
-  - Setiap gambar slide dikirim langsung ke VLM Qwen 35B Vision
-  - Hasilnya digabung menjadi Markdown per-slide yang siap dichunking
+  - Setiap gambar slide dikirim langsung ke VLM Qwen 35B Vision (Jalur 1)
+  - Sub-Agent SQL mandiri per slide mengecek tabel, skema, dan meng-ingest ke SQLite (Jalur 2)
+  - Di akhir, Agent Pusat menjalankan Dual-Track Guardrail Cross-Verification.
 """
 
 from __future__ import annotations
@@ -25,12 +26,11 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 from .llm import image_data_uri
 from .multi_page import stitch_pages_to_markdown
+from .tabular_db import cross_verify_dual_track, process_page_tabular_agent
 
 logger = logging.getLogger("app.ppt")
 
-# Ukuran batch untuk pemrosesan presentasi/per dokumen massal. Dulu dibatasi
-# 10 oleh lisensi Spire Free; kini dipertahankan sebagai strategi bertahap
-# seragam (sejajar PDF_PAGE_BATCH=10 di pdf.py) demi memori & beban disk/VLM.
+# Ukuran batch untuk pemrosesan presentasi/per dokumen massal.
 SLIDE_BATCH_SIZE: int = 10
 
 PPT_SLIDE_SYSTEM_PROMPT: str = (
@@ -197,18 +197,7 @@ def render_presentation_slides_to_images(
     dpi: int = 200,
     image_ext: str = ".jpg",
 ) -> list[Path]:
-    """Render kanvas slide PowerPoint menjadi gambar per slide via LibreOffice -> PDF -> PyMuPDF.
-
-    Args:
-        presentation_path: Path file presentasi (.pptx / .ppt).
-        output_dir: Direktori penyimpanan gambar (default: <folder_pptx>/<stem>_slides).
-        slides: Daftar indeks slide 0-based yang ingin dirender (None = seluruh slide).
-        dpi: Resolusi gambar hasil render (default 200 DPI).
-        image_ext: Format ekstensi gambar (.jpg / .png, default .jpg).
-
-    Nama file: `slide_<N>.<ext>` (N mulai dari 1, sesuai nomor slide asli).
-    Mengembalikan daftar path gambar yang dihasilkan (berurutan).
-    """
+    """Render kanvas slide PowerPoint menjadi gambar per slide via LibreOffice -> PDF -> PyMuPDF."""
     import pymupdf
 
     source = Path(presentation_path).resolve()
@@ -250,7 +239,6 @@ def render_presentation_slides_to_images(
             img_path = out_dir / f"slide_{slide_num}{ext}"
             pix.save(str(img_path))
             generated_paths.append(img_path)
-            # Progres per batch (SLIDE_BATCH_SIZE) untuk dokumen besar.
             if offset % SLIDE_BATCH_SIZE == 0 or offset == total_targets:
                 logger.info(
                     "[Render PPT] Batch selesai: %d/%d slide dirender",
@@ -349,68 +337,39 @@ def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
         image_count: int = 0
         table_count: int = 0
 
-        # 1. Ambil judul slide jika ada
-        if slide.shapes.title and slide.shapes.title.text.strip():
-            slide_title = slide.shapes.title.text.strip()
+        title_shape = slide.shapes.title
+        if title_shape and title_shape.has_text_frame:
+            slide_title = title_shape.text.strip()
 
-        # 2. Iterasi shape dalam slide
         for shape in slide.shapes:
-            if shape == slide.shapes.title:
+            if shape == title_shape:
                 continue
 
-            # A. Gambar & Media
-            if shape.shape_type in (MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.MEDIA):
-                image_count += 1
-                name = getattr(shape, "name", f"Image_{image_count}")
-                body_lines.append(f"*[Visual / Diagram: {name}]*")
-
-            # B. Tabel
-            elif shape.has_table:
+            if shape.has_table:
                 table_count += 1
-                md_table = _table_to_markdown(shape.table)
-                if md_table:
-                    body_lines.append(md_table)
+                tbl_md = _table_to_markdown(shape.table)
+                if tbl_md:
+                    body_lines.append(f"\n{tbl_md}\n")
 
-            # C. Teks & Bullet points
+            elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                image_count += 1
+
             elif shape.has_text_frame:
-                tf = shape.text_frame
-                for p in tf.paragraphs:
-                    text = p.text.strip()
-                    if not text:
-                        continue
-                    if not slide_title and not body_lines:
-                        slide_title = text
-                        continue
+                extracted_lines = _extract_shape_text(shape)
+                if extracted_lines:
+                    body_lines.extend(extracted_lines)
 
-                    level: int = getattr(p, "level", 0)
-                    indent: str = "  " * level
-                    body_lines.append(f"{indent}- {text}")
-
-        # 3. Ambil speaker notes
         if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
-            nt = slide.notes_slide.notes_text_frame.text.strip()
-            if nt:
-                notes_text = nt
+            notes_text = slide.notes_slide.notes_text_frame.text.strip()
 
-        # 4. Susun markdown per slide
-        title_display = slide_title or "Tanpa Judul"
-        md_content_lines = [f"## Slide {idx}: {title_display}\n"]
+        title_display = slide_title or f"Slide {idx}"
+        md_content_lines: list[str] = [f"## Slide {idx}: {title_display}"]
         if body_lines:
-            md_content_lines.append("\n".join(body_lines))
+            md_content_lines.extend(body_lines)
         if notes_text:
             md_content_lines.append(f"\n> **Speaker Notes:** {notes_text}")
 
         slide_markdown = "\n".join(md_content_lines)
-
-        logger.info(
-            "[Slide %d/%d] Selesai: '%s' | Shapes/Items: %d | Tabel: %d | Gambar: %d",
-            idx,
-            total_slides,
-            title_display[:30] + ("..." if len(title_display) > 30 else ""),
-            len(body_lines),
-            table_count,
-            image_count,
-        )
 
         slides_data.append(
             {
@@ -449,8 +408,16 @@ def process_presentation_vision(
     pipeline: Any,
     output_dir: str | Path | None = None,
     forced_specs: list[str] | str | None = "presentation_slides",
+    db_path: str | Path | None = None,
+    auto_tabular_db: bool = True,
+    force_all_tables: bool = False,
 ) -> str:
-    """Render slide PPT/PPTX menjadi gambar, lalu kirim setiap gambar langsung ke VLM."""
+    """
+    Render slide PPT/PPTX menjadi gambar kanvas per slide dan jalankan arsitektur Dual-Track:
+      - Jalur 1: Mengirim slide langsung ke VLM.
+      - Jalur 2: Sub-Agent SQL mandiri per slide untuk memproses dan meng-ingest tabel SQLite.
+      - Tahap Akhir: Guardrail Cross-Verification oleh Agent Pusat.
+    """
     path_obj = Path(pptx_path).resolve()
 
     logger.info("[Vision PPT] Memulai rendering slide menjadi gambar PNG kanvas...")
@@ -463,7 +430,7 @@ def process_presentation_vision(
         raise RuntimeError(f"Tidak ada slide yang berhasil dirender dari: {path_obj}")
 
     logger.info(
-        "[Vision PPT] Selesai render %d slide gambar. Mengirim setiap gambar ke Vision Model (VLM)...",
+        "[Vision PPT] Selesai render %d slide gambar. Memproses jalur ganda (VLM & Tabular Sub-Agent)...",
         total_images,
     )
 
@@ -475,6 +442,17 @@ def process_presentation_vision(
         raise AttributeError(
             "pipeline harus menyediakan atribut 'vlm' untuk ekstraksi PPT Vision"
         )
+
+    # Tentukan path SQLite jika aktif
+    if db_path:
+        resolved_db_path: Path | None = Path(db_path).resolve()
+    elif output_dir:
+        resolved_db_path = Path(output_dir).resolve() / "databases" / f"{path_obj.stem}.sqlite"
+    else:
+        resolved_db_path = Path("output/databases").resolve() / f"{path_obj.stem}.sqlite"
+
+    if resolved_db_path and auto_tabular_db:
+        resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
 
     for idx, img_path in enumerate(slide_images, start=1):
         logger.info(
@@ -493,9 +471,40 @@ def process_presentation_vision(
         slide_markdowns.append(page_md)
         previous_context = page_md[-400:] if len(page_md) > 400 else page_md
 
-    return stitch_pages_to_markdown(
+        # Jalur 2: Sub-Agent SQL Tabular Engine per slide
+        if auto_tabular_db and resolved_db_path:
+            tab_event, _ = process_page_tabular_agent(
+                page_markdown=page_md,
+                page_number=idx,
+                source_file=str(path_obj.resolve()),
+                db_path=resolved_db_path,
+                table_name_prefix=path_obj.stem,
+                append_if_matching=True,
+                force_all_tables=force_all_tables,
+            )
+            if tab_event.tables_detected > 0:
+                logger.info(
+                    "[Sub-Agent SQL Slide %d] Terdeteksi %d tabel | Status: %s | Baris: %d",
+                    idx,
+                    tab_event.tables_detected,
+                    tab_event.status,
+                    tab_event.rows_ingested_total,
+                )
+
+    stitched = stitch_pages_to_markdown(
         slide_markdowns,
         document_title=file_stem,
         include_page_markers=True,
         is_slide=True,
     )
+
+    # Supervisor Guardrail Audit
+    if auto_tabular_db and resolved_db_path:
+        cross_verify_dual_track(
+            stitched_markdown=stitched,
+            db_path=resolved_db_path,
+            source_file=str(path_obj.resolve()),
+            total_pages=total_images,
+        )
+
+    return stitched
