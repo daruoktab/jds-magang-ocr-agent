@@ -32,6 +32,7 @@ class DocumentExtractionState(TypedDict, total=False):
     forced_specs: list[str] | str | None
     forced_doc_type: str | None
     previous_page_context: str | None
+    use_ocr: bool
     specs: list[str]
     doc_type: str
     ocr_text: str
@@ -73,6 +74,7 @@ class DocumentExtractionPipeline:
         forced_specs: list[str] | str | None = None,
         forced_doc_type: str | None = None,
         previous_page_context: str | None = None,
+        use_ocr: bool = True,
     ) -> dict[str, Any]:
         """Jalankan pipeline ekstraksi komposit pada satu gambar dokumen dengan pelacakan waktu & log terperinci."""
         start_t = time.perf_counter()
@@ -93,6 +95,7 @@ class DocumentExtractionPipeline:
             "forced_specs": forced_specs or forced_doc_type,
             "forced_doc_type": forced_doc_type,
             "previous_page_context": previous_page_context,
+            "use_ocr": use_ocr,
         }
         try:
             result = cast(dict[str, Any], self.graph.invoke(init_state))
@@ -145,6 +148,10 @@ class DocumentExtractionPipeline:
             return {"preprocessed_path": image_path}
 
     def _node_ocr(self, state: DocumentExtractionState) -> dict[str, Any]:
+        if not state.get("use_ocr", True):
+            logger.info("[Node 2/4: OCR] Dilewati; halaman diproses langsung oleh VLM.")
+            return {"ocr_text": ""}
+
         img_path = state.get("preprocessed_path") or state["image_path"]
         t0 = time.perf_counter()
         logger.info(

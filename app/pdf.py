@@ -201,6 +201,7 @@ def process_multipage_pdf(
                 str(img_path),
                 forced_specs=active_forced,
                 previous_page_context=previous_context,
+                use_ocr=False,
             )
 
             page_md: str = res["markdown_content"]

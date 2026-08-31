@@ -42,6 +42,8 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ContentBlock, ImageContent, TextContent
 
 from .multi_page import preview_markdown_chunks as sim_preview_chunks
+from .config import get_settings
+from .llm import build_vlm
 from .preprocess import preprocess_image
 from .tabular_db import (
     TabularDatabaseManager,
@@ -1533,6 +1535,7 @@ def classify_and_ingest_tables_to_sqlite(
             markdown_text=markdown_text,
             source_file=source_file,
             db_path=resolved_db,
+            llm=build_vlm(get_settings()),
         )
         return json.dumps(
             {

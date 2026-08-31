@@ -19,6 +19,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 from .pdf import pdf_page_count, pdf_to_images
 from .ppt import count_presentation_slides, render_presentation_slides_to_images
+from .config import get_settings
+from .llm import build_vlm
 from .tabular_db import extract_and_ingest_tables_from_markdown
 
 logger = logging.getLogger(__name__)
@@ -380,7 +382,6 @@ class AgentDocumentGraph:
         # Ingest tabel transaksional ke database SQLite tunggal dokumen dengan smart schema matching & append
         tabular_info: list[dict[str, Any]] = []
         db_dir = resolve_project_path("output/databases")
-        db_dir.mkdir(parents=True, exist_ok=True)
         db_file = db_dir / f"{resolved.stem}.sqlite"
 
         current_pg = state.get("current_page") or (
@@ -393,13 +394,18 @@ class AgentDocumentGraph:
                 db_path=db_file,
                 page_number=current_pg,
                 append_if_matching=True,
+                llm=build_vlm(get_settings()),
             )
             for r in ingest_res:
                 tabular_info.append(r.model_dump())
         except Exception as exc:  # noqa: BLE001
             logger.warning("Gagal auto-ingest tabel transaksional ke SQLite: %s", exc)
 
-        active_tables = TabularDatabaseManager(db_file).get_active_tables_summary()
+        active_tables = (
+            TabularDatabaseManager(db_file).get_active_tables_summary()
+            if db_file.exists()
+            else []
+        )
 
         metadata = {
             "source_file": str(resolved),

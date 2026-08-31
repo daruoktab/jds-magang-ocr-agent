@@ -3,7 +3,8 @@ CLI Document Vision OCR & Text Extractor (Ready for Chunking).
 
 Secara default, mengeksekusi ekstraksi dokumen:
   - File PPTX / PPT   : Dirender otomatis menjadi gambar kanvas per slide dan dikirim ke VLM (default), atau via `--ppt-native` untuk parser cepat tanpa VLM.
-  - File Gambar / PDF : Diekstrak via pipeline Vision OCR / Deep Reasoning Agent.
+  - File Gambar       : Diekstrak via pipeline OCR + VLM.
+  - File PDF          : Dirender per halaman lalu diproses langsung oleh VLM.
 
 Contoh Penggunaan:
     python main.py input/presentasi.pptx -o output/ppt01.md            # Ekstrak PPTX via gambar slide -> Model Vision (VLM)
@@ -33,10 +34,12 @@ from app.batch import batch_extract_documents, scan_document_directories
 from app.config import get_settings, setup_logging
 from app.deep_agent import build_deep_agent
 from app.graph import DocumentExtractionPipeline
+from app.llm import build_vlm
 from app.multi_page import preview_markdown_chunks
 from app.ocr import build_ocr_extractor
 from app.pdf import pdf_to_images, process_multipage_pdf
 from app.ppt import process_presentation, process_presentation_vision
+from app.tabular_db import extract_and_ingest_tables_from_markdown
 
 logger = logging.getLogger("app.cli")
 
@@ -44,7 +47,7 @@ logger = logging.getLogger("app.cli")
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vision-doc-extractor",
-        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking.",
+        description="Ekstraksi Dokumen Vision VLM -> Markdown Bersih Siap Chunking.",
     )
     p.add_argument(
         "document", nargs="?", help="Path file dokumen (PDF, PPTX, PPT, atau Gambar)"
@@ -244,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     ext = input_path.suffix.lower()
 
     try:
+        tabular_llm = None
         # 3. Mode Render PDF Halaman saja
         if args.pdf_split_only and ext == ".pdf":
             out_pages = pdf_to_images(input_path, dpi=args.dpi)
@@ -279,11 +283,13 @@ def main(argv: list[str] | None = None) -> int:
         if ext in (".pptx", ".ppt") and not args.agent:
             if args.ppt_native and not args.vision and not args.direct_graph:
                 markdown_content = process_presentation(input_path)
+                tabular_llm = build_vlm(settings)
             else:
                 logger.info(
                     "Mengekstrak presentasi via rendering gambar kanvas per slide -> Vision Model (VLM)..."
                 )
                 pipeline = DocumentExtractionPipeline(settings)
+                tabular_llm = pipeline.vlm
                 markdown_content = process_presentation_vision(
                     pptx_path=input_path,
                     pipeline=pipeline,
@@ -325,6 +331,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if ext == ".pdf":
                 pipeline = DocumentExtractionPipeline(settings)
+                tabular_llm = pipeline.vlm
                 extracted_doc = process_multipage_pdf(
                     pdf_path=input_path,
                     pipeline=pipeline,
@@ -334,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
                 markdown_content = extracted_doc.markdown_content
             else:
                 pipeline = DocumentExtractionPipeline(settings)
+                tabular_llm = pipeline.vlm
                 res = pipeline.run(str(input_path), forced_specs=args.doc_type)
                 markdown_content = res["markdown_content"]
 
@@ -351,6 +359,35 @@ def main(argv: list[str] | None = None) -> int:
         else:
             # Tampilkan teks markdown di stdout hanya jika user tidak menentukan file output
             print(markdown_content)
+
+        # Auto-ingest hanya untuk tabel yang diputuskan model sebagai data
+        # transaksional/finansial. Agent mode memiliki workflow ingest sendiri.
+        if not args.agent and tabular_llm is not None:
+            md_target = Path(args.out) if args.out else Path("output") / f"{input_path.stem}.md"
+            db_target = md_target.parent / "databases" / f"{input_path.stem}.sqlite"
+            logger.info("[SQL] Mengevaluasi tabel untuk auto-ingest dengan model...")
+            ingest_results = extract_and_ingest_tables_from_markdown(
+                markdown_text=markdown_content,
+                source_file=str(input_path.resolve()),
+                db_path=db_target,
+                append_if_matching=True,
+                llm=tabular_llm,
+            )
+            if ingest_results:
+                logger.info(
+                    "[SQL] Auto-ingest selesai: %d tabel ke %s",
+                    len(ingest_results),
+                    db_target,
+                )
+                for result in ingest_results:
+                    logger.info(
+                        "[SQL] %s: +%d baris, verifikasi=%s",
+                        result.table_name,
+                        result.total_rows_ingested,
+                        result.verification_report.verification_status,
+                    )
+            else:
+                logger.info("[SQL] Tidak ada tabel yang diputuskan perlu database.")
 
         # Preview Chunks jika diminta
         if args.preview_chunks:

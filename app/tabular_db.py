@@ -19,6 +19,7 @@ Fitur:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import time
@@ -38,6 +39,8 @@ from .schemas import (
     TabularQueryResult,
     VerificationCheck,
 )
+
+logger = logging.getLogger("app.tabular_db")
 
 # Kata kunci header yang mengindikasikan tabel transaksional / finansial
 TRANSACTIONAL_HEADER_KEYWORDS: set[str] = {
@@ -393,6 +396,82 @@ def classify_table_heuristic(
         total_columns=total_cols,
         columns_detected=headers,
     )
+
+
+def classify_table_with_model(
+    headers: list[str],
+    rows: list[list[str]],
+    context: str = "",
+    llm: BaseChatModel | None = None,
+) -> TableClassificationResult | None:
+    """Tentukan keputusan ingest memakai model dengan kriteria yang sama seperti MCP."""
+    if llm is None:
+        return None
+
+    prompt = (
+        "Tugas: tentukan storage untuk SATU tabel Markdown. Ikuti kriteria ingest MCP "
+        "dan kembalikan objek sesuai schema TableClassificationResult.\n\n"
+        "DEFINISI SQLITE (pilih sqlite_database dan is_transactional=true):\n"
+        "- Setiap baris adalah record berulang yang merepresentasikan entitas, item, "
+        "mutasi, transaksi, atau hasil laporan operasional.\n"
+        "- Data dapat difilter atau dihitung secara konsisten dengan SQL: COUNT, SUM, "
+        "AVG, GROUP BY, atau filter berdasarkan ID, status, lokasi, tanggal, dan periode.\n"
+        "- Termasuk rekening koran, invoice, ledger, log keuangan, inventory, warehouse, "
+        "material request (MR), outstanding material, procurement, asset, dan laporan "
+        "operasional sejenis.\n"
+        "- Tabel inventory/material TETAP termasuk SQLite walaupun memiliki kolom "
+        "Warehouse, Site, Item Description, MR Description, SPK, Status, Qty, Aging, "
+        "Outstanding, Issue, Return, atau Reloc. Kolom deskripsi yang panjang tidak "
+        "membuat seluruh tabel menjadi naratif jika setiap baris tetap merupakan record "
+        "item/transaksi dan terdapat identifier, status, atau kuantitas.\n"
+        "- Part 1 dan Part 2 dari satu laporan boleh memiliki schema berbeda; keduanya "
+        "tetap dapat disimpan sebagai tabel SQL terpisah dan tabel berlanjut harus "
+        "digabung berdasarkan kecocokan schema.\n\n"
+        "DEFINISI VECTOR_RAG (pilih vector_rag dan is_transactional=false):\n"
+        "- Tabel hanya berisi narasi kualitatif, matriks penilaian/deskripsi, tanda tangan "
+        "persetujuan, daftar pertanyaan-jawaban, atau metadata dokumen.\n"
+        "- Tidak ada grain record operasional yang berulang dan tidak ada manfaat nyata "
+        "untuk agregasi/filter SQL.\n"
+        "- Jangan memilih vector_rag hanya karena ada kolom deskripsi atau karena "
+        "sebagian nilai numeriknya kosong. Nilai kosong dan identifier numerik tetap "
+        "wajar pada laporan operasional.\n\n"
+        "PROSEDUR KEPUTUSAN:\n"
+        "1. Tentukan grain: apa yang direpresentasikan oleh satu baris.\n"
+        "2. Cari identifier/status/tanggal/lokasi/kuantitas dan pola baris berulang.\n"
+        "3. Nilai apakah pengguna dapat melakukan query SQL yang bermakna pada record itu.\n"
+        "4. Pilih SQLite jika memenuhi definisi di atas; pilih vector_rag hanya jika benar-benar naratif.\n"
+        "5. Jelaskan keputusan secara spesifik dan singkat. Jangan menggunakan alasan "
+        "'bukan finansial' untuk menolak inventory atau data operasional.\n\n"
+        f"Konteks bagian dokumen: {context[:1200]}\n"
+        f"Header tabel: {json.dumps(headers, ensure_ascii=False)}\n"
+        f"Contoh maksimal 8 baris: {json.dumps(rows[:8], ensure_ascii=False)}"
+    )
+    try:
+        try:
+            result = llm.with_structured_output(TableClassificationResult).invoke(prompt)
+        except Exception:
+            # Endpoint OpenAI-compatible lokal tertentu tidak mendukung
+            # response_format/function-calling; tetap gunakan keputusan model
+            # melalui JSON yang diminta langsung pada prompt.
+            raw = llm.invoke(
+                prompt
+                + "\nBalas HANYA JSON valid tanpa markdown code fence."
+            )
+            content = getattr(raw, "content", raw)
+            if isinstance(content, list):
+                content = "".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in content
+                )
+            content = str(content).strip()
+            content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content).strip()
+            result = json.loads(content)
+        if isinstance(result, TableClassificationResult):
+            return result
+        return TableClassificationResult.model_validate(result)
+    except Exception:
+        logger.exception("Klasifikasi model gagal; tabel tidak di-ingest ke SQLite")
+        return None
 
 
 def infer_table_schema(
@@ -1031,23 +1110,50 @@ def extract_and_ingest_tables_from_markdown(
     src_stem = Path(source_file).stem if source_file else "doc"
     base_prefix = sanitize_identifier(table_name_prefix or src_stem)
 
-    db_manager = TabularDatabaseManager(db_path)
-    verifier = TabularVerifier(db_manager, llm=llm)
     results: list[TableIngestionResult] = []
 
+    # Klasifikasi diselesaikan sebelum TabularDatabaseManager dibuat agar tabel
+    # naratif atau keputusan yang gagal tidak membuat file database kosong.
+    decisions: list[tuple[int, dict[str, Any], TableClassificationResult]] = []
     for idx, tbl in enumerate(parsed_tables, start=1):
+        classification = classify_table_with_model(
+            tbl["headers"], tbl["rows"], tbl["context"], llm=llm
+        )
+        if classification is None:
+            logger.warning("Tabel #%d dilewati: keputusan model tidak tersedia.", idx)
+            continue
+        if (
+            not classification.is_transactional
+            or classification.recommended_storage != "sqlite_database"
+        ):
+            logger.info(
+                "Tabel #%d tetap di Markdown/RAG (%s): %s",
+                idx,
+                classification.recommended_storage,
+                classification.reasoning,
+            )
+            continue
+        logger.info(
+            "Tabel #%d diputuskan model perlu SQLite (%s, confidence=%.2f): %s",
+            idx,
+            classification.table_type,
+            classification.confidence,
+            classification.reasoning,
+        )
+        decisions.append((idx, tbl, classification))
+
+    if not decisions:
+        return []
+
+    db_manager = TabularDatabaseManager(db_path)
+    verifier = TabularVerifier(db_manager, llm=llm)
+
+    for idx, tbl, classification in decisions:
         headers = tbl["headers"]
         rows = tbl["rows"]
         context = tbl["context"]
 
-        # 1. Klasifikasi
-        classification = classify_table_heuristic(headers, rows, context=context)
-
-        # 2. Jika bukan transaksional (misal tabel naratif), lewati dari SQLite (tetap di RAG)
-        if not classification.is_transactional:
-            continue
-
-        # 3. Cek apakah ada tabel eksisting yang cocok skemanya untuk di-append (kontinuitas multi-halaman)
+        # Cek tabel eksisting untuk menyatukan tabel yang berlanjut lintas halaman/slide.
         matched = (
             db_manager.find_matching_table(headers) if append_if_matching else None
         )
