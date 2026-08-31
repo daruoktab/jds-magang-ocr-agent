@@ -20,10 +20,11 @@ import json
 import re
 import sqlite3
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -1283,7 +1284,7 @@ def extract_and_ingest_tables_from_markdown(
     Ekstrak semua tabel dari Markdown, filter tabel transaksional / seluruh tabel,
     simpan/append ke database SQLite, dan jalankan double-verification otomatis.
     """
-    event, results = process_page_tabular_agent(
+    _event, results = process_page_tabular_agent(
         page_markdown=markdown_text,
         page_number=page_number or 1,
         source_file=source_file,

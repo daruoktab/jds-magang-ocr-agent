@@ -17,7 +17,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -55,7 +54,7 @@ def _write_run_log(
     stderr: str,
 ) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    timestamp = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    timestamp = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
     sections = [
         f"[{timestamp}] Streamlit launcher run",
         f"Input file: {input_path}",
@@ -88,7 +87,7 @@ def _run_main_cli(
     output_dir.mkdir(parents=True, exist_ok=True)
     out_file = output_dir / f"{input_path.stem}.md"
     log_dir = output_dir / "logs"
-    log_name = f"{input_path.stem}_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M%S')}.log"
+    log_name = f"{input_path.stem}_{dt.datetime.now(dt.UTC).strftime('%Y%m%d_%H%M%S')}.log"
     log_path = log_dir / log_name
 
     cmd = [
@@ -277,7 +276,7 @@ if uploaded_file is not None:
                         st.dataframe(pd.DataFrame(tbl_data), use_container_width=True)
                     else:
                         st.info("ℹ️ Tidak ada tabel transaksional yang ditemukan pada dokumen ini.")
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     st.warning(f"Tidak dapat membaca database SQLite: {e}")
             else:
                 st.info("ℹ️ Dokumen diproses tanpa pembentukan tabel database (dokumen teks naratif polos).")
@@ -321,7 +320,7 @@ if uploaded_file is not None:
                                 df_query_res = pd.read_sql_query(user_query, conn)
                                 st.success(f"Ditemukan {len(df_query_res)} baris:")
                                 st.dataframe(df_query_res, use_container_width=True)
-                        except Exception as q_err:
+                        except Exception as q_err:  # noqa: BLE001
                             st.error(f"Error query SQL: {q_err}")
                 else:
                     st.info("Database SQLite ada tetapi belum memiliki tabel transaksional.")
