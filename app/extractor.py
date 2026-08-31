@@ -1,5 +1,5 @@
 """
-Pipeline ekstraksi: gambar dokumen -> VLM (+ OCR Fusion) -> Markdown Bersih Siap Chunking.
+Pipeline ekstraksi: gambar dokumen -> VLM -> Markdown Bersih Siap Chunking.
 Mendukung multi-spesifikasi karakteristik tata letak dokumen secara komposit dengan logging transparan.
 """
 
@@ -98,7 +98,6 @@ class VisionExtractor:
         image_path: str,
         *,
         specs: list[str] | str | None = None,
-        ocr_text: str | None = None,
         previous_page_context: str | None = None,
     ) -> str:
         """
@@ -107,7 +106,6 @@ class VisionExtractor:
         Args:
             image_path: Path ke file gambar dokumen.
             specs: Satu atau daftar karakteristik dokumen ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides').
-            ocr_text: Teks mentah OCR tambahan untuk grounding / fusion.
             previous_page_context: Konteks halaman sebelumnya untuk menjaga kontinuitas header.
 
         Returns:
@@ -115,14 +113,12 @@ class VisionExtractor:
         """
         user_prompt = build_extraction_prompt(
             specs=specs,
-            ocr_text=ocr_text,
             previous_page_context=previous_page_context,
         )
 
         logger.debug(
-            "[Extractor:Markdown] Menyusun prompt ekstraksi (panjang prompt: %d karakter, OCR grounding: %s, konteks lalu: %s)",
+            "[Extractor:Markdown] Menyusun prompt ekstraksi (panjang prompt: %d karakter, konteks lalu: %s)",
             len(user_prompt),
-            bool(ocr_text),
             bool(previous_page_context),
         )
 

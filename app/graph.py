@@ -1,9 +1,9 @@
 """
-Orkestrasi Pipeline Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking dengan LangGraph.
+Orkestrasi Pipeline Ekstraksi Dokumen VLM -> Markdown Siap Chunking dengan LangGraph.
 Mendukung multi-spesifikasi komposit layout dokumen dengan logging transparan.
 
 Alur StateGraph:
-    START -> preprocess -> ocr -> classify -> extract_markdown -> END
+    START -> preprocess -> classify -> extract_markdown -> END
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from .agents import get_agent
 from .config import Settings, get_settings
 from .extractor import VisionExtractor
 from .llm import build_vlm
-from .ocr import build_ocr_extractor
 from .preprocess import preprocess_image
 from .prompts import normalize_specs
 
@@ -34,7 +33,6 @@ class DocumentExtractionState(TypedDict, total=False):
     previous_page_context: str | None
     specs: list[str]
     doc_type: str
-    ocr_text: str
     markdown_content: str
 
 
@@ -44,7 +42,6 @@ class DocumentExtractionPipeline:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings: Settings = settings or get_settings()
         self.vlm = build_vlm(self.settings)
-        self.ocr = build_ocr_extractor(self.settings)
         self.extractor = VisionExtractor(self.vlm)
         self.graph: CompiledStateGraph = self._build_graph()
 
@@ -53,14 +50,12 @@ class DocumentExtractionPipeline:
 
         # Node pipeline
         builder.add_node("preprocess", self._node_preprocess)
-        builder.add_node("ocr", self._node_ocr)
         builder.add_node("classify", self._node_classify)
         builder.add_node("extract_markdown", self._node_extract_markdown)
 
         # Edges
         builder.add_edge(START, "preprocess")
-        builder.add_edge("preprocess", "ocr")
-        builder.add_edge("ocr", "classify")
+        builder.add_edge("preprocess", "classify")
         builder.add_edge("classify", "extract_markdown")
         builder.add_edge("extract_markdown", END)
 
@@ -121,12 +116,12 @@ class DocumentExtractionPipeline:
     def _node_preprocess(self, state: DocumentExtractionState) -> dict[str, Any]:
         image_path = state["image_path"]
         t0 = time.perf_counter()
-        logger.info("[Node 1/4: Preprocess] Menyiapkan gambar dokumen...")
+        logger.info("[Node 1/3: Preprocess] Menyiapkan gambar dokumen...")
         try:
             proc = preprocess_image(image_path)
             dt = time.perf_counter() - t0
             logger.info(
-                "[Node 1/4: Preprocess] Selesai (%.2fs) | Path: %s | Modifikasi: %s | Dimensi: %s",
+                "[Node 1/3: Preprocess] Selesai (%.2fs) | Path: %s | Modifikasi: %s | Dimensi: %s",
                 dt,
                 proc.processed_path,
                 proc.is_modified,
@@ -136,7 +131,7 @@ class DocumentExtractionPipeline:
         except Exception as e:
             dt = time.perf_counter() - t0
             logger.warning(
-                "[Node 1/4: Preprocess] Gagal dalam %.2fs (%s). Menggunakan gambar asli: '%s'",
+                "[Node 1/3: Preprocess] Gagal dalam %.2fs (%s). Menggunakan gambar asli: '%s'",
                 dt,
                 e,
                 image_path,
@@ -144,60 +139,31 @@ class DocumentExtractionPipeline:
             )
             return {"preprocessed_path": image_path}
 
-    def _node_ocr(self, state: DocumentExtractionState) -> dict[str, Any]:
-        img_path = state.get("preprocessed_path") or state["image_path"]
-        t0 = time.perf_counter()
-        logger.info(
-            "[Node 2/4: OCR] Mengekstrak referensi teks mentah via model OCR..."
-        )
-        try:
-            ocr_res = self.ocr.extract(img_path)
-            dt = time.perf_counter() - t0
-            text_len = len(ocr_res.text)
-            sample = ocr_res.text[:60].replace("\n", " ").strip()
-            preview = f" ('{sample}...')" if text_len > 60 else f" ('{sample}')"
-            logger.info(
-                "[Node 2/4: OCR] Selesai (%.2fs) | Teks OCR: %d karakter%s",
-                dt,
-                text_len,
-                preview if text_len > 0 else "",
-            )
-            return {"ocr_text": ocr_res.text}
-        except Exception as e:
-            dt = time.perf_counter() - t0
-            logger.warning(
-                "[Node 2/4: OCR] Panggilan OCR gagal/dilewati dalam %.2fs: %s",
-                dt,
-                e,
-                exc_info=True,
-            )
-            return {"ocr_text": ""}
-
     def _node_classify(self, state: DocumentExtractionState) -> dict[str, Any]:
         forced = state.get("forced_specs") or state.get("forced_doc_type")
         if forced:
             specs = normalize_specs(forced)
             logger.info(
-                "[Node 3/4: Classify] Spesifikasi layout dipaksa (forced): %s", specs
+                "[Node 2/3: Classify] Spesifikasi layout dipaksa (forced): %s", specs
             )
             return {"specs": specs, "doc_type": specs[0]}
 
         img_path = state.get("preprocessed_path") or state["image_path"]
         t0 = time.perf_counter()
         logger.info(
-            "[Node 3/4: Classify] Mengidentifikasi karakteristik layout dokumen via VLM..."
+            "[Node 2/3: Classify] Mengidentifikasi karakteristik layout dokumen via VLM..."
         )
         try:
             specs = self.extractor.classify(img_path)
             dt = time.perf_counter() - t0
             logger.info(
-                "[Node 3/4: Classify] Selesai (%.2fs) | Terdeteksi: %s", dt, specs
+                "[Node 2/3: Classify] Selesai (%.2fs) | Terdeteksi: %s", dt, specs
             )
             return {"specs": specs, "doc_type": specs[0] if specs else "plain"}
         except Exception as e:
             dt = time.perf_counter() - t0
             logger.warning(
-                "[Node 3/4: Classify] Klasifikasi otomatis gagal dalam %.2fs (%s). Fallback ke ['plain']",
+                "[Node 2/3: Classify] Klasifikasi otomatis gagal dalam %.2fs (%s). Fallback ke ['plain']",
                 dt,
                 e,
                 exc_info=True,
@@ -207,12 +173,11 @@ class DocumentExtractionPipeline:
     def _node_extract_markdown(self, state: DocumentExtractionState) -> dict[str, Any]:
         img_path = state.get("preprocessed_path") or state["image_path"]
         specs = state.get("specs") or ["plain"]
-        ocr_text = state.get("ocr_text") or None
         previous_context = state.get("previous_page_context") or None
 
         t0 = time.perf_counter()
         logger.info(
-            "[Node 4/4: Extract] Menjalankan ekstraksi Markdown dengan spesifikasi: %s...",
+            "[Node 3/3: Extract] Menjalankan ekstraksi Markdown dengan spesifikasi: %s...",
             specs,
         )
         agent = get_agent(specs)
@@ -220,12 +185,11 @@ class DocumentExtractionPipeline:
             md_text = agent.run(
                 image_path=img_path,
                 llm=self.vlm,
-                ocr_text=ocr_text,
                 previous_page_context=previous_context,
             )
             dt = time.perf_counter() - t0
             logger.info(
-                "[Node 4/4: Extract] Selesai (%.2fs) | Panjang Markdown: %d karakter | %d baris",
+                "[Node 3/3: Extract] Selesai (%.2fs) | Panjang Markdown: %d karakter | %d baris",
                 dt,
                 len(md_text),
                 len(md_text.splitlines()),
@@ -234,7 +198,7 @@ class DocumentExtractionPipeline:
         except Exception:
             dt = time.perf_counter() - t0
             logger.exception(
-                "[Node 4/4: Extract] Gagal dalam %.2fs saat ekstraksi Markdown",
+                "[Node 3/3: Extract] Gagal dalam %.2fs saat ekstraksi Markdown",
                 dt,
             )
             raise

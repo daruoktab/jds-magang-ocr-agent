@@ -1,9 +1,9 @@
 """
-CLI Document Vision OCR & Text Extractor (Ready for Chunking).
+CLI Document VLM & OCR Text Extractor (Ready for Chunking).
 
 Secara default, mengeksekusi ekstraksi dokumen:
   - File PPTX / PPT   : Dirender otomatis menjadi gambar kanvas per slide dan dikirim ke VLM (default), atau via `--ppt-native` untuk parser cepat tanpa VLM.
-  - File Gambar / PDF : Diekstrak via pipeline Vision OCR / Deep Reasoning Agent.
+  - File Gambar / PDF : Diekstrak via pipeline VLM / Deep Reasoning Agent.
   - Data Tabular / DB : Sub-Agent SQL aktif mandiri per-halaman/slide untuk memahami, menginspeksi, meng-ingest tabel ke SQLite (`output/databases/{nama_dokumen}.sqlite`), serta diakhiri Guardrail Cross-Verification oleh Agent Pusat.
 
 Contoh Penggunaan:
@@ -69,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--vlm",
         action="store_true",
         dest="vision",
-        help="Kompatibilitas lama: PPT sekarang otomatis dirender ke gambar dan dikirim ke VLM",
+        help="Kompatibilitas lama: gunakan jalur VLM untuk PPT/PDF (default)",
     )
     p.add_argument(
         "--ppt-native",
@@ -310,7 +310,7 @@ def main(argv: list[str] | None = None) -> int:
                 markdown_content = process_presentation(input_path)
             else:
                 logger.info(
-                    "Mengekstrak presentasi via rendering gambar kanvas per slide -> Dual-Track Vision & Sub-Agent SQL..."
+                    "Mengekstrak presentasi via rendering gambar kanvas per slide -> Dual-Track VLM & Sub-Agent SQL..."
                 )
                 pipeline = DocumentExtractionPipeline(settings)
                 markdown_content = process_presentation_vision(

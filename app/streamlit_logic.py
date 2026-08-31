@@ -147,13 +147,20 @@ def _run_main_cli(
 
 def _get_sqlite_db_for_file(input_file: Path) -> Path | None:
     """Cari file database SQLite yang terkait dengan file yang diproses."""
+    db_dir = PROJECT_ROOT / "output" / "databases"
     db_candidates = [
-        Path("output/databases") / f"{input_file.stem}_data.sqlite",
-        Path("output/databases") / "documents_data.sqlite",
+        db_dir / f"{input_file.stem}.sqlite",
+        db_dir / f"{input_file.stem}_data.sqlite",
+        db_dir / "documents_data.sqlite",
     ]
-    for c in db_candidates:
-        if c.exists():
-            return c
+    for candidate in db_candidates:
+        if candidate.exists():
+            return candidate
+
+    if db_dir.exists():
+        stem_matches = sorted(db_dir.glob(f"{input_file.stem}*.sqlite"))
+        if stem_matches:
+            return stem_matches[0]
     return None
 
 

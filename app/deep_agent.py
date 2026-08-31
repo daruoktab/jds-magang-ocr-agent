@@ -1,5 +1,5 @@
 """
-Harness Deep Reasoning Agents untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking, Tabular SQLite Ingestion, & Diagram Mermaid.js.
+Harness Deep Reasoning Agents untuk Ekstraksi Dokumen VLM/OCR -> Markdown Siap Chunking, Tabular SQLite Ingestion, & Diagram Mermaid.js.
 Menggunakan arsitektur Master Orchestrator dengan 8 Sub-Agent terspesialisasi.
 """
 
@@ -73,7 +73,6 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
     def extract_to_markdown(
         image_path: str,
         specs: str = "plain",
-        ocr_text: str | None = None,
         previous_context: str | None = None,
     ) -> str:
         """Ekstrak gambar dokumen menjadi teks Markdown bersih sesuai satu atau kombinasi spesifikasi (mis. 'journal,hierarchy', 'presentation_slides')."""
@@ -82,7 +81,6 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         return agent.run(
             proc.processed_path,
             llm=vlm,
-            ocr_text=ocr_text,
             previous_page_context=previous_context,
         )
 

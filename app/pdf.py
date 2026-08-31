@@ -217,7 +217,6 @@ def process_multipage_pdf(
             )
 
             page_md: str = res["markdown_content"]
-            ocr_txt: str | None = res.get("ocr_text")
             detected_specs: list[str] = res.get("specs") or ["plain"]
 
             pages_md.append(page_md)
@@ -229,7 +228,6 @@ def process_multipage_pdf(
                     page_number=idx,
                     specs=detected_specs,
                     markdown_content=page_md,
-                    ocr_text=ocr_txt,
                     image_path=str(img_path),
                 )
             )

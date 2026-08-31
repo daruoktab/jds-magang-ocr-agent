@@ -51,9 +51,6 @@ class DocumentPage(BaseModel):
     markdown_content: str = Field(
         ..., description="Teks Markdown yang diekstrak dari halaman ini"
     )
-    ocr_text: str | None = Field(
-        default=None, description="Teks mentah hasil OCR tambahan"
-    )
     image_path: str | None = Field(
         default=None, description="Path gambar halaman bila ada"
     )

@@ -39,7 +39,6 @@ class DocumentExtractionAgent:
         image_path: str,
         llm: BaseChatModel,
         *,
-        ocr_text: str | None = None,
         previous_page_context: str | None = None,
     ) -> str:
         """Jalankan ekstraksi Markdown komposit pada gambar input."""
@@ -47,7 +46,6 @@ class DocumentExtractionAgent:
         return extractor.extract_markdown(
             image_path=image_path,
             specs=self.specs,
-            ocr_text=ocr_text,
             previous_page_context=previous_page_context,
         )
 

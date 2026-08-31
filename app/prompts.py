@@ -1,5 +1,5 @@
 """
-Template prompt modular untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking.
+Template prompt modular untuk Ekstraksi Dokumen VLM -> Markdown Siap Chunking.
 
 Mendukung penyusunan prompt modular (Composable Prompting) untuk dokumen yang
 memiliki lebih dari 1 spesifikasi layout secara bersamaan:
@@ -23,8 +23,7 @@ SYSTEM_DOCUMENT_EXTRACTOR: str = (
     "1. Pertahankan ejaan, angka, istilah teknis, rumus, dan bahasa asli persis seperti di dokumen.\n"
     "2. Gunakan sintaks Markdown standar (heading #, ##, ###; bullet list -, 1.; tabel GFM | Col |; bold **text**).\n"
     "3. Jangan menambahkan penjelasan pengantar ('Berikut adalah hasil ekstraksi...') atau penutup. Outputkan HANYA konten dokumen dalam Markdown.\n"
-    "4. Jika ada tabel, konversi ke format Markdown Table (GFM) yang valid.\n"
-    "5. Jika ada teks OCR tambahan, gunakan sebagai referensi untuk memastikan akurasi ejaan/angka, namun gambar tetap acuan visual utama."
+    "4. Jika ada tabel, konversi ke format Markdown Table (GFM) yang valid."
 )
 
 # --- Modul Aturan Komposisional (Composable Rule Modules) --------------------
@@ -121,7 +120,6 @@ def normalize_specs(specs: list[str] | str | None) -> list[str]:
 
 def build_extraction_prompt(
     specs: list[str] | str | None = None,
-    ocr_text: str | None = None,
     previous_page_context: str | None = None,
 ) -> str:
     """
@@ -150,15 +148,6 @@ def build_extraction_prompt(
             "Dokumen ini merupakan halaman lanjutan. Konteks akhir halaman sebelumnya adalah:\n"
             f"```markdown\n{previous_page_context.strip()[-500:]}\n```\n"
             "Pastikan level heading (#, ##, ###) dan kelanjutan kalimat pada halaman ini menyambung secara selaras dengan konteks di atas."
-        )
-
-    # Sisipkan teks mentah OCR jika ada
-    if ocr_text and ocr_text.strip():
-        prompt_blocks.append(
-            "### AUXILIARY OCR TEXT (REFERENSI TEKS TAMBAHAN):\n"
-            "Teks mentah berikut diekstrak dari gambar menggunakan model OCR beresolusi tinggi. "
-            "Gunakan untuk membantu memverifikasi ejaan, istilah teknis, simbol, atau angka kecil:\n"
-            f"```\n{ocr_text.strip()}\n```"
         )
 
     prompt_blocks.append(
