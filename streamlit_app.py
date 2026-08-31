@@ -20,7 +20,6 @@ from app.multi_page import preview_markdown_chunks
 from app.ocr import build_ocr_extractor
 from app.pdf import pdf_to_images, process_multipage_pdf
 
-
 SUPPORTED_TYPES = ["pdf", "png", "jpg", "jpeg"]
 SPEC_OPTIONS = {
     "Auto-detect": None,
@@ -203,7 +202,7 @@ def main() -> None:
                     st.session_state["logs"] = logs
                     st.session_state["filename"] = uploaded_file.name
                     st.session_state.pop("error", None)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     st.session_state.pop("result", None)
                     st.session_state["error"] = str(exc)
 
