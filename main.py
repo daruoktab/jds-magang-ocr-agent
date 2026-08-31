@@ -4,13 +4,14 @@ CLI Document Vision OCR & Text Extractor (Ready for Chunking).
 Secara default, mengeksekusi ekstraksi dokumen:
   - File PPTX / PPT   : Dirender otomatis menjadi gambar kanvas per slide dan dikirim ke VLM (default), atau via `--ppt-native` untuk parser cepat tanpa VLM.
   - File Gambar / PDF : Diekstrak via pipeline Vision OCR / Deep Reasoning Agent.
+  - Data Tabular / DB : Otomatis mengekstrak tabel ke database SQLite (`output/databases/{nama_dokumen}.sqlite`) dengan double-verification.
 
 Contoh Penggunaan:
     python main.py input/presentasi.pptx -o output/ppt01.md            # Ekstrak PPTX via gambar slide -> Model Vision (VLM)
     python main.py input/presentasi.pptx --ppt-native -o output/ppt01.md # Ekstrak PPTX native (cepat, tanpa VLM)
-    python main.py dokumen.pdf -o output.md                            # Ekstrak PDF otomatis via VLM
+    python main.py dokumen.pdf -o output/dokumen.md                    # Ekstrak PDF otomatis via VLM & simpan SQLite
     python main.py scan.jpg --debug                                    # Ekstrak gambar dengan log lengkap
-    python main.py dokumen.pdf --direct-graph                          # Gunakan pipeline deterministik LangGraph
+    python main.py dokumen.pdf --force-all-tables                      # Ingest seluruh tabel ke SQLite
     python main.py --scan-folders dataset                              # Pindai folder-folder dokumen
 """
 
@@ -37,6 +38,7 @@ from app.multi_page import preview_markdown_chunks
 from app.ocr import build_ocr_extractor
 from app.pdf import pdf_to_images, process_multipage_pdf
 from app.ppt import process_presentation, process_presentation_vision
+from app.tabular_db import extract_and_ingest_tables_from_markdown
 
 logger = logging.getLogger("app.cli")
 
@@ -44,7 +46,7 @@ logger = logging.getLogger("app.cli")
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vision-doc-extractor",
-        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking.",
+        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking & Database Tabular SQLite.",
     )
     p.add_argument(
         "document", nargs="?", help="Path file dokumen (PDF, PPTX, PPT, atau Gambar)"
@@ -121,6 +123,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--list-types",
         action="store_true",
         help="Daftar spesifikasi karakteristik dokumen yang didukung",
+    )
+
+    # SQLite Tabular Database options
+    p.add_argument(
+        "--no-db",
+        action="store_true",
+        help="Nonaktifkan auto-ingest tabel dokumen ke database SQLite",
+    )
+    p.add_argument(
+        "--force-all-tables",
+        action="store_true",
+        help="Ingest seluruh tabel yang ditemukan ke database SQLite (termasuk tabel naratif/umum)",
+    )
+    p.add_argument(
+        "--db-path",
+        default=None,
+        help="Custom path tujuan database SQLite (default: output/databases/{nama_dokumen}.sqlite)",
     )
 
     # Logging options
@@ -351,6 +370,54 @@ def main(argv: list[str] | None = None) -> int:
         else:
             # Tampilkan teks markdown di stdout hanya jika user tidak menentukan file output
             print(markdown_content)
+
+        # Auto-ingest data tabel ke database SQLite jika ditemukan tabel pada Markdown
+        if not args.no_db:
+            if args.db_path:
+                db_target_file = Path(args.db_path).resolve()
+            elif args.out:
+                db_dir = Path(args.out).parent / "databases"
+                db_target_file = db_dir / f"{input_path.stem}.sqlite"
+            else:
+                db_dir = Path("output/databases").resolve()
+                db_target_file = db_dir / f"{input_path.stem}.sqlite"
+
+            db_target_file.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                ingest_res = extract_and_ingest_tables_from_markdown(
+                    markdown_text=markdown_content,
+                    source_file=str(input_path.resolve()),
+                    db_path=db_target_file,
+                    table_name_prefix=input_path.stem,
+                    append_if_matching=True,
+                    force_all_tables=args.force_all_tables,
+                )
+                if ingest_res:
+                    logger.info(
+                        "[Tabular SQL] Berhasil mengekstrak %d tabel ke SQLite: %s",
+                        len(ingest_res),
+                        db_target_file,
+                    )
+                    for r in ingest_res:
+                        verif_status = (
+                            r.verification_report.verification_status
+                            if r.verification_report
+                            else "N/A"
+                        )
+                        logger.info(
+                            "  -> Tabel '%s' (%d baris) | Status Verifikasi: %s",
+                            r.table_name,
+                            r.total_rows_ingested,
+                            verif_status,
+                        )
+                else:
+                    logger.debug(
+                        "[Tabular SQL] Tidak ada tabel transaksional terdeteksi untuk di-ingest."
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "[Tabular SQL] Gagal melakukan ekstraksi tabel ke SQLite: %s", e
+                )
 
         # Preview Chunks jika diminta
         if args.preview_chunks:

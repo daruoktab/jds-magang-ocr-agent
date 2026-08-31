@@ -354,7 +354,7 @@ def classify_table_heuristic(
         is_transactional = True
         table_type = "transactional_log"
         reasoning_points.append(
-            f"Rasio keyword transaksional tinggi ({keyword_ratio:.1%}) dan kepadatan angka/tanggal {numeric_density + date_density:.1%}. "
+            f"Rasio keyword transaksional tinggi ({keyword_ratio:.1%}) dan kepadatan angka/tanggal {numeric_density + date_density:.1%}."
         )
     elif numeric_density >= 0.40 and total_rows >= 3 and avg_cell_len <= 45:
         is_transactional = True
@@ -1018,11 +1018,12 @@ def extract_and_ingest_tables_from_markdown(
     table_name_prefix: str | None = None,
     page_number: int | None = None,
     append_if_matching: bool = True,
+    force_all_tables: bool = False,
     llm: BaseChatModel | None = None,
 ) -> list[TableIngestionResult]:
     """
-    Ekstrak semua tabel dari Markdown, filter tabel transaksional, simpan/append ke database SQLite,
-    dan jalankan double-verification otomatis.
+    Ekstrak semua tabel dari Markdown, filter tabel transaksional / seluruh tabel,
+    simpan/append ke database SQLite, dan jalankan double-verification otomatis.
     """
     parsed_tables = parse_markdown_tables(markdown_text)
     if not parsed_tables:
@@ -1043,8 +1044,8 @@ def extract_and_ingest_tables_from_markdown(
         # 1. Klasifikasi
         classification = classify_table_heuristic(headers, rows, context=context)
 
-        # 2. Jika bukan transaksional (misal tabel naratif), lewati dari SQLite (tetap di RAG)
-        if not classification.is_transactional:
+        # 2. Jika bukan transaksional (misal tabel naratif) dan tidak force_all_tables, lewati dari SQLite
+        if not classification.is_transactional and not force_all_tables:
             continue
 
         # 3. Cek apakah ada tabel eksisting yang cocok skemanya untuk di-append (kontinuitas multi-halaman)
