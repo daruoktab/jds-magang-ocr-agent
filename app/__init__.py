@@ -1,10 +1,9 @@
 """
-Vision OCR & Document Text Extractor (Ready for Chunking, Tabular Database, & Mermaid Diagrams).
+Vision VLM & Document Text Extractor (Ready for Chunking, Tabular Database, & Mermaid Diagrams).
 
 Modul:
   - config.py        : Pengaturan lingkungan & model via .env
   - preprocess.py    : Preprocessing gambar (auto-rotate EXIF, contrast enhancement)
-  - ocr.py           : Model OCR tuned untuk referensi teks resolusi tinggi
   - prompts.py       : Prompt spesialisasi 4 spesifikasi tata letak dokumen
   - extractor.py     : Ekstraktor VLM multimodal -> Markdown
   - agents.py        : Registry agent untuk spesifikasi dokumen
@@ -40,7 +39,6 @@ from .multi_page import (
     split_markdown_by_pages,
     stitch_pages_to_markdown,
 )
-from .ocr import OCRExtractor, build_ocr_extractor
 from .pdf import (
     extract_pdf_with_pymupdf4llm,
     pdf_page_count,
@@ -62,11 +60,11 @@ from .schemas import (
     ClassificationResult,
     DiagramConvertibilityResult,
     DiagramExtractionResult,
+    DiagramFormatRecommendation,
     DocumentPage,
     DocumentSection,
     DualTrackGuardrailReport,
     ExtractedDocument,
-    OCRResult,
     PageTabularEvent,
     TableClassificationResult,
     TableColumnSchema,
@@ -95,6 +93,7 @@ __all__ = [
     "ClassificationResult",
     "DiagramConvertibilityResult",
     "DiagramExtractionResult",
+    "DiagramFormatRecommendation",
     "DocumentExtractionAgent",
     "DocumentExtractionPipeline",
     "DocumentExtractionState",
@@ -102,8 +101,6 @@ __all__ = [
     "DocumentSection",
     "DualTrackGuardrailReport",
     "ExtractedDocument",
-    "OCRExtractor",
-    "OCRResult",
     "PageTabularEvent",
     "Settings",
     "TableClassificationResult",
@@ -119,7 +116,6 @@ __all__ = [
     "VisionRAGPipeline",
     "batch_extract_documents",
     "build_deep_agent",
-    "build_ocr_extractor",
     "classify_diagram_convertibility",
     "classify_table_heuristic",
     "convert_presentation_to_pdf",

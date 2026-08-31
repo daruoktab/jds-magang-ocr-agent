@@ -98,46 +98,44 @@ def get_subagent_task_directives(
                 "mandatory_action": (
                     "WAJIB diekstrak sebagai blok kode ```mermaid (misal flowchart TD / flowchart LR / sequenceDiagram). "
                     "DILARANG KERAS menggunakan panah teks biasa (↓, ->, -->) dalam daftar teks untuk diagram alir. "
-                    'Selalu beri tanda kutip ganda pada label teks bersimbol/spasi, misal node_1["Langkah 1 (Input Data)"].'
+                    "Gunakan identifier bersih (tanpa spasi/simbol) dan beri tanda kutip ganda pada label teks node."
                 ),
             },
             "tabular_sqlite_specialist": {
-                "trigger": "Visual memuat tabel data, log transaksi, laporan keuangan, neraca saldo, atau matriks pengukuran numerik",
+                "trigger": "Visual memuat tabel log transaksi, mutasi keuangan, invoice, daftar harga, rekapitulasi numerik bertanggal/bernominal",
                 "mandatory_action": (
-                    "Ekstrak sebagai tabel Markdown GFM bersih. "
-                    "Untuk kolom angka berketerangan (misal: '0,683 (Kuat)'), pisahkan angka ke kolom nilai numerik murni dan label ke kolom kategori, "
-                    "agar database SQLite dapat otomatis meng-ingest dan menjalankan query agregasi SQL (SUM, AVG, COUNT)."
+                    "Tulis tabel dalam format GFM Markdown standar dengan header yang jelas. "
+                    "Gunakan format tanggal ISO jika memungkinkan (YYYY-MM-DD) dan angka numerik bersih tanpa pemisah ribuan. "
+                    "Sistem secara otomatis akan meng-ingest tabel ini ke database SQLite dan memverifikasi integritas baris serta kalkulasi agregat."
                 ),
-                "active_sqlite_tables_snapshot": active_tables or [],
-            },
-            "invoice_form_specialist": {
-                "trigger": "Visual memuat kwitansi, invoice faktur, formulir key-value, atau bukti transaksi",
-                "mandatory_action": (
-                    "Ekstrak metadata header (No Invoice, Tanggal, Pengirim, Penerima) dalam format key-value bold, "
-                    "ekstrak rincian item dalam tabel tabular, dan verifikasi konsistensi aritmatika (Subtotal + Pajak = Total)."
-                ),
+                "existing_active_tables": active_tables or [],
             },
             "legal_hierarchy_specialist": {
-                "trigger": "Dokumen berupa peraturan perundang-undangan, keputusan, statuta, atau regulasi hukum",
+                "trigger": "Dokumen hukum/regulasi (UU, PP, Permen, SK, Perda)",
                 "mandatory_action": (
-                    "Patuhi tumpukan hirarki: JUDUL -> PEMBUKAAN (Menimbang/Mengingat/MEMUTUSKAN) -> BAB -> Bagian -> Paragraf -> Pasal -> Ayat -> Huruf -> Angka. "
-                    "Cegah level drift agar konsisten di seluruh halaman dokumen."
+                    "Gunakan hierarki heading terstruktur: `# JUDUL`, `## BAB`, `### Bagian`, `#### Paragraf`, `##### Pasal`. "
+                    "Format ayat `(1)` dan butir rincian `a.` / `1.` sebagai list Markdown terindentasi."
                 ),
             },
             "presentation_slide_specialist": {
-                "trigger": "Dokumen berupa slide presentasi (PPT / PPTX / Slide deck)",
+                "trigger": "Slide presentasi PowerPoint / PDF slide",
                 "mandatory_action": (
-                    "Gunakan `# Judul Presentasi` untuk Slide 1 (cover), dan `## Judul Slide` untuk slide-slide berikutnya. "
-                    "Ekstrak poin daftar terstruktur, dan beri anotasi gambar/foto/bagan dalam blockquote `> [!NOTE] Foto/Bagan: <deskripsi>`."
+                    f"Setiap slide wajib diawali header `<!-- slide: {current_page} -->` diikuti judul slide `# Judul`. "
+                    "Ekstrak bullet points, tabel ringkas, serta speaker notes jika ada."
                 ),
             },
             "scientific_math_specialist": {
-                "trigger": "Visual memuat rumus matematika, koordinat geografis, satuan fisik/kimia, atau notasi ilmiah",
+                "trigger": "Jurnal ilmiah 2-kolom atau rumus matematika",
                 "mandatory_action": (
-                    "Pertahankan notasi eksak: koordinat derajat-menit-detik (misal 7°54'13.97\" LS), satuan fisik (mdpl, ppm, μS/cm, °C), "
-                    "dan rumus matematika dalam blok LaTeX $$ rumus $$."
+                    "Baca kolom kiri dari atas ke bawah hingga tuntas sebelum membaca kolom kanan. "
+                    "Tulis rumus matematika dalam format LaTeX standard (`$...$` inline, `$$...$$` block)."
                 ),
             },
+        },
+        "context_info": {
+            "page_number": current_page,
+            "total_pages": total_pages,
+            "doc_type": doc_type,
         },
     }
 
@@ -193,209 +191,226 @@ class AgentDocumentGraph:
         else:
             return {
                 "status": "error",
-                "error": f"Ekstensi file '{ext}' tidak didukung",
+                "error": f"Format file tidak didukung: {ext}",
             }
 
-        if total_items <= 0:
-            return {
-                "status": "error",
-                "error": f"Dokumen tidak memiliki halaman/slide valid: {resolved}",
-            }
-
-        batch_size = max(1, state.get("batch_size", 1))
-        batch_start = max(1, state.get("current_page") or state.get("batch_start") or 1)
-        batch_end = min(batch_start + batch_size - 1, total_items)
-        has_more = batch_end < total_items
-        next_start = (batch_end + 1) if has_more else None
-
-        default_out_sub = (
-            f"output/rendered_slides/{resolved.stem}"
-            if doc_type == "pptx"
-            else (
-                f"output/rendered_pages/{resolved.stem}"
-                if doc_type == "pdf"
-                else f"output/rendered_images/{resolved.stem}"
-            )
-        )
-        out_raw = state.get("output_dir") or default_out_sub
-        resolved_out = resolve_project_path(out_raw)
+        raw_out = state.get("output_dir", "")
+        if raw_out:
+            resolved_out = resolve_project_path(raw_out)
+        else:
+            resolved_out = PROJECT_ROOT / "output" / resolved.stem
 
         return {
             "resolved_path": str(resolved),
             "doc_type": doc_type,
             "total_items": total_items,
-            "current_page": batch_start,
-            "batch_start": batch_start,
-            "batch_size": batch_size,
-            "batch_end": batch_end,
-            "has_more": has_more,
-            "next_start": next_start,
             "resolved_out": str(resolved_out),
             "status": "inspected",
         }
 
     @staticmethod
     def _node_render_batch(state: DocumentBatchState) -> dict[str, Any]:
-        """Node 2: Eksekusi rendering batch gambar pada resolusi & format teroptimasi."""
+        """Node 2: Render batch slide/halaman menjadi gambar resolusi tinggi."""
         if state.get("status") == "error":
             return {}
 
-        doc_type = state["doc_type"]
         resolved = Path(state["resolved_path"])
+        doc_type = state.get("doc_type", "image")
+        total_items = state.get("total_items", 1)
+        start_idx = max(1, state.get("batch_start", 1))
+        batch_size = max(1, state.get("batch_size", 5))
+        dpi = state.get("dpi", 150)
         resolved_out = Path(state["resolved_out"])
         resolved_out.mkdir(parents=True, exist_ok=True)
 
-        batch_start = state["batch_start"]
-        batch_end = state["batch_end"]
-        window_indices = list(range(batch_start - 1, batch_end))
-        dpi = state.get("dpi", 150)
+        end_idx = min(start_idx + batch_size - 1, total_items)
+        rendered_images: list[str] = []
 
-        # Bersihkan file render lama pada batch pertama
-        if batch_start == 1:
-            for old_f in resolved_out.glob("slide_*.*"):
-                try:
-                    old_f.unlink(missing_ok=True)
-                except OSError:
-                    pass
-
-        try:
-            if doc_type == "pptx":
-                rendered_paths = render_presentation_slides_to_images(
+        if doc_type == "pptx":
+            target_indices = list(range(start_idx - 1, end_idx))
+            slides_out = resolved_out / "slides"
+            slides_out.mkdir(parents=True, exist_ok=True)
+            try:
+                images = render_presentation_slides_to_images(
                     resolved,
-                    output_dir=resolved_out,
-                    slides=window_indices,
+                    output_dir=slides_out,
+                    slides=target_indices,
                     dpi=dpi,
-                    image_ext=".jpg",
+                    image_ext="jpg",
                 )
-            elif doc_type == "pdf":
-                rendered_paths = pdf_to_images(
-                    resolved,
-                    output_dir=resolved_out,
-                    dpi=dpi,
-                    pages=window_indices,
+                rendered_images = [str(p) for p in images]
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "status": "error",
+                    "error": f"Gagal merender slide presentasi: {exc}",
+                }
+
+        elif doc_type == "pdf":
+            pages_out = resolved_out / "pages"
+            pages_out.mkdir(parents=True, exist_ok=True)
+            try:
+                all_pages = pdf_to_images(
+                    resolved, output_dir=pages_out, dpi=dpi, image_ext="jpg"
                 )
-            else:
-                rendered_paths = [resolved]
+                rendered_images = [
+                    str(p) for p in all_pages[start_idx - 1 : end_idx]
+                ]
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "status": "error",
+                    "error": f"Gagal merender halaman PDF: {exc}",
+                }
 
-            str_paths = [str(p) for p in rendered_paths]
-            has_more = state["has_more"]
-            next_start = state["next_start"]
+        elif doc_type == "image":
+            rendered_images = [str(resolved)]
 
-            inst = (
-                f"Halaman/Slide {batch_start}..{batch_end} selesai dirender ({len(str_paths)} gambar). "
-                f"Silakan baca gambar tersebut dan panggil tool penyimpan Markdown ('submit_page_and_get_next' atau 'save_extraction_result'). "
-                f"Lanjutkan ke nomor={next_start} setelah bagian ini tersimpan."
-                if has_more
-                else "Seluruh dokumen selesai dirender. Simpan bagian ini untuk finalisasi dokumen."
-            )
+        has_more = end_idx < total_items
+        next_start = end_idx + 1 if has_more else None
 
-            # Ambil snapshot tabel SQLite eksisting jika ada
-            from .tabular_db import TabularDatabaseManager
+        from .tabular_db import TabularDatabaseManager
 
-            db_file = (
-                resolve_project_path("output/databases") / f"{resolved.stem}.sqlite"
-            )
-            active_tables = (
-                TabularDatabaseManager(db_file).get_active_tables_summary()
-                if db_file.exists()
-                else []
-            )
+        db_path = resolved_out / "databases" / f"{resolved.stem}.sqlite"
+        active_tables = []
+        if db_path.exists():
+            active_tables = TabularDatabaseManager(db_path).get_active_tables_summary()
 
-            directives = get_subagent_task_directives(
-                doc_type=state.get("doc_type", "general"),
-                current_page=batch_start,
-                total_pages=state.get("total_items", 1),
-                active_tables=active_tables,
-            )
+        directives = get_subagent_task_directives(
+            doc_type=doc_type,
+            current_page=start_idx,
+            total_pages=total_items,
+            active_tables=active_tables,
+        )
 
-            return {
-                "rendered_images": str_paths,
-                "active_tables_summary": active_tables,
-                "subagent_task_directives": directives,
-                "status": "rendered",
-                "instruction": inst,
-            }
-        except Exception as exc:  # noqa: BLE001
-            return {
-                "status": "error",
-                "error": f"Gagal saat merender batch dokumen: {exc}",
-            }
+        return {
+            "current_page": start_idx,
+            "batch_start": start_idx,
+            "batch_end": end_idx,
+            "rendered_images": rendered_images,
+            "has_more": has_more,
+            "next_start": next_start,
+            "subagent_task_directives": directives,
+            "status": "rendered",
+            "instruction": (
+                f"Batch {start_idx}-{end_idx} ({len(rendered_images)} gambar) berhasil dirender. "
+                "Evaluasi visual dan ekstrak ke Markdown."
+            ),
+        }
 
     @staticmethod
     def _node_save_and_stitch(state: DocumentBatchState) -> dict[str, Any]:
-        """Node 3: Penggabungan Markdown inkremental, penulisan metadata, & auto-ingest SQLite."""
+        """Node 3: Simpan Markdown, stitching parsial/lengkap, dan auto-ingest SQLite."""
         if state.get("status") == "error":
             return {}
 
-        incoming = state.get("incoming_markdown") or ""
-        if not incoming.strip():
+        resolved = Path(state["resolved_path"])
+        total_items = state.get("total_items", 1)
+        raw_markdown = state.get("incoming_markdown", "")
+        if not raw_markdown:
             return {
                 "status": "error",
-                "error": "Konten Markdown yang dikirimkan kosong",
+                "error": "Markdown masukan kosong pada proses penyimpanan",
             }
 
-        from .multi_page import merge_and_stitch_markdown_pages
+        from .multi_page import split_markdown_by_pages, stitch_pages_to_markdown
+        from .schemas import DocumentPage
         from .tabular_db import TabularDatabaseManager
 
-        resolved = Path(state["resolved_path"])
-        out_base = resolve_project_path(state.get("output_dir") or "output/agent_gold")
+        out_base = Path(state["resolved_out"])
         out_base.mkdir(parents=True, exist_ok=True)
+        chunks_dir = out_base / "chunks"
+        chunks_dir.mkdir(parents=True, exist_ok=True)
 
-        is_slide = state["doc_type"] == "pptx"
-        out_md = out_base / f"{resolved.stem}.md"
-        current_pg = state.get("current_page") or state.get("batch_start") or 1
-        is_resume = state.get("resume", False)
-        is_overwrite = state.get("overwrite", False)
-        existing_md: str | None = None
-        if out_md.exists() and (is_resume or (current_pg > 1 and not is_overwrite)):
-            existing_md = out_md.read_text(encoding="utf-8")
+        current_page_in = state.get("current_page", state.get("batch_start", 1))
 
-        clean_incoming = incoming.strip() + "\n"
-        merged_md, pages_parsed = merge_and_stitch_markdown_pages(
-            existing_md,
-            clean_incoming,
-            default_page_number=current_pg,
-            is_slide=is_slide,
+        # Jika mulai/re-ekstraksi dari Halaman 1 pada dokumen multi-halaman, bersihkan sisa chunk lama (page > 1)
+        if current_page_in == 1 and total_items > 1:
+            for old_p in chunks_dir.glob("page_*.md"):
+                try:
+                    num = int(old_p.stem.split("_")[-1])
+                    if num > 1:
+                        old_p.unlink(missing_ok=True)
+                except ValueError:
+                    pass
+
+        doc_type = state.get("doc_type", "")
+        specs = state.get("specs", "plain")
+        is_slide = doc_type == "pptx" or "slide" in specs or "presentation" in specs
+
+        pages_parsed = split_markdown_by_pages(
+            raw_markdown,
+            default_page_number=current_page_in,
+            default_type="slide" if is_slide else "page",
         )
+
+        for p in pages_parsed:
+            p_num = int(p["page_number"])
+            p_content = str(p["content"])
+            p_file = chunks_dir / f"page_{p_num:04d}.md"
+            p_file.write_text(p_content, encoding="utf-8")
+
+        all_page_files = sorted(chunks_dir.glob("page_*.md"))
+        all_pages_accumulated: list[DocumentPage] = []
+        for pf in all_page_files:
+            try:
+                num = int(pf.stem.split("_")[-1])
+                all_pages_accumulated.append(
+                    DocumentPage(
+                        page_number=num,
+                        markdown_content=pf.read_text(encoding="utf-8"),
+                    )
+                )
+            except ValueError:
+                continue
+
+        all_pages_accumulated.sort(key=lambda x: x.page_number)
+        merged_md = stitch_pages_to_markdown(
+            all_pages_accumulated, is_slide=is_slide
+        )
+
+        out_md = out_base / f"{resolved.stem}.md"
         out_md.write_text(merged_md, encoding="utf-8")
 
-        total_items = state["total_items"]
-        got_numbers = sorted({p["page_number"] for p in pages_parsed})
-        missing = (
-            [n for n in range(1, total_items + 1) if n not in got_numbers]
-            if (total_items > 1)
-            else []
-        )
-        is_complete = not bool(missing)
+        got_numbers = [p.page_number for p in all_pages_accumulated]
+        missing = [i for i in range(1, total_items + 1) if i not in got_numbers]
+        is_complete = len(missing) == 0 and len(got_numbers) >= total_items
 
         page_structure = [
             {
-                "page_number": p["page_number"],
-                "type": p["type"],
-                "char_count": len(p["content"]),
+                "page": p.page_number,
+                "char_count": len(p.markdown_content),
+                "line_count": len(p.markdown_content.splitlines()),
+                "headings": [
+                    line.strip()
+                    for line in p.markdown_content.splitlines()
+                    if line.strip().startswith("#")
+                ],
             }
-            for p in pages_parsed
+            for p in all_pages_accumulated
         ]
 
-        # Ingest tabel transaksional ke database SQLite tunggal dokumen dengan smart schema matching & append
-        tabular_info: list[dict[str, Any]] = []
-        db_dir = resolve_project_path("output/databases")
+        # Auto-ingest tabel ke SQLite
+        db_dir = out_base / "databases"
         db_dir.mkdir(parents=True, exist_ok=True)
         db_file = db_dir / f"{resolved.stem}.sqlite"
 
-        current_pg = state.get("current_page") or (
-            got_numbers[-1] if got_numbers else 1
-        )
+        tabular_info: list[dict[str, Any]] = []
         try:
-            ingest_res = extract_and_ingest_tables_from_markdown(
-                markdown_text=clean_incoming,
+            tab_results = extract_and_ingest_tables_from_markdown(
+                markdown_text=merged_md,
                 source_file=str(resolved),
                 db_path=db_file,
-                page_number=current_pg,
-                append_if_matching=True,
+                force_all_tables=False,
             )
-            for r in ingest_res:
-                tabular_info.append(r.model_dump())
+            for res in tab_results:
+                if res.status == "success":
+                    tabular_info.append({
+                        "table_name": res.table_name,
+                        "rows_ingested": res.total_rows_ingested,
+                        "columns": res.columns,
+                        "verified": res.verification_report.is_valid
+                        if res.verification_report
+                        else False,
+                    })
         except Exception as exc:  # noqa: BLE001
             logger.warning("Gagal auto-ingest tabel transaksional ke SQLite: %s", exc)
 
@@ -408,7 +423,6 @@ class AgentDocumentGraph:
                 s.strip() for s in state.get("specs", "plain").split(",") if s.strip()
             ],
             "extracted_by": "agent",
-            "ocr_used": False,
             "saved_at": datetime.now(UTC).isoformat(),
             "markdown_path": str(out_md),
             "char_count": len(merged_md),
@@ -492,10 +506,12 @@ class AgentDocumentGraph:
         builder = StateGraph(cast(Any, DocumentBatchState))
         builder.add_node("resolve_and_inspect", self._node_resolve_and_inspect)
         builder.add_node("save_and_stitch", self._node_save_and_stitch)
+        builder.add_node("advance_to_next", self._node_advance_to_next)
 
         builder.add_edge(START, "resolve_and_inspect")
         builder.add_edge("resolve_and_inspect", "save_and_stitch")
-        builder.add_edge("save_and_stitch", END)
+        builder.add_edge("save_and_stitch", "advance_to_next")
+        builder.add_edge("advance_to_next", END)
 
         return builder.compile()
 
@@ -513,13 +529,12 @@ class AgentDocumentGraph:
         return builder.compile()
 
 
-# Global Singleton Pipeline
-_agent_graph_instance: AgentDocumentGraph | None = None
+_agent_document_graph_instance: AgentDocumentGraph | None = None
 
 
 def get_agent_document_graph() -> AgentDocumentGraph:
-    """Mengembalikan singleton instance AgentDocumentGraph."""
-    global _agent_graph_instance
-    if _agent_graph_instance is None:
-        _agent_graph_instance = AgentDocumentGraph()
-    return _agent_graph_instance
+    """Mengembalikan instance singleton dari AgentDocumentGraph."""
+    global _agent_document_graph_instance
+    if _agent_document_graph_instance is None:
+        _agent_document_graph_instance = AgentDocumentGraph()
+    return _agent_document_graph_instance

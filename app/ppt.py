@@ -1,193 +1,184 @@
 """
-Modul pemrosesan dokumen presentasi PowerPoint (.pptx / .ppt).
+Modul Pemrosesan Dokumen Presentasi PowerPoint (.pptx / .ppt).
 
-Alur presentasi dijaga sederhana dan eksplisit:
-  - PPT/PPTX dirender menjadi gambar per slide
-  - Setiap gambar slide dikirim langsung ke VLM Qwen 35B Vision (Jalur 1)
-  - Sub-Agent SQL mandiri per slide mengecek tabel, skema, dan meng-ingest ke SQLite (Jalur 2)
-  - Di akhir, Agent Pusat menjalankan Dual-Track Guardrail Cross-Verification.
+Menyediakan fungsi untuk:
+  - Render slide presentasi menjadi gambar (DPI tinggi) menggunakan LibreOffice/soffice CLI atau pptx2pdf + PyMuPDF.
+  - Membaca teks asli, shape, diagram, dan tabel per slide via python-pptx (opsional).
+  - Ekstraksi visual slide menggunakan Vision LLM langsung dari kanvas gambar render.
+  - Menjalankan sub-agent SQL tabular mandiri per-slide dan audit guardrail jalur ganda di tahap akhir.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import platform
 import shutil
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
-from pptx import Presentation
-from pptx.enum.shapes import MSO_SHAPE_TYPE
+from langchain_core.messages import HumanMessage
 
-from .llm import image_data_uri
+from .config import DEFAULT_DPI
+from .llm import encode_image_to_base64
 from .multi_page import stitch_pages_to_markdown
+from .prompts import get_vision_system_prompt
 from .tabular_db import cross_verify_dual_track, process_page_tabular_agent
 
-logger = logging.getLogger("app.ppt")
-
-# Ukuran batch untuk pemrosesan presentasi/per dokumen massal.
-SLIDE_BATCH_SIZE: int = 10
-
-PPT_SLIDE_SYSTEM_PROMPT: str = (
-    "Kamu adalah AI ekstraktor presentasi yang membaca gambar slide secara visual dan "
-    "mengubahnya menjadi Markdown bersih. "
-    "Jangan memakai OCR eksternal atau menambahkan teks pengantar. "
-    "Output harus hanya isi slide dalam Markdown."
-)
+logger = logging.getLogger(__name__)
 
 
-def _build_slide_prompt(
-    slide_number: int,
-    total_slides: int,
-    previous_slide_context: str | None = None,
-) -> str:
-    """Susun instruksi khusus slide presentasi tanpa konteks OCR."""
-    blocks: list[str] = [
-        (
-            f"Ekstrak slide {slide_number} dari {total_slides} berikut ini menjadi Markdown yang rapi "
-            f"dan setia pada isi gambar."
-        ),
-        "Aturan output:",
-        "- Pertahankan teks, angka, istilah teknis, label grafik, dan urutan visual semirip mungkin dengan slide.",
-        "- Gunakan heading Markdown, bullet bertingkat, tabel Markdown, dan blockquote bila ada visual/diagram yang perlu dijelaskan.",
-        "- Jangan menambahkan interpretasi di luar yang terlihat jelas pada slide.",
-        "- Jangan menulis penjelasan pembuka atau penutup.",
-        "- Jika ada teks yang tidak terbaca, tandai seperlunya secara singkat dan jangan mengarang.",
+def _find_libreoffice_binary() -> str | None:
+    """Temukan binary LibreOffice / soffice di sistem Windows atau Linux."""
+    # 1. Cek di PATH
+    for name in ("soffice", "libreoffice", "soffice.exe", "libreoffice.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+
+    # 2. Lokasi standar Windows
+    if platform.system() == "Windows":
+        candidates = [
+            Path(r"C:\Program Files\LibreOffice\program\soffice.exe"),
+            Path(r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"),
+            Path(os.environ.get("PROGRAMFILES", "C:\\Program Files"))
+            / "LibreOffice"
+            / "program"
+            / "soffice.exe",
+            Path(os.environ.get("LOCALAPPDATA", ""))
+            / "Programs"
+            / "LibreOffice"
+            / "program"
+            / "soffice.exe",
+        ]
+        for c in candidates:
+            if c.exists():
+                return str(c)
+
+    # 3. Lokasi standar Linux / macOS
+    for loc in ("/usr/bin/soffice", "/usr/bin/libreoffice", "/Applications/LibreOffice.app/Contents/MacOS/soffice"):
+        if Path(loc).exists():
+            return loc
+
+    return None
+
+
+def count_presentation_slides(presentation_path: str | Path) -> int:
+    """Hitung jumlah total slide dalam file PowerPoint."""
+    path_obj = Path(presentation_path).resolve()
+    if not path_obj.exists():
+        raise FileNotFoundError(f"File presentasi tidak ditemukan: {path_obj}")
+
+    # Cara 1: python-pptx (sangat cepat, tidak perlu render)
+    try:
+        from pptx import Presentation
+
+        prs = Presentation(str(path_obj))
+        return len(prs.slides)
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+    # Cara 2: Konversi ke PDF via LibreOffice lalu hitung halamannya
+    from .pdf import pdf_page_count
+
+    pdf_out = _convert_presentation_to_pdf(path_obj)
+    if pdf_out and pdf_out.exists():
+        return pdf_page_count(pdf_out)
+
+    return 1
+
+
+def _convert_presentation_to_pdf(
+    presentation_path: Path,
+    output_dir: Path | None = None,
+) -> Path | None:
+    """Konversi file .pptx / .ppt menjadi .pdf menggunakan LibreOffice headless."""
+    soffice = _find_libreoffice_binary()
+    if not soffice:
+        logger.warning(
+            "LibreOffice (soffice) tidak ditemukan di sistem. "
+            "Rendering visual slide presentasi mungkin terbatas."
+        )
+        return None
+
+    target_dir = output_dir or Path(tempfile.mkdtemp(prefix="pptx_pdf_"))
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        soffice,
+        "--headless",
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        str(target_dir),
+        str(presentation_path),
     ]
 
-    if previous_slide_context and previous_slide_context.strip():
-        blocks.append(
-            "Konteks slide sebelumnya (untuk kontinuitas jika slide ini merupakan lanjutan):\n"
-            f"```markdown\n{previous_slide_context.strip()[-500:]}\n```"
-        )
-
-    blocks.append("Outputkan HANYA Markdown final dari slide ini.")
-    return "\n".join(blocks)
-
-
-def _extract_slide_markdown(
-    llm: BaseChatModel,
-    image_path: str,
-    slide_number: int,
-    total_slides: int,
-    previous_slide_context: str | None = None,
-) -> str:
-    """Kirim satu gambar slide langsung ke VLM dan ambil Markdown-nya."""
-    prompt = _build_slide_prompt(
-        slide_number=slide_number,
-        total_slides=total_slides,
-        previous_slide_context=previous_slide_context,
-    )
-    message = HumanMessage(
-        content=[
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},
-        ]
-    )
-    response = llm.invoke([SystemMessage(content=PPT_SLIDE_SYSTEM_PROMPT), message])
-    md_text = str(response.content).strip()
-
-    if md_text.startswith("```markdown") and md_text.endswith("```"):
-        md_text = md_text[len("```markdown") : -3].strip()
-    elif md_text.startswith("```md") and md_text.endswith("```"):
-        md_text = md_text[len("```md") : -3].strip()
-    elif md_text.startswith("```") and md_text.endswith("```"):
-        md_text = md_text[3:-3].strip()
-
-    return md_text
-
-
-def _find_libreoffice() -> str:
-    """Cari executable LibreOffice/soffice yang tersedia di sistem."""
-    configured = os.environ.get("LIBREOFFICE_BIN", "").strip()
-    if configured:
-        configured_path = Path(configured).expanduser()
-        if configured_path.exists():
-            return str(configured_path)
-        resolved = shutil.which(configured)
-        if resolved:
-            return resolved
-        raise FileNotFoundError(
-            f"Executable LibreOffice dari LIBREOFFICE_BIN tidak ditemukan: {configured}"
-        )
-
-    for executable in ("libreoffice", "soffice"):
-        resolved = shutil.which(executable)
-        if resolved:
-            return resolved
-
-    # Fallback paths standar untuk Windows, Linux, dan macOS
-    candidate_paths = [
-        Path(r"C:\Program Files\LibreOffice\program\soffice.exe"),
-        Path(r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"),
-        Path("/usr/bin/libreoffice"),
-        Path("/usr/bin/soffice"),
-        Path("/usr/local/bin/libreoffice"),
-        Path("/usr/local/bin/soffice"),
-        Path("/Applications/LibreOffice.app/Contents/MacOS/soffice"),
-    ]
-    for p in candidate_paths:
-        if p.exists():
-            return str(p)
-
-    raise FileNotFoundError(
-        "LibreOffice tidak ditemukan. Instal LibreOffice atau set "
-        "environment variable LIBREOFFICE_BIN ke path executable soffice."
-    )
-
-
-def convert_presentation_to_pdf(
-    presentation_path: str | Path,
-    output_dir: str | Path,
-) -> Path:
-    """Konversi PPT/PPTX menjadi PDF menggunakan LibreOffice headless."""
-    source = Path(presentation_path).resolve()
-    if not source.exists():
-        raise FileNotFoundError(f"File presentasi tidak ditemukan: {source}")
-    if source.suffix.lower() not in {".ppt", ".pptx"}:
-        raise ValueError(f"Format presentasi tidak didukung: {source.suffix}")
-
-    destination = Path(output_dir).resolve()
-    destination.mkdir(parents=True, exist_ok=True)
-    executable = _find_libreoffice()
-    with tempfile.TemporaryDirectory(prefix="libreoffice_profile_") as profile_name:
-        profile_dir = Path(profile_name).resolve()
-        command = [
-            executable,
-            "--headless",
-            f"-env:UserInstallation={profile_dir.as_uri()}",
-            "--convert-to",
-            "pdf",
-            "--outdir",
-            str(destination),
-            str(source),
-        ]
-        result = subprocess.run(
-            command,
+    try:
+        res = subprocess.run(
+            cmd,
             capture_output=True,
             text=True,
+            timeout=120,
             check=False,
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"Konversi LibreOffice gagal (code {result.returncode}): {result.stderr.strip() or result.stdout.strip()}"
-            )
+        if res.returncode != 0:
+            logger.error("LibreOffice konversi PDF gagal: %s", res.stderr)
+            return None
 
-    pdf_candidate = destination / f"{source.stem}.pdf"
-    if not pdf_candidate.exists():
-        matches = sorted(destination.glob(f"{source.stem}.pdf"))
-        if not matches:
-            raise FileNotFoundError(
-                f"Hasil PDF konversi LibreOffice tidak ditemukan di {destination}"
-            )
-        return matches[0]
+        pdf_candidate = target_dir / f"{presentation_path.stem}.pdf"
+        if pdf_candidate.exists():
+            return pdf_candidate
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Gagal menjalankan perintah LibreOffice: %s", exc)
 
-    return pdf_candidate
+    return None
+
+
+def _render_slides_native_pptx(
+    presentation_path: Path,
+    output_dir: Path,
+    slides: list[int] | None = None,
+    dpi: int = 200,
+    image_ext: str = "jpg",
+) -> list[Path]:
+    """Render slide presentasi menggunakan konversi PDF + PyMuPDF."""
+    from .pdf import pdf_to_images
+
+    # Buat sub-folder sementara untuk PDF perantara
+    temp_pdf_dir = Path(tempfile.mkdtemp(prefix="pptx_render_"))
+    pdf_file = _convert_presentation_to_pdf(presentation_path, output_dir=temp_pdf_dir)
+
+    if not pdf_file or not pdf_file.exists():
+        raise RuntimeError(
+            f"Gagal mengonversi presentasi '{presentation_path.name}' ke PDF untuk rendering visual."
+        )
+
+    images = pdf_to_images(
+        pdf_path=pdf_file,
+        output_dir=output_dir,
+        dpi=dpi,
+        image_ext=image_ext,
+        pages=slides,
+    )
+
+    # Ubah penamaan file agar sesuai konvensi slide: slide_0001.jpg
+    renamed: list[Path] = []
+    for img in images:
+        # Contoh: page_0001.jpg -> slide_0001.jpg
+        stem = img.stem
+        if stem.startswith("page_"):
+            slide_num = stem.replace("page_", "")
+            new_name = img.parent / f"slide_{slide_num}.{image_ext}"
+            img.rename(new_name)
+            renamed.append(new_name)
+        else:
+            renamed.append(img)
+
+    return renamed
 
 
 def render_presentation_slides_to_images(
@@ -195,203 +186,180 @@ def render_presentation_slides_to_images(
     output_dir: str | Path | None = None,
     slides: list[int] | None = None,
     dpi: int = 200,
-    image_ext: str = ".jpg",
+    image_ext: str = "jpg",
 ) -> list[Path]:
-    """Render kanvas slide PowerPoint menjadi gambar per slide via LibreOffice -> PDF -> PyMuPDF."""
-    import pymupdf
-
-    source = Path(presentation_path).resolve()
-    if not source.exists():
-        raise FileNotFoundError(f"File presentasi tidak ditemukan: {source}")
-
-    out_dir = (
-        Path(output_dir).resolve()
-        if output_dir
-        else (source.parent / f"{source.stem}_slides").resolve()
-    )
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    ext = image_ext if image_ext.startswith(".") else f".{image_ext}"
-
-    with tempfile.TemporaryDirectory(prefix="libreoffice_pdf_") as temp_pdf_dir:
-        pdf_path = convert_presentation_to_pdf(source, temp_pdf_dir)
-        doc = pymupdf.open(pdf_path)
-        total = len(doc)
-        if total == 0:
-            doc.close()
-            return []
-
-        target_indices = (
-            list(range(total))
-            if slides is None
-            else [i for i in slides if 0 <= i < total]
-        )
-
-        zoom = dpi / 72.0
-        matrix = pymupdf.Matrix(zoom, zoom)
-        generated_paths: list[Path] = []
-        total_targets = len(target_indices)
-
-        for offset, idx in enumerate(target_indices, start=1):
-            page = doc[idx]
-            pix = page.get_pixmap(matrix=matrix, alpha=False)
-            slide_num = idx + 1
-            img_path = out_dir / f"slide_{slide_num}{ext}"
-            pix.save(str(img_path))
-            generated_paths.append(img_path)
-            if offset % SLIDE_BATCH_SIZE == 0 or offset == total_targets:
-                logger.info(
-                    "[Render PPT] Batch selesai: %d/%d slide dirender",
-                    offset,
-                    total_targets,
-                )
-
-        doc.close()
-        return generated_paths
-
-
-def count_presentation_slides(
-    presentation_path: str | Path,
-) -> int:
-    """Hitung jumlah slide presentasi menggunakan LibreOffice -> PDF."""
-    import pymupdf
-
-    source = Path(presentation_path).resolve()
-    if not source.exists():
-        raise FileNotFoundError(f"File presentasi tidak ditemukan: {source}")
-
-    with tempfile.TemporaryDirectory(prefix="ppt_count_") as temp_pdf_dir:
-        pdf_path = convert_presentation_to_pdf(source, temp_pdf_dir)
-        doc = pymupdf.open(pdf_path)
-        total = len(doc)
-        doc.close()
-        return total
-
-
-def _extract_shape_text(shape: Any) -> list[str]:
-    """Ekstrak teks dari shape dengan menjaga struktur paragraf & bullet level."""
-    lines: list[str] = []
-    if not shape.has_text_frame:
-        return lines
-
-    for paragraph in shape.text_frame.paragraphs:
-        raw_text = paragraph.text.strip()
-        if not raw_text:
-            continue
-
-        level = getattr(paragraph, "level", 0)
-        indent = "  " * level
-        bullet_marker = "- " if level > 0 else ""
-        lines.append(f"{indent}{bullet_marker}{raw_text}")
-
-    return lines
-
-
-def _table_to_markdown(table_or_shape: Any) -> str:
-    """Konversi shape tabel PPTX atau objek Table ke Markdown Table (GFM)."""
-    table = table_or_shape.table if hasattr(table_or_shape, "table") else table_or_shape
-    rows: list[list[str]] = []
-    for row in getattr(table, "rows", []):
-        cell_texts = [cell.text.replace("\n", " ").strip() for cell in row.cells]
-        rows.append(cell_texts)
-
-    if not rows:
-        return ""
-
-    header = rows[0]
-    separator = ["---"] * len(header)
-    md_lines: list[str] = [
-        "| " + " | ".join(header) + " |",
-        "| " + " | ".join(separator) + " |",
-    ]
-    for row in rows[1:]:
-        padded = row + [""] * (len(header) - len(row))
-        md_lines.append("| " + " | ".join(padded[: len(header)]) + " |")
-
-    return "\n".join(md_lines)
-
-
-def pptx_to_structured_text(pptx_path: str | Path) -> list[dict[str, Any]]:
     """
-    Ekstrak presentasi PPTX menjadi list struktur per slide via parser native python-pptx.
+    Render seluruh slide PowerPoint menjadi file gambar beresolusi tinggi (DPI tinggi).
+
+    Args:
+        presentation_path: Path ke file presentasi .pptx / .ppt.
+        output_dir: Folder output untuk menyimpan gambar slide.
+        slides: Daftar indeks slide 0-indexed yang akan dirender (None = semua slide).
+        dpi: Resolusi rendering (default 200 DPI).
+        image_ext: Format file gambar ("png" atau "jpg").
+
+    Returns:
+        Daftar Path file gambar hasil render (berurutan).
     """
-    path_obj = Path(pptx_path)
+    path_obj = Path(presentation_path).resolve()
     if not path_obj.exists():
         raise FileNotFoundError(f"File presentasi tidak ditemukan: {path_obj}")
 
-    start_time = time.time()
-    prs = Presentation(str(path_obj))
-    total_slides = len(prs.slides)
-    logger.info(
-        "[Workflow] Membaca presentasi: '%s' | Total slide: %d",
-        path_obj.name,
-        total_slides,
+    if output_dir is None:
+        out_path = Path("output/pptx_slides") / path_obj.stem
+    else:
+        out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    return _render_slides_native_pptx(
+        presentation_path=path_obj,
+        output_dir=out_path,
+        slides=slides,
+        dpi=dpi,
+        image_ext=image_ext,
     )
 
+
+def pptx_to_structured_text(presentation_path: str | Path) -> list[dict[str, Any]]:
+    """
+    Ekstrak teks, tabel, dan catatan pembicara (speaker notes) dari file PowerPoint secara native.
+    """
+    path_obj = Path(presentation_path).resolve()
+    if not path_obj.exists():
+        raise FileNotFoundError(f"File presentasi tidak ditemukan: {path_obj}")
+
+    from pptx import Presentation
+
+    prs = Presentation(str(path_obj))
     slides_data: list[dict[str, Any]] = []
 
     for idx, slide in enumerate(prs.slides, start=1):
-        slide_title: str = ""
-        body_lines: list[str] = []
-        notes_text: str = ""
-        image_count: int = 0
-        table_count: int = 0
+        slide_title = ""
+        paragraphs: list[str] = []
+        tables_extracted: list[list[list[str]]] = []
 
-        title_shape = slide.shapes.title
-        if title_shape and title_shape.has_text_frame:
-            slide_title = title_shape.text.strip()
-
+        # Ekstrak elemen bentuk (shapes)
         for shape in slide.shapes:
-            if shape == title_shape:
-                continue
+            if shape.has_text_frame:
+                text_frame = shape.text_frame
+                text = text_frame.text.strip()
+                if not text:
+                    continue
 
-            if shape.has_table:
-                table_count += 1
-                tbl_md = _table_to_markdown(shape.table)
-                if tbl_md:
-                    body_lines.append(f"\n{tbl_md}\n")
+                if shape == slide.shapes.title:
+                    slide_title = text
+                else:
+                    for p in text_frame.paragraphs:
+                        p_text = p.text.strip()
+                        if p_text:
+                            level = p.level
+                            prefix = "  " * level + "- " if level > 0 else "- "
+                            paragraphs.append(f"{prefix}{p_text}")
 
-            elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
-                image_count += 1
+            elif shape.has_table:
+                tbl = shape.table
+                table_rows: list[list[str]] = []
+                for row in tbl.rows:
+                    row_cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
+                    table_rows.append(row_cells)
+                tables_extracted.append(table_rows)
 
-            elif shape.has_text_frame:
-                extracted_lines = _extract_shape_text(shape)
-                if extracted_lines:
-                    body_lines.extend(extracted_lines)
-
+        # Speaker notes jika ada
+        notes_text = ""
         if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
             notes_text = slide.notes_slide.notes_text_frame.text.strip()
 
-        title_display = slide_title or f"Slide {idx}"
-        md_content_lines: list[str] = [f"## Slide {idx}: {title_display}"]
-        if body_lines:
-            md_content_lines.extend(body_lines)
-        if notes_text:
-            md_content_lines.append(f"\n> **Speaker Notes:** {notes_text}")
+        # Susun Markdown per slide
+        md_lines: list[str] = []
+        md_lines.append(f"<!-- SLIDE: {idx} -->")
+        if slide_title:
+            md_lines.append(f"# {slide_title}\n")
+        elif paragraphs:
+            md_lines.append(f"# Slide {idx}\n")
 
-        slide_markdown = "\n".join(md_content_lines)
+        if paragraphs:
+            md_lines.extend(paragraphs)
+            md_lines.append("")
+
+        # Format tabel jika ada
+        for tbl in tables_extracted:
+            if not tbl:
+                continue
+            header = tbl[0]
+            md_lines.append("| " + " | ".join(header) + " |")
+            md_lines.append("| " + " | ".join(["---"] * len(header)) + " |")
+            for r in tbl[1:]:
+                padded = r + [""] * (len(header) - len(r))
+                md_lines.append("| " + " | ".join(padded[: len(header)]) + " |")
+            md_lines.append("")
+
+        if notes_text:
+            md_lines.append(f"> **Speaker Notes:** {notes_text}\n")
 
         slides_data.append(
             {
                 "slide_number": idx,
-                "title": title_display,
-                "markdown": slide_markdown,
-                "notes": notes_text,
-                "image_count": image_count,
+                "title": slide_title,
+                "paragraphs": paragraphs,
+                "tables_count": len(tables_extracted),
+                "has_notes": bool(notes_text),
+                "markdown": "\n".join(md_lines).strip(),
             }
         )
 
-    duration = time.time() - start_time
-    logger.info(
-        "[Workflow] Selesai parsing %d slide dalam %.2fs", total_slides, duration
-    )
     return slides_data
 
 
-def process_presentation(pptx_path: str | Path) -> str:
-    """
-    Ekstrak seluruh file PPTX menjadi satu dokumen Markdown terpadu via native python-pptx.
-    """
+def _extract_slide_markdown(
+    llm: BaseChatModel,
+    image_path: str | Path,
+    slide_number: int,
+    total_slides: int,
+    previous_slide_context: str | None = None,
+) -> str:
+    """Ekstrak konten satu gambar slide PowerPoint menggunakan Vision LLM."""
+    base64_img, mime = encode_image_to_base64(image_path)
+    img_data_url = f"data:{mime};base64,{base64_img}"
+
+    system_prompt = get_vision_system_prompt(["presentation_slides"])
+
+    context_prompt = ""
+    if previous_slide_context:
+        context_prompt = (
+            f"\n\n[Konteks Slide Sebelumnya #{slide_number - 1}]:\n"
+            f"'''\n{previous_slide_context[-300:]}\n'''\n"
+            "Gunakan konteks ini untuk menjaga kesinambungan poin bahasan jika slide ini merupakan kelanjutan topik."
+        )
+
+    user_instruction = (
+        f"Ekstrak Slide Presentasi #{slide_number} dari total {total_slides} slide.{context_prompt}\n\n"
+        "Aturan Khusus Slide Presentasi:\n"
+        f"1. Awali hasil dengan penanda `<!-- SLIDE: {slide_number} -->`.\n"
+        "2. Judul slide jadikan `# Judul Slide`.\n"
+        "3. Poin-poin peluru jadikan `- Poin` dengan indentasi yang tepat jika bertingkat.\n"
+        "4. Jika terdapat tabel, tulis sebagai tabel Markdown standar.\n"
+        "5. Jika terdapat diagram alur/hierarki visual sederhana, buatkan ```mermaid jika memungkinkan atau deskripsikan secara runtut.\n"
+        "6. Jangan berikan teks pembuka atau penutup basa-basi, langsung hasilkan Markdown."
+    )
+
+    msg = HumanMessage(
+        content=[
+            {"type": "text", "text": f"{system_prompt}\n\n{user_instruction}"},
+            {"type": "image_url", "image_url": {"url": img_data_url}},
+        ]
+    )
+
+    response = llm.invoke([msg])
+    content = response.content if hasattr(response, "content") else str(response)
+    if isinstance(content, list):
+        text_parts = [p.get("text", "") for p in content if isinstance(p, dict)]
+        content = "".join(text_parts)
+
+    return str(content).strip()
+
+
+def pptx_to_markdown_native(pptx_path: str | Path) -> str:
+    """Ekstraksi teks slide PPTX secara instan murni berbasis python-pptx."""
     slides = pptx_to_structured_text(pptx_path)
     file_stem = Path(pptx_path).stem.replace("_", " ").title()
 
@@ -405,8 +373,11 @@ def process_presentation(pptx_path: str | Path) -> str:
 
 def process_presentation_vision(
     pptx_path: str | Path,
-    pipeline: Any,
+    pipeline: Any = None,
+    *,
+    llm: BaseChatModel | None = None,
     output_dir: str | Path | None = None,
+    dpi: int = DEFAULT_DPI,
     forced_specs: list[str] | str | None = "presentation_slides",
     db_path: str | Path | None = None,
     auto_tabular_db: bool = True,
@@ -424,6 +395,7 @@ def process_presentation_vision(
     slide_images = render_presentation_slides_to_images(
         presentation_path=path_obj,
         output_dir=output_dir,
+        dpi=dpi,
     )
     total_images = len(slide_images)
     if total_images == 0:
@@ -437,11 +409,14 @@ def process_presentation_vision(
     slide_markdowns: list[str] = []
     previous_context: str | None = None
     file_stem = path_obj.stem.replace("_", " ").title()
-    llm: BaseChatModel | None = getattr(pipeline, "vlm", None)
-    if llm is None:
-        raise AttributeError(
-            "pipeline harus menyediakan atribut 'vlm' untuk ekstraksi PPT Vision"
-        )
+
+    vlm_llm: BaseChatModel | None = llm
+    if vlm_llm is None and pipeline is not None:
+        vlm_llm = getattr(pipeline, "vlm", pipeline)
+    if vlm_llm is None:
+        from .llm import get_vlm
+
+        vlm_llm = get_vlm()
 
     # Tentukan path SQLite jika aktif
     if db_path:
@@ -462,7 +437,7 @@ def process_presentation_vision(
             img_path.name,
         )
         page_md = _extract_slide_markdown(
-            llm=llm,
+            llm=vlm_llm,
             image_path=str(img_path),
             slide_number=idx,
             total_slides=total_images,
@@ -508,3 +483,7 @@ def process_presentation_vision(
         )
 
     return stitched
+
+
+convert_presentation_to_pdf = _convert_presentation_to_pdf
+process_presentation = pptx_to_markdown_native

@@ -1,62 +1,56 @@
 """
-Konfigurasi terpusat untuk Document Vision OCR & Extraction (Ready for Chunking).
+Konfigurasi terpusat untuk Document Vision VLM & Extraction (Ready for Chunking).
 
-Endpoint model dapat dikonfigurasi melalui environment variable atau file `.env` di root.
+Menggunakan Pydantic-like dataclass `Settings` yang membaca environment variables
+dengan fallback yang aman untuk local inference (LM Studio / Ollama / llama-server).
 
-Kategori model yang digunakan:
-  1. VLM NORMAL : Ekstraksi dokumen & layout reasoning multimodal ke Markdown
-  2. OCR        : VLM kecil yang di-tuning khusus untuk grounding teks beresolusi tinggi
+Peran Model:
+  1. VLM (Vision LLM): Model multimodal utama untuk interpretasi visual dan ekstraksi Markdown
+  2. Logging Config  : Konfigurasi level logging
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
-_PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
-
-
-def _load_dotenv(path: Path) -> None:
-    """Loader `.env` minimal tanpa dependensi eksternal."""
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        # Buang komentar inline: "#" yang didahului spasi (mis. "sk-abc # isi di sini")
-        value = re.split(r"\s+#", value, maxsplit=1)[0]
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+DEFAULT_DPI: int = 200
+PDF_PAGE_BATCH: int = 10
+SUPPORTED_IMAGE_EXTENSIONS: set[str] = {".png", ".jpg", ".jpeg", ".webp"}
 
 
-_load_dotenv(_PROJECT_ROOT / ".env")
+def _env(name: str, default: str) -> str:
+    """Ambil env var atau kembalikan default jika kosong."""
+    val = os.environ.get(name, "").strip()
+    return val if val else default
 
 
-def _env(name: str, default: str = "") -> str:
-    """Ambil string dari environment variable."""
-    return os.environ.get(name, default)
-
-
-def _env_or(name: str, fallback_name: str, default: str = "") -> str:
-    """Ambil `name`; jika kosong, ambil `fallback_name`; else `default`."""
-    val = os.environ.get(name)
+def _env_or(primary: str, fallback: str, default: str) -> str:
+    """Ambil `primary` env var; jika kosong coba `fallback`; jika kosong pakai `default`."""
+    val = os.environ.get(primary, "").strip()
     if val:
         return val
-    return os.environ.get(fallback_name, default)
+    val = os.environ.get(fallback, "").strip()
+    return val if val else default
 
 
 def _float_env(name: str, default: str) -> float:
-    """Parse float dari environment variable."""
-    return float(_env(name, default))
+    """Parse float dari environment variable dengan fallback."""
+    raw = os.environ.get(name, default).strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return float(default)
 
 
 def _int_env(name: str, default: str) -> int:
-    """Parse integer dari environment variable."""
-    return int(_env(name, default))
+    """Parse int dari environment variable dengan fallback."""
+    raw = os.environ.get(name, default).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return int(default)
 
 
 def _bool_env(name: str, default: str) -> bool:
@@ -66,7 +60,7 @@ def _bool_env(name: str, default: str) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    """Pengaturan konfigurasi LLM, VLM, OCR, dan logging."""
+    """Pengaturan konfigurasi LLM, VLM, dan logging."""
 
     # --- Global Fallback ---
     llm_base_url: str = field(
@@ -92,25 +86,7 @@ class Settings:
         default_factory=lambda: _bool_env("VLM_ENABLE_THINKING", "false")
     )
 
-    # --- 2. OCR (Grounding Teks Resolusi Tinggi) ---
-    ocr_model: str = field(default_factory=lambda: _env("OCR_MODEL", "ocr-lighton"))
-    ocr_base_url: str = field(
-        default_factory=lambda: _env_or(
-            "OCR_BASE_URL", "LLM_BASE_URL", "http://localhost:1234/v1"
-        )
-    )
-    ocr_api_key: str = field(
-        default_factory=lambda: _env_or("OCR_API_KEY", "LLM_API_KEY", "lm-studio")
-    )
-    ocr_temperature: float = field(
-        default_factory=lambda: _float_env("OCR_TEMPERATURE", "0.0")
-    )
-    ocr_timeout: float = field(default_factory=lambda: _float_env("OCR_TIMEOUT", "300"))
-    ocr_max_tokens: int = field(
-        default_factory=lambda: _int_env("OCR_MAX_TOKENS", "500")
-    )
-
-    # --- 3. Logging Configuration ---
+    # --- 2. Logging Configuration ---
     log_level: str = field(
         default_factory=lambda: _env("LOG_LEVEL", "INFO").strip().upper() or "INFO"
     )
@@ -139,7 +115,3 @@ def setup_logging(level: str | None = None) -> None:
         datefmt=date_format,
         force=True,
     )
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("openai").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)

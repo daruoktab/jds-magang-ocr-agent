@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "jds-magang"
 version = "0.1.0"
-description = "Vision OCR & Document Text Extractor (Ready for Chunking): PDF, PPTX, Scan -> Markdown"
+description = "Vision VLM & Document Text Extractor (Ready for Chunking, SQLite Tabular, & Mermaid Diagrams)"
 requires-python = ">=3.12"
 dependencies = [
     "deepagents>=0.7.5",

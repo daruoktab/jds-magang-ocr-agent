@@ -165,33 +165,43 @@ def merge_and_stitch_markdown_pages(
 
 
 def stitch_pages_to_markdown(
-    pages_markdown: list[str],
+    pages_markdown: list[str] | list[Any],
     *,
     document_title: str | None = None,
     include_page_markers: bool = True,
     is_slide: bool = False,
+    **kwargs: Any,
 ) -> str:
     """
     Gabungkan daftar Markdown per-halaman menjadi satu dokumen utuh yang konsisten.
 
     Args:
-        pages_markdown: List string markdown dari setiap halaman (berurutan).
+        pages_markdown: List string markdown (atau objek DocumentPage) dari setiap halaman (berurutan).
         document_title: Judul dokumen (opsional, akan menjadi heading # utama).
-        include_page_markers: Jika True, sisipkan komentar `<!-- PAGE: N -->` / `<!-- SLIDE: N -->`.
-        is_slide: Jika True, gunakan penanda `<!-- SLIDE: N -->`.
-
+        include_page_markers: Jika True, sisipkan komentar `<!-- PAGE: N -->` / `<!-- SLIDE: N -->`.\n        is_slide: Jika True, gunakan penanda `<!-- SLIDE: N -->`.\n
     Returns:
         String Markdown utuh siap dichunking.
     """
     if not pages_markdown:
         return ""
 
+    raw_pages: list[str] = []
+    for item in pages_markdown:
+        if isinstance(item, str):
+            raw_pages.append(item)
+        elif hasattr(item, "markdown_content"):
+            raw_pages.append(item.markdown_content)
+        elif isinstance(item, dict) and "content" in item:
+            raw_pages.append(item["content"])
+        else:
+            raw_pages.append(str(item))
+
     stitched_blocks: list[str] = []
 
     if document_title:
         stitched_blocks.append(f"# {document_title.strip()}\n")
 
-    for idx, page_md in enumerate(pages_markdown, start=1):
+    for idx, page_md in enumerate(raw_pages, start=1):
         cleaned_md = _clean_page_artifacts(page_md).strip()
         if not cleaned_md:
             continue
@@ -221,50 +231,68 @@ def stitch_pages_to_markdown(
 
         stitched_blocks.append(cleaned_md)
 
-    # Gabungkan dengan spasi paragraf ganda
-    full_text = "\n\n".join(stitched_blocks)
-
-    # Normalisasi spasi kosong berlebih
-    full_text = re.sub(r"\n{3,}", "\n\n", full_text).strip()
-    return full_text
+    # Gabungkan dengan pemisah standar
+    if include_page_markers:
+        return "\n".join(stitched_blocks).strip() + "\n"
+    return "\n\n".join(stitched_blocks).strip() + "\n"
 
 
 def preview_markdown_chunks(
-    markdown_text: str,
+    markdown_content: str,
+    *,
+    source_file: str = "document",
     chunk_size: int = 1000,
     chunk_overlap: int = 150,
-) -> list[dict[str, Any]]:
+) -> Any:
     """
-    Simulasikan pemecahan dokumen Markdown dengan splitter berbasis header & recursive text splitter.
+    Simulasikan pemecahan dokumen Markdown menjadi chunk-chunk siap RAG
+    menggunakan kombinasi MarkdownHeaderTextSplitter dan RecursiveCharacterTextSplitter.
+    """
+    from app.schemas import ChunkingPreview, ChunkItem
 
-    Returns:
-        List potongan chunk dengan metadata header dan isi kontennya.
-    """
     headers_to_split_on = [
         ("#", "Header 1"),
         ("##", "Header 2"),
         ("###", "Header 3"),
     ]
 
+    # Level 1: Split berdasarkan heading struktur
     markdown_splitter = MarkdownHeaderTextSplitter(
         headers_to_split_on=headers_to_split_on, strip_headers=False
     )
-    md_header_splits = markdown_splitter.split_text(markdown_text)
+    header_splits = markdown_splitter.split_text(markdown_content)
 
+    # Level 2: Split rekursif berbasis karakter & overlap
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size, chunk_overlap=chunk_overlap
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=["\n\n", "\n", " ", ""],
     )
-    final_splits = text_splitter.split_documents(md_header_splits)
+    final_docs = text_splitter.split_documents(header_splits)
 
-    chunks_data = []
-    for i, doc in enumerate(final_splits, start=1):
-        chunks_data.append(
-            {
-                "chunk_index": i,
-                "char_count": len(doc.page_content),
-                "metadata": doc.metadata,
-                "content": doc.page_content,
-            }
+    items: list[ChunkItem] = []
+    for idx, doc in enumerate(final_docs, start=1):
+        content = doc.page_content.strip()
+        preview = content[:120].replace("\n", " ")
+        items.append(
+            ChunkItem(
+                chunk_id=idx,
+                char_count=len(content),
+                token_estimate=max(1, len(content) // 4),
+                preview=preview,
+                content=content,
+            )
         )
 
-    return chunks_data
+    total_chars = sum(c.char_count for c in items)
+    avg_size = total_chars / len(items) if items else 0.0
+
+    return ChunkingPreview(
+        source_file=source_file,
+        total_characters=total_chars,
+        total_chunks=len(items),
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        avg_chunk_size=round(avg_size, 1),
+        chunks=items,
+    )

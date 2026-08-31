@@ -3,11 +3,13 @@ Modul Pemindaian Direktori & Ekstraksi Dokumen Massal (Batch Document Processing
 
 Menyediakan:
   - `scan_document_directories`: Mendeteksi folder & sub-folder yang berisi dokumen (PDF, PPTX, Scan/Gambar).
-  - `batch_extract_documents`: Memproses dokumen dari satu atau banyak folder terpilih dengan batas kuota data.
+  - `find_document_files`: Mendeteksi semua file dokumen yang didukung di direktori root.
+  - `batch_extract_documents`: Memproses dokumen dari satu atau banyak folder/file terpilih dengan batas kuota data.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,35 @@ SUPPORTED_EXTENSIONS: set[str] = {
     ".jpeg",
     ".webp",
 }
+
+
+def find_document_files(
+    root_dir: str | Path = ".",
+) -> list[Path]:
+    """
+    Cari semua file dokumen yang didukung di dalam direktori root rekursif.
+    """
+    root_path = Path(root_dir).resolve()
+    if not root_path.exists():
+        return []
+
+    ignored_patterns = {
+        ".git",
+        ".venv",
+        "__pycache__",
+        ".ruff_cache",
+        ".vscode",
+        ".agents",
+    }
+
+    files: list[Path] = []
+    for p in root_path.rglob("*"):
+        if any(part in ignored_patterns for part in p.parts):
+            continue
+        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS:
+            files.append(p)
+
+    return sorted(files)
 
 
 def scan_document_directories(
@@ -99,64 +130,78 @@ def scan_document_directories(
 
 
 def batch_extract_documents(
-    folders: list[str] | str,
+    folders: Sequence[str | Path] | str | Path,
     *,
     limit: int | None = None,
     limit_per_folder: int | None = None,
     specs: str = "plain",
+    forced_specs: str | None = None,
     output_dir: str | Path = "output/extracted_md",
+    dpi: int = 200,
     preview_chunks: bool = False,
     chunk_size: int = 1000,
     chunk_overlap: int = 150,
+    use_agent: bool = False,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     """
-    Ekstrak dokumen dari satu atau banyak folder terpilih dengan batas jumlah file.
+    Ekstrak dokumen dari satu atau banyak folder/file terpilih dengan batas jumlah file.
 
     Args:
-        folders: Satu path folder atau list path folder (bisa koma: 'dataset/indonesian,dataset/english').
+        folders: Satu path folder/file, list path, atau string dipisah koma.
         limit: Batas total maksimal dokumen yang akan diproses secara keseluruhan.
         limit_per_folder: Batas maksimal dokumen per folder yang dipilih.
         specs: Spesifikasi layout ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides', atau komposit).
+        forced_specs: Alias opsional untuk specs.
         output_dir: Direktori tempat menyimpan file Markdown hasil ekstraksi.
+        dpi: Resolusi rendering gambar.
         preview_chunks: Apakah menyertakan simulasi statistik chunking.
         chunk_size: Ukuran chunk untuk simulasi.
         chunk_overlap: Overlap chunk untuk simulasi.
+        use_agent: Apakah menggunakan mode LangGraph Agent.
+        settings: Pengaturan aplikasi.
     """
     resolved_settings = settings or get_settings()
+    active_specs = forced_specs or specs
 
     # Normalisasi input folders
-    target_folders: list[Path] = []
-    if isinstance(folders, str):
-        folder_strings = [f.strip() for f in folders.split(",") if f.strip()]
+    target_items: list[Path] = []
+    if isinstance(folders, (str, Path)):
+        if isinstance(folders, str):
+            folder_strings = [f.strip() for f in folders.split(",") if f.strip()]
+        else:
+            folder_strings = [str(folders)]
     else:
-        folder_strings = list(folders)
+        folder_strings = [str(f) for f in folders]
 
     for f_str in folder_strings:
         p = Path(f_str).resolve()
-        if p.exists() and p.is_dir():
-            target_folders.append(p)
+        if p.exists():
+            target_items.append(p)
 
-    if not target_folders:
+    if not target_items:
         return {
             "status": "error",
-            "message": f"Tidak ada folder valid yang ditemukan dari input: {folders}",
+            "message": f"Tidak ada folder atau file valid yang ditemukan dari input: {folders}",
             "processed_count": 0,
             "results": [],
         }
 
     # Kumpulkan daftar file yang akan diproses sesuai limit
     files_to_process: list[Path] = []
-    for f_dir in target_folders:
-        dir_files = [
-            f
-            for f in f_dir.iterdir()
-            if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
-        ]
-        dir_files.sort()
-        if limit_per_folder is not None and limit_per_folder > 0:
-            dir_files = dir_files[:limit_per_folder]
-        files_to_process.extend(dir_files)
+    for item in target_items:
+        if item.is_file() and item.suffix.lower() in SUPPORTED_EXTENSIONS:
+            files_to_process.append(item)
+        elif item.is_dir():
+            dir_files = [
+                f
+                for f in item.iterdir()
+                if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
+            ]
+            dir_files.sort()
+            if limit_per_folder is not None and limit_per_folder > 0:
+                dir_files = dir_files[:limit_per_folder]
+            files_to_process.extend(dir_files)
 
     if limit is not None and limit > 0:
         files_to_process = files_to_process[:limit]
@@ -186,19 +231,23 @@ def batch_extract_documents(
                 md_content = process_presentation_vision(
                     pptx_path=doc_file,
                     pipeline=pipeline,
-                    forced_specs=specs,
+                    output_dir=out_base / "slides" / rel_stem,
+                    dpi=dpi,
+                    forced_specs=active_specs,
                 )
             # 2. PDF
             elif ext == ".pdf":
                 extracted = process_multipage_pdf(
                     pdf_path=doc_file,
                     pipeline=pipeline,
-                    forced_specs=specs,
+                    output_dir=out_base / "pages" / rel_stem,
+                    dpi=dpi,
+                    forced_specs=active_specs,
                 )
                 md_content = extracted.markdown_content
             # 3. Gambar
             else:
-                res = pipeline.run(str(doc_file), forced_specs=specs)
+                res = pipeline.run(str(doc_file), forced_specs=active_specs)
                 md_content = str(res["markdown_content"])
 
             out_file.write_text(md_content, encoding="utf-8")
@@ -216,7 +265,7 @@ def batch_extract_documents(
                 chunks = preview_markdown_chunks(
                     md_content, chunk_size=chunk_size, chunk_overlap=chunk_overlap
                 )
-                item_info["chunk_count"] = len(chunks)
+                item_info["chunk_count"] = len(chunks.chunks)
 
             processed_results.append(item_info)
 

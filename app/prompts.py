@@ -76,6 +76,11 @@ Outputkan HANYA format JSON list:
 """
 
 
+def get_vision_system_prompt(specs: list[str] | str | None = None) -> str:
+    """Mengembalikan system prompt VLM terstandar untuk ekstraksi dokumen."""
+    return SYSTEM_DOCUMENT_EXTRACTOR
+
+
 def normalize_specs(specs: list[str] | str | None) -> list[str]:
     """
     Normalisasi input spesifikasi menjadi list of valid spec keys.

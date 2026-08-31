@@ -1,22 +1,23 @@
 """
-Konversi PDF menjadi gambar per-halaman & pemrosesan dokumen PDF multi-halaman.
+Modul Pemrosesan Dokumen PDF Multi-Halaman.
 
-Menyediakan:
-  - `pdf_to_images`: Konversi PDF menjadi gambar beresolusi optimal (~200 DPI).
-  - `process_multipage_pdf`: Mengekstrak seluruh halaman PDF dengan arsitektur Dual-Track:
-    Jalur 1: Kontinuitas teks Markdown VLM per halaman.
-    Jalur 2: Sub-Agent SQL mandiri per-halaman yang menginspeksi DB, skema, dan meng-ingest tabel langsung.
-    Tahap Akhir: Guardrail Cross-Verification oleh Agent Pusat.
+Menyediakan fungsi untuk:
+  - Render PDF menjadi citra (DPI tinggi) menggunakan PyMuPDF (fitz) atau pypdfium2.
+  - Menghitung jumlah halaman PDF.
+  - Memproses seluruh halaman PDF dalam batch 10 halaman (PDF_PAGE_BATCH).
+  - Ekstraksi teks native / terstruktur per-halaman langsung via PyMuPDF.
+  - Menggabungkan hasil ekstraksi halaman menjadi satu dokumen Markdown utuh yang konsisten.
+  - Menjalankan sub-agent SQL tabular per-halaman dan audit guardrail jalur ganda di tahap akhir.
 """
 
 from __future__ import annotations
 
+import importlib
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import pymupdf
-
+from .config import DEFAULT_DPI, PDF_PAGE_BATCH
 from .multi_page import stitch_pages_to_markdown
 from .prompts import normalize_specs
 from .schemas import DocumentPage, ExtractedDocument, PageTabularEvent
@@ -25,128 +26,176 @@ from .tabular_db import cross_verify_dual_track, process_page_tabular_agent
 if TYPE_CHECKING:
     from .graph import DocumentExtractionPipeline
 
-logger = logging.getLogger("app.pdf")
-
-# 200 DPI adalah titik seimbang: cukup tajam untuk teks/OCR, wajar ukurannya.
-DEFAULT_DPI: int = 200
-DEFAULT_IMAGE_EXT: str = ".jpg"
-
-# Ukuran batch halaman per pemrosesan (dipertahankan 10 agar konsisten dengan
-# strategi bertahap "proses per 10 slide/pages" dan meminimalkan beban memori/disk).
-PDF_PAGE_BATCH: int = 10
+logger = logging.getLogger(__name__)
 
 
 def pdf_page_count(pdf_path: str | Path) -> int:
-    """
-    Hitung jumlah halaman file PDF menggunakan PyMuPDF.
-    """
-    path_obj = Path(pdf_path)
+    """Hitung jumlah total halaman dalam file PDF."""
+    path_obj = Path(pdf_path).resolve()
     if not path_obj.exists():
-        raise FileNotFoundError(f"PDF tidak ditemukan: {path_obj}")
-    with pymupdf.open(path_obj) as doc:
-        return doc.page_count
+        raise FileNotFoundError(f"File PDF tidak ditemukan: {path_obj}")
+
+    try:
+        import fitz  # PyMuPDF
+
+        doc = fitz.open(str(path_obj))
+        count = len(doc)
+        doc.close()
+        return count
+    except ImportError:
+        pass
+
+    try:
+        pdfium = importlib.import_module("pypdfium2")
+        pdf = pdfium.PdfDocument(str(path_obj))
+        count = len(pdf)
+        pdf.close()
+        return count
+    except (ImportError, Exception) as err:
+        raise ImportError(
+            "Diperlukan 'pymupdf' atau 'pypdfium2' untuk membaca file PDF. "
+            "Jalankan: uv add pymupdf"
+        ) from err
 
 
 def pdf_to_images(
     pdf_path: str | Path,
     output_dir: str | Path | None = None,
     dpi: int = DEFAULT_DPI,
-    image_ext: str = DEFAULT_IMAGE_EXT,
-    max_pages: int | None = None,
+    image_ext: str = "png",
     pages: list[int] | None = None,
 ) -> list[Path]:
     """
-    Ubah halaman PDF menjadi gambar, satu file per halaman.
+    Render halaman PDF menjadi file gambar (DPI tinggi).
 
     Args:
-        pdf_path: Path file PDF.
-        output_dir: Direktori penyimpanan gambar.
-        dpi: Resolusi gambar (default 200 DPI).
-        image_ext: Format ekstensi gambar (.jpg / .png).
-        max_pages: Batas maksimal halaman yang dirender dari awal.
-        pages: Daftar nomor halaman spesifik (0-indexed) yang ingin dirender.
+        pdf_path: Path ke file PDF.
+        output_dir: Folder output untuk menyimpan gambar (default: folder sementara).
+        dpi: Resolusi rendering (default 200 DPI).
+        image_ext: Format file gambar ("png" atau "jpg").
+        pages: Daftar indeks halaman 0-indexed yang akan dirender (None = semua).
 
-    Nama file: `<nama_pdf>_page<N>.<ext>` (N mulai dari 1).
-    Mengembalikan daftar path gambar yang dihasilkan (berurutan).
+    Returns:
+        Daftar Path file gambar hasil render (berurutan).
     """
-    pdf_path = Path(pdf_path)
-    if not pdf_path.exists():
-        raise FileNotFoundError(f"PDF tidak ditemukan: {pdf_path}")
-
-    output_dir = Path(output_dir) if output_dir else pdf_path.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    zoom = dpi / 72.0
-    matrix = pymupdf.Matrix(zoom, zoom)
-
-    stem = pdf_path.stem
-    image_ext = image_ext if image_ext.startswith(".") else f".{image_ext}"
-
-    outputs: list[Path] = []
-    with pymupdf.open(pdf_path) as doc:
-        total_in_doc = doc.page_count
-        if total_in_doc == 0:
-            raise ValueError(f"PDF tidak memiliki halaman: {pdf_path}")
-
-        # Tentukan halaman mana saja yang akan diproses
-        if pages is not None:
-            target_indices = [idx for idx in pages if 0 <= idx < total_in_doc]
-        else:
-            limit = (
-                min(max_pages, total_in_doc)
-                if (max_pages and max_pages > 0)
-                else total_in_doc
-            )
-            target_indices = list(range(limit))
-
-        for idx in target_indices:
-            page = doc[idx]
-            page_num = idx + 1
-            pix = page.get_pixmap(matrix=matrix, alpha=False)
-            out_path = output_dir / f"{stem}_page{page_num}{image_ext}"
-            pix.save(str(out_path))
-            outputs.append(out_path)
-
-    return outputs
-
-
-def extract_pdf_with_pymupdf4llm(
-    pdf_path: str | Path,
-    page_chunks: bool = True,
-    write_images: bool = False,
-    image_path: str | Path | None = None,
-    pages: list[int] | None = None,
-) -> list[dict[str, Any]] | str:
-    """
-    Ekstrak dokumen PDF digital langsung menjadi Markdown menggunakan pymupdf4llm.
-    Mendukung deteksi tabel GFM, urutan baca multi-kolom, dan chunking per halaman.
-    """
-    import pymupdf4llm
-
     path_obj = Path(pdf_path).resolve()
     if not path_obj.exists():
-        raise FileNotFoundError(f"PDF tidak ditemukan: {path_obj}")
+        raise FileNotFoundError(f"File PDF tidak ditemukan: {path_obj}")
 
-    img_dir_str = str(Path(image_path).resolve()) if image_path else None
-    if write_images and img_dir_str:
-        Path(img_dir_str).mkdir(parents=True, exist_ok=True)
+    if output_dir is None:
+        out_path = Path("output/pdf_pages") / path_obj.stem
+    else:
+        out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
 
-    result = pymupdf4llm.to_markdown(
-        str(path_obj),
-        pages=pages,
-        page_chunks=page_chunks,
-        write_images=write_images,
-        image_path=img_dir_str,
-    )
+    rendered: list[Path] = []
 
-    if page_chunks and isinstance(result, list):
-        formatted_pages: list[dict[str, Any]] = []
-        for item in result:
+    # Coba PyMuPDF terlebih dahulu (lebih cepat dan tajam)
+    try:
+        import fitz  # PyMuPDF
+
+        doc = fitz.open(str(path_obj))
+        zoom = dpi / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+
+        target_pages = pages if pages is not None else list(range(len(doc)))
+
+        for pno in target_pages:
+            if pno >= len(doc):
+                continue
+            page = doc[pno]
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            img_file = out_path / f"page_{pno + 1:04d}.{image_ext}"
+            pix.save(str(img_file))
+            rendered.append(img_file)
+
+        doc.close()
+        return rendered
+    except ImportError:
+        pass
+
+    # Fallback: pypdfium2
+    try:
+        pdfium = importlib.import_module("pypdfium2")
+        pdf = pdfium.PdfDocument(str(path_obj))
+        scale = dpi / 72.0
+        target_pages = pages if pages is not None else list(range(len(pdf)))
+
+        for pno in target_pages:
+            if pno >= len(pdf):
+                continue
+            page = pdf[pno]
+            bitmap = page.render(scale=scale)
+            pil_image = bitmap.to_pil()
+            img_file = out_path / f"page_{pno + 1:04d}.{image_ext}"
+            pil_image.save(str(img_file))
+            rendered.append(img_file)
+
+        pdf.close()
+        return rendered
+    except (ImportError, Exception) as err:
+        raise ImportError(
+            "Tidak ditemukan library PDF renderer. Jalankan: uv add pymupdf"
+        ) from err
+
+
+def extract_pdf_markdown_mupdf(
+    pdf_path: str | Path,
+    pages: list[int] | None = None,
+    page_chunks: bool = True,
+    output_dir: str | Path | None = None,
+) -> dict[str, Any] | list[dict[str, Any]]:
+    """
+    Ekstrak teks dan konten terstruktur dari PDF langsung menggunakan PyMuPDF4LLM.
+    """
+    path_obj = Path(pdf_path).resolve()
+    if not path_obj.exists():
+        raise FileNotFoundError(f"File PDF tidak ditemukan: {path_obj}")
+
+    import fitz
+
+    doc = fitz.open(str(path_obj))
+    total_pages = len(doc)
+    doc.close()
+
+    try:
+        import pymupdf4llm
+
+        target_pages = pages if pages is not None else None
+        md_text = pymupdf4llm.to_markdown(
+            str(path_obj),
+            pages=target_pages,
+            page_chunks=page_chunks,
+            write_images=bool(output_dir),
+            image_path=str(output_dir) if output_dir else None,
+        )
+    except ImportError:
+        import fitz
+
+        doc = fitz.open(str(path_obj))
+        chunks = []
+        target_indices = pages if pages is not None else list(range(len(doc)))
+        for pno in target_indices:
+            if pno < len(doc):
+                chunks.append({"text": doc[pno].get_text("text"), "metadata": {"page": pno + 1}})
+        doc.close()
+        md_text = chunks
+
+    result: dict[str, Any] = {
+        "file_path": str(path_obj),
+        "total_pages": total_pages,
+        "extracted_pages_count": len(md_text) if isinstance(md_text, list) else total_pages,
+        "pages": [],
+    }
+
+    if isinstance(md_text, list):
+        formatted_pages = []
+        for idx, item in enumerate(md_text, start=1):
             meta = item.get("metadata", {})
-            page_num = meta.get("page", 1)
+            page_num = meta.get("page", idx)
             formatted_pages.append(
                 {
-                    "page_number": page_num,
+                    "page": page_num,
                     "text": item.get("text", ""),
                     "metadata": meta,
                     "tables": item.get("tables", []),
@@ -158,9 +207,14 @@ def extract_pdf_with_pymupdf4llm(
     return result
 
 
+extract_pdf_with_pymupdf4llm = extract_pdf_markdown_mupdf
+
+
 def process_multipage_pdf(
     pdf_path: str | Path,
-    pipeline: DocumentExtractionPipeline,
+    pipeline: DocumentExtractionPipeline | Any = None,
+    *,
+    llm: Any = None,
     output_dir: str | Path | None = None,
     dpi: int = DEFAULT_DPI,
     forced_specs: list[str] | str | None = None,
@@ -176,6 +230,13 @@ def process_multipage_pdf(
     """
     pdf_path = Path(pdf_path)
     total_pages = pdf_page_count(pdf_path)
+
+    if pipeline is None:
+        from .graph import DocumentExtractionPipeline
+        pipeline = DocumentExtractionPipeline(vlm=llm)
+    elif hasattr(pipeline, "invoke") and not hasattr(pipeline, "run"):
+        from .graph import DocumentExtractionPipeline
+        pipeline = DocumentExtractionPipeline(vlm=pipeline)
 
     pages: list[DocumentPage] = []
     pages_md: list[str] = []
@@ -237,63 +298,50 @@ def process_multipage_pdf(
                 tab_event, _ = process_page_tabular_agent(
                     page_markdown=page_md,
                     page_number=idx,
-                    source_file=str(pdf_path.resolve()),
+                    source_file=str(pdf_path),
                     db_path=resolved_db_path,
                     table_name_prefix=pdf_path.stem,
                     append_if_matching=True,
                     force_all_tables=force_all_tables,
+                    llm=llm or getattr(pipeline, "vlm", None),
                 )
                 tabular_events.append(tab_event)
-                if tab_event.tables_detected > 0:
-                    logger.info(
-                        "[Sub-Agent SQL Page %d] Terdeteksi %d tabel | Status: %s | Baris: %d",
-                        idx,
-                        tab_event.tables_detected,
-                        tab_event.status,
-                        tab_event.rows_ingested_total,
-                    )
 
-    # Kumpulkan seluruh spesifikasi unik dokumen
-    if active_forced:
-        overall_specs = normalize_specs(active_forced)
-    else:
-        flat_specs: list[str] = []
-        for s_list in all_page_specs:
-            for s in s_list:
-                if s not in flat_specs:
-                    flat_specs.append(s)
-        overall_specs = flat_specs or ["plain"]
+    # Jahit teks seluruh halaman menjadi satu teks Markdown utuh
+    full_md = stitch_pages_to_markdown(pages_md)
 
-    # Gabungkan halaman dengan kontinuitas heading
-    stitched_markdown = stitch_pages_to_markdown(pages_md)
-
-    # Pengawasan Tahap Akhir: Agent Utama Guardrail Cross-Verification
+    # Jalur 3: Supervisor Guardrail Cross-Verification (Audit Markdown vs SQLite)
     guardrail_report = None
-    if auto_tabular_db and resolved_db_path:
+    if auto_tabular_db and resolved_db_path and resolved_db_path.exists():
         guardrail_report = cross_verify_dual_track(
-            stitched_markdown=stitched_markdown,
+            stitched_markdown=full_md,
             db_path=resolved_db_path,
-            source_file=str(pdf_path.resolve()),
+            source_file=str(pdf_path),
             total_pages=total_pages,
         )
-        logger.info(
-            "[Master Agent Guardrail] Status: %s | Markdown Tables: %d | SQLite Tables: %d",
-            guardrail_report.guardrail_status,
-            guardrail_report.total_markdown_tables,
-            guardrail_report.total_sqlite_tables,
-        )
+
+    # Hitung konsensus spesifikasi layout utama dokumen
+    flat_specs = [s for page_spec in all_page_specs for s in page_spec if s != "plain"]
+    dominant_specs = normalize_specs(flat_specs) if flat_specs else ["plain"]
+    primary_doc_type = dominant_specs[0] if dominant_specs else "plain"
 
     return ExtractedDocument(
-        file_path=str(pdf_path),
-        specs=overall_specs,
-        total_pages=total_pages,
-        markdown_content=stitched_markdown,
+        source_file=str(pdf_path),
+        doc_type=primary_doc_type,
         pages=pages,
-        tabular_events=tabular_events,
+        full_markdown=full_md,
+        page_tabular_events=tabular_events,
         guardrail_report=guardrail_report,
-        metadata={
-            "source_type": "pdf",
-            "dpi": dpi,
-            "filename": pdf_path.name,
-        },
+        total_pages=total_pages,
     )
+
+
+__all__ = [
+    "DEFAULT_DPI",
+    "PDF_PAGE_BATCH",
+    "extract_pdf_markdown_mupdf",
+    "extract_pdf_with_pymupdf4llm",
+    "pdf_page_count",
+    "pdf_to_images",
+    "process_multipage_pdf",
+]

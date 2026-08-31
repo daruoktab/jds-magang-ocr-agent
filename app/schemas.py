@@ -1,7 +1,6 @@
 """
-Pydantic Schemas untuk Ekstraksi Dokumen Vision OCR -> Markdown Siap Chunking & Tabular Database.
-Mendukung multi-spesifikasi / karakteristik komposit pada satu dokumen, pemisahan data tabular transaksional ke SQLite,
-serta ekstraksi diagram visual ke sintaks Mermaid.js secara selektif.
+Pydantic Schemas untuk Document Vision VLM Extractor (Siap Chunking RAG),
+Tabular SQLite Ingestion, Diagram Mermaid Extraction, dan Master-SubAgent System.
 """
 
 from __future__ import annotations
@@ -10,353 +9,352 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-
-class OCRResult(BaseModel):
-    """Hasil ekstraksi OCR teks mentah."""
-
-    text: str = Field(..., description="Teks mentah yang berhasil diekstrak model OCR")
+# ==============================================================================
+# Model-Model Klasifikasi & Ekstraksi Dokumen Dasar
+# ==============================================================================
 
 
 class ClassificationResult(BaseModel):
-    """Hasil klasifikasi satu atau lebih karakteristik layout dokumen."""
+    """Hasil klasifikasi spesifikasi karakteristik dokumen."""
 
     specs: list[str] = Field(
         default_factory=lambda: ["plain"],
-        description="Daftar karakteristik yang terdeteksi: plain, markdown_hierarchy, bilingual_journal, presentation_slides",
-    )
-    confidence: float = Field(default=1.0, description="Tingkat keyakinan klasifikasi")
-
-    @property
-    def primary_spec(self) -> str:
-        """Karakteristik utama dokumen."""
-        return self.specs[0] if self.specs else "plain"
-
-
-class DocumentSection(BaseModel):
-    """Bagian dokumen berbasis heading."""
-
-    heading: str = Field(..., description="Judul heading (mis. '## Pendahuluan')")
-    level: int = Field(default=2, description="Level heading (1, 2, 3, dst.)")
-    content: str = Field(default="", description="Konten isi dalam heading ini")
-
-
-class DocumentPage(BaseModel):
-    """Hasil ekstraksi per-halaman dokumen."""
-
-    page_number: int = Field(..., description="Nomor urut halaman (mulai 1)")
-    specs: list[str] = Field(
-        default_factory=lambda: ["plain"],
-        description="Daftar karakteristik layout pada halaman ini",
-    )
-    markdown_content: str = Field(
-        ..., description="Teks Markdown yang diekstrak dari halaman ini"
-    )
-    image_path: str | None = Field(
-        default=None, description="Path gambar halaman bila ada"
-    )
-
-
-# ==============================================================================
-# Tabular & SQLite Ingestion / Verification Schemas
-# ==============================================================================
-
-TableTypeLiteral = Literal[
-    "transactional_log",
-    "financial_statement",
-    "inventory_ledger",
-    "narrative_matrix",
-    "form_key_value",
-    "generic_table",
-]
-
-RecommendedStorageLiteral = Literal["sqlite_database", "vector_rag"]
-
-
-class TableClassificationResult(BaseModel):
-    """Hasil klasifikasi tabel: membedakan tabel transaksional (DB) vs tabel naratif (Vector RAG)."""
-
-    table_id: str = Field(default="table_1", description="Identifier tabel")
-    is_transactional: bool = Field(
-        default=False,
-        description="True jika tabel berupa data log/transaksi numerik yang memerlukan agregasi SQL (SUM, AVG, filter)",
-    )
-    table_type: TableTypeLiteral = Field(
-        default="generic_table",
-        description="Tipe semantik tabel (transactional_log, financial_statement, inventory_ledger, narrative_matrix, form_key_value, generic_table)",
-    )
-    recommended_storage: RecommendedStorageLiteral = Field(
-        default="vector_rag",
-        description="Rekomendasi storage: 'sqlite_database' untuk transaksional, 'vector_rag' untuk naratif",
+        description="Daftar spesifikasi layout yang terdeteksi",
     )
     confidence: float = Field(
         default=1.0, description="Tingkat keyakinan klasifikasi (0.0 - 1.0)"
     )
     reasoning: str = Field(
-        default="", description="Alasan klasifikasi dan karakteristik yang ditemukan"
-    )
-    numeric_density: float = Field(
-        default=0.0, description="Rasio kolom/sel bernilai numerik"
-    )
-    date_density: float = Field(
-        default=0.0, description="Rasio kolom/sel bertipe tanggal"
-    )
-    total_rows: int = Field(default=0, description="Estimasi total baris data")
-    total_columns: int = Field(default=0, description="Jumlah kolom terdeteksi")
-    columns_detected: list[str] = Field(
-        default_factory=list, description="Daftar nama kolom header"
+        default="", description="Alasan atau pertimbangan klasifikasi"
     )
 
 
-class TableColumnSchema(BaseModel):
-    """Skema definisi satu kolom dalam tabel SQLite."""
+class DocumentPage(BaseModel):
+    """Hasil ekstraksi satu halaman dokumen."""
 
-    name: str = Field(
-        ..., description="Nama kolom yang disanitasi untuk identifier SQL aman"
+    page_number: int = Field(..., description="Nomor halaman (1-based)")
+    specs: list[str] = Field(
+        default_factory=lambda: ["plain"],
+        description="Spesifikasi tata letak yang aktif pada halaman ini",
     )
-    original_name: str = Field(
-        ..., description="Nama kolom asli pada dokumen/tabel sumber"
+    markdown_content: str = Field(
+        ..., description="Teks Markdown hasil ekstraksi halaman ini"
     )
-    sql_type: Literal["TEXT", "INTEGER", "REAL", "NUMERIC", "DATE", "DATETIME"] = Field(
-        default="TEXT", description="Tipe data SQL yang sesuai"
+    image_path: str | None = Field(
+        default=None, description="Path ke citra halaman yang dirender"
+    )
+    confidence: float = Field(
+        default=1.0, description="Tingkat keyakinan ekstraksi halaman (0.0 - 1.0)"
+    )
+
+
+class DocumentSection(BaseModel):
+    """Bagian dokumen berbasis heading Markdown (#, ##, ###)."""
+
+    title: str = Field(..., description="Judul heading bagian ini")
+    level: int = Field(..., description="Tingkatan heading (1=H1, 2=H2, 3=H3, dst.)")
+    content: str = Field(..., description="Isi teks Markdown di dalam bagian ini")
+    page_start: int = Field(
+        ..., description="Halaman awal di mana bagian ini dimulai"
+    )
+    page_end: int = Field(
+        ..., description="Halaman akhir di mana bagian ini selesai"
+    )
+    subsections: list[DocumentSection] = Field(
+        default_factory=list, description="Sub-bagian di bawah heading ini"
+    )
+
+
+class ChunkPreview(BaseModel):
+    """Pratinjau satu potongan teks hasil simulasi chunking."""
+
+    chunk_id: int = Field(..., description="Indeks chunk berurutan (1-based)")
+    char_count: int = Field(..., description="Jumlah karakter dalam chunk")
+    token_estimate: int = Field(
+        ..., description="Estimasi jumlah token (~karakter / 4)"
+    )
+    preview: str = Field(
+        ..., description="Cuplikan teks awal dan akhir dari chunk"
+    )
+    content: str = Field(
+        default="", description="Konten teks lengkap dari potongan chunk"
+    )
+    start_char: int = Field(
+        default=0, description="Posisi karakter awal dalam dokumen"
+    )
+    end_char: int = Field(
+        default=0, description="Posisi karakter akhir dalam dokumen"
+    )
+
+
+ChunkItem = ChunkPreview
+
+
+class DocumentChunkingPreview(BaseModel):
+    """Hasil simulasi pemotongan teks Markdown hasil ekstraksi siap diindeks RAG."""
+
+    source_file: str = Field(..., description="Nama file dokumen asal")
+    total_characters: int = Field(
+        ..., description="Jumlah total karakter seluruh dokumen"
+    )
+    total_chunks: int = Field(
+        ..., description="Jumlah total potongan chunk yang dihasilkan"
+    )
+    chunk_size: int = Field(..., description="Target ukuran karakter per chunk")
+    chunk_overlap: int = Field(
+        ..., description="Ukuran overlap karakter antar chunk"
+    )
+    avg_chunk_size: float = Field(
+        ..., description="Rata-rata ukuran karakter per chunk"
+    )
+    chunks: list[ChunkPreview] = Field(
+        default_factory=list,
+        description="Daftar sampel pratinjau potongan chunk",
+    )
+
+
+ChunkingPreview = DocumentChunkingPreview
+
+
+# ==============================================================================
+# Model-Model Basis Data Tabular & Verifikasi Ganda (SQLite Storage)
+# ==============================================================================
+
+
+class TableColumnInfo(BaseModel):
+    """Metadata untuk satu kolom dalam tabel database."""
+
+    name: str = Field(..., description="Nama kolom SQL terstandarisasi")
+    data_type: str = Field(
+        default="TEXT",
+        description="Tipe data SQLite: TEXT, INTEGER, REAL, DATE, atau NUMERIC",
+    )
+    sql_type: str = Field(
+        default="TEXT",
+        description="Alias tipe SQL (TEXT, INTEGER, REAL, DATE, atau NUMERIC)",
+    )
+    original_name: str | None = Field(
+        default=None, description="Nama header asli di tabel dokumen"
+    )
+    description: str = Field(
+        default="", description="Deskripsi atau keterangan kolom"
     )
     is_nullable: bool = Field(
         default=True, description="Apakah kolom boleh bernilai NULL"
     )
-    description: str | None = Field(default=None, description="Deskripsi makna kolom")
-    sample_values: list[Any] = Field(
-        default_factory=list, description="Contoh nilai data untuk verifikasi"
+    is_numeric: bool = Field(
+        default=False, description="True jika kolom berisi data numerik/finansial"
+    )
+    sample_values: list[str] = Field(
+        default_factory=list,
+        description="Beberapa contoh nilai awal dari kolom ini",
     )
 
 
-class TableSchema(BaseModel):
-    """Skema lengkap tabel terstruktur untuk database SQLite."""
+TableColumnSchema = TableColumnInfo
 
-    table_name: str = Field(..., description="Nama tabel pada SQLite database")
-    source_file: str | None = Field(
-        default=None, description="Path dokumen sumber asal tabel"
+
+class InferredTableSchema(BaseModel):
+    """Skema tabel basis data hasil inferensi otomatis dari tabel Markdown."""
+
+    table_name: str = Field(..., description="Nama tabel SQL yang unik")
+    columns: list[TableColumnInfo] = Field(
+        ..., description="Daftar kolom hasil inferensi"
     )
-    columns: list[TableColumnSchema] = Field(
-        default_factory=list, description="Daftar skema kolom"
+    primary_key: str | None = Field(
+        default="_row_id",
+        description="Kolom primary key (default auto-increment row id)",
     )
-    primary_key: list[str] | None = Field(
-        default=None, description="Kolom primary key jika ada (mis. id, no_ref)"
+    source_file: str = Field(
+        default="", description="Path file dokumen sumber data"
     )
     metadata: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Metadata dokumen, header form, atau periode transaksi",
+        default_factory=dict, description="Metadata tambahan terkait tabel"
+    )
+
+
+TableSchema = InferredTableSchema
+
+TableTypeLiteral = Literal[
+    "transactional",
+    "transactional_log",
+    "financial_ledger",
+    "financial_statement",
+    "matrix_pivot",
+    "narrative_matrix",
+    "narrative_comparison",
+    "generic_table",
+]
+
+
+class TableClassificationResult(BaseModel):
+    """Hasil analisis semantik untuk membedakan tabel transaksional vs naratif."""
+
+    table_id: str = Field(default="table_auto", description="Identifier unik tabel")
+    is_transactional: bool = Field(
+        ...,
+        description="True jika tabel cocok disimpan di SQLite untuk query analitik SQL",
+    )
+    table_type: str = Field(
+        default="generic_table",
+        description="Kategori semantik tabel yang terdeteksi",
+    )
+    recommended_storage: str = Field(
+        default="sqlite_database",
+        description="Rekomendasi penyimpanan (sqlite_database / vector_rag)",
+    )
+    recommended_destination: str = Field(
+        default="sqlite",
+        description="Tujuan penyimpanan optimal: 'sqlite' untuk transaksional, 'markdown_rag' untuk naratif",
+    )
+    confidence: float = Field(
+        default=1.0,
+        description="Tingkat keyakinan klasifikasi (0.0 - 1.0)",
+    )
+    reasoning: str = Field(
+        default="",
+        description="Penjelasan logis di balik pemilihan strategi penyimpanan",
+    )
+    numeric_density: float = Field(
+        default=0.0,
+        description="Kepadatan numerik",
+    )
+    date_density: float = Field(
+        default=0.0,
+        description="Kepadatan tanggal",
+    )
+    total_rows: int = Field(
+        default=0,
+        description="Jumlah baris data",
+    )
+    total_columns: int = Field(
+        default=0,
+        description="Jumlah kolom data",
+    )
+    columns_detected: list[str] = Field(
+        default_factory=list,
+        description="Daftar nama kolom yang terdeteksi",
+    )
+    numeric_columns_ratio: float = Field(
+        default=0.0,
+        description="Rasio kolom numerik terhadap total kolom (0.0 - 1.0)",
     )
 
 
 class VerificationCheck(BaseModel):
-    """Hasil satu item pemeriksaan validitas data tabular."""
+    """Satu unit pemeriksaan audit pada verifikasi ganda tabel."""
 
-    check_name: str = Field(
-        ...,
-        description="Nama pemeriksaan (mis. row_count_check, numeric_integrity_check)",
+    check_name: str = Field(..., description="Nama pemeriksaan verifikasi")
+    passed: bool = Field(..., description="Status apakah pemeriksaan lolos")
+    details: str = Field(default="", description="Rincian hasil pemeriksaan")
+    metric_value: Any = Field(
+        default=None, description="Nilai metrik hasil perhitungan"
     )
-    passed: bool = Field(..., description="Apakah pemeriksaan lolos (True/False)")
-    details: str = Field(
-        ..., description="Penjelasan detail hasil pemeriksaan atau temuan anomali"
-    )
-    metric_value: Any | None = Field(default=None, description="Nilai metrik terukur")
 
 
 class TableVerificationReport(BaseModel):
-    """Laporan verifikasi ganda (double-verification) integritas data tabel SQLite."""
+    """Laporan audit integritas data ganda (double-verification) tabel SQLite."""
 
-    table_name: str = Field(..., description="Nama tabel yang diverifikasi")
-    database_path: str = Field(..., description="Path database SQLite yang diuji")
-    is_valid: bool = Field(..., description="Apakah seluruh kriteria verifikasi lolos")
-    confidence_score: float = Field(
-        default=1.0, description="Skor kepercayaan validitas data (0.0 - 1.0)"
+    table_name: str = Field(..., description="Nama tabel yang diaudit")
+    database_path: str = Field(
+        default="", description="Path absolut file basis data SQLite"
     )
-    verification_status: Literal["verified", "needs_revision", "rejected"] = Field(
-        default="verified", description="Status verifikasi akhir"
+    is_valid: bool = Field(
+        ..., description="True jika seluruh pemeriksaan audit lolos"
+    )
+    verification_status: str | None = Field(
+        default=None, description="Status verifikasi tabel"
+    )
+    confidence_score: float = Field(
+        default=1.0, description="Skor keyakinan audit (0.0 - 1.0)"
+    )
+    row_count_db: int = Field(
+        default=0, description="Jumlah baris aktual dalam tabel SQLite"
+    )
+    verified_row_count: int = Field(
+        default=0, description="Jumlah baris yang terverifikasi"
+    )
+    expected_row_count: int | None = Field(
+        default=None, description="Jumlah baris yang diharapkan dari dokumen sumber"
+    )
+    aggregate_checks: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Hasil perhitungan agregat SQL (mis. SUM, AVG, MIN, MAX)",
+    )
+    test_queries: list[Any] = Field(
+        default_factory=list,
+        description="Daftar query SQL pengujian dan hasilnya",
+    )
+    null_value_counts: dict[str, int] = Field(
+        default_factory=dict, description="Jumlah nilai NULL per kolom"
+    )
+    discrepancies: list[str] = Field(
+        default_factory=list,
+        description="Daftar kejanggalan atau inkonsistensi yang ditemukan",
     )
     checks: list[VerificationCheck] = Field(
-        default_factory=list, description="Rincian seluruh pemeriksaan yang dijalankan"
-    )
-    summary: str = Field(default="", description="Ringkasan evaluasi verifikasi")
-    verified_row_count: int = Field(
-        default=0, description="Jumlah baris yang diverifikasi dalam SQLite"
-    )
-    test_queries: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description="Daftar query SQL uji coba (mis. SELECT COUNT(*), SUM(...)) dan hasilnya",
+        default_factory=list, description="Daftar pemeriksaan individual"
     )
     llm_reflection: str | None = Field(
-        default=None,
-        description="Catatan refleksi/penalaran LLM atas kualitas dan akurasi ekstraksi",
+        default=None, description="Catatan hasil audit lanjutan dari LLM"
+    )
+    llm_audit_note: str | None = Field(
+        default=None, description="Catatan hasil audit lanjutan dari LLM bila ada"
+    )
+    summary: str | None = Field(
+        default=None, description="Ringkasan eksekutif hasil audit tabel"
     )
 
 
 class TableIngestionResult(BaseModel):
-    """Hasil proses ekstraksi dan ingesti tabel ke SQLite."""
+    """Hasil proses ingesti tabel ke basis data SQLite dokumen."""
 
-    status: Literal["success", "warning", "error"] = Field(
-        default="success", description="Status hasil ingesti"
+    status: Literal["success", "skipped_narrative", "error", "warning"] = Field(
+        ..., description="Status hasil ingesti tabel"
     )
-    table_name: str = Field(..., description="Nama tabel di SQLite")
+    table_name: str = Field(..., description="Nama tabel SQLite tujuan")
     database_path: str = Field(
-        ..., description="Path file database SQLite tempat data disimpan"
+        ..., description="Path absolut ke file basis data SQLite"
     )
     total_rows_ingested: int = Field(
-        default=0, description="Jumlah baris yang berhasil di-insert"
+        default=0, description="Jumlah baris yang berhasil di-insert ke database"
     )
     columns: list[str] = Field(
-        default_factory=list, description="Daftar kolom yang berhasil dibuat"
+        default_factory=list, description="Daftar nama kolom tabel yang dibuat"
     )
     verification_report: TableVerificationReport | None = Field(
-        default=None, description="Laporan verifikasi integritas data"
+        default=None, description="Laporan verifikasi ganda tabel"
     )
     sample_data: list[dict[str, Any]] = Field(
-        default_factory=list, description="Contoh 3-5 baris data teratas"
+        default_factory=list, description="Sampel beberapa record teratas dari database"
     )
-    message: str = Field(default="", description="Pesan status atau informasi tambahan")
+    message: str = Field(default="", description="Pesan status atau keterangan error")
 
 
 class TabularQueryResult(BaseModel):
     """Hasil eksekusi query SQL pada database SQLite dokumen."""
 
     query: str = Field(..., description="Query SQL yang dijalankan")
-    status: Literal["success", "error"] = Field(
-        default="success", description="Status eksekusi query"
-    )
-    row_count: int = Field(default=0, description="Jumlah baris hasil query")
+    status: Literal["success", "error"] = Field(default="success")
     columns: list[str] = Field(
-        default_factory=list, description="Daftar kolom hasil query"
+        default_factory=list, description="Nama-nama kolom hasil query"
     )
     rows: list[dict[str, Any]] = Field(
-        default_factory=list, description="Baris data hasil query"
+        default_factory=list, description="Daftar record baris hasil query"
+    )
+    row_count: int = Field(
+        default=0, description="Total jumlah baris yang dikembalikan"
     )
     execution_time_ms: float = Field(
-        default=0.0, description="Waktu eksekusi dalam milidetik"
+        default=0.0, description="Waktu eksekusi query dalam milidetik"
     )
     error_message: str | None = Field(
-        default=None, description="Pesan error jika query gagal"
-    )
-
-
-class PageTabularEvent(BaseModel):
-    """Event pemrosesan mandiri Sub-Agent SQL per-halaman/slide."""
-
-    page_number: int = Field(..., description="Nomor halaman/slide yang diproses")
-    tables_detected: int = Field(
-        default=0, description="Jumlah tabel yang ditemukan pada halaman ini"
-    )
-    existing_tables_inspected: list[str] = Field(
-        default_factory=list,
-        description="Daftar tabel eksisting di SQLite yang diperiksa sebelum ingesti",
-    )
-    actions_taken: list[str] = Field(
-        default_factory=list,
-        description="Daftar tindakan yang dieksekusi (cek skema, append baris, buat tabel baru)",
-    )
-    queries_executed: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description="Query SQL mandiri yang dijalankan oleh sub-agent untuk validasi state tabel",
-    )
-    rows_ingested_total: int = Field(
-        default=0, description="Total baris data yang di-ingest dari halaman ini"
-    )
-    status: Literal["no_tables", "created_new_table", "appended_existing_table", "error"] = Field(
-        default="no_tables", description="Status hasil pemrosesan halaman"
-    )
-
-
-class DualTrackGuardrailReport(BaseModel):
-    """Laporan Guardrail & Audit Komparatif Jalur Ganda (Markdown Track vs SQLite Tabular Track)."""
-
-    source_file: str = Field(..., description="File sumber dokumen")
-    database_path: str = Field(..., description="Path database SQLite yang diaudit")
-    total_pages_processed: int = Field(default=1, description="Total halaman yang diproses")
-    total_markdown_tables: int = Field(
-        default=0, description="Total tabel yang terdeteksi di teks Markdown"
-    )
-    total_sqlite_tables: int = Field(
-        default=0, description="Total tabel yang tersimpan di SQLite database"
-    )
-    total_markdown_rows: int = Field(
-        default=0, description="Total baris data dari seluruh tabel di Markdown"
-    )
-    total_sqlite_rows: int = Field(
-        default=0, description="Total baris data yang berhasil tercatat di SQLite"
-    )
-    guardrail_status: Literal["PASSED", "WARNING", "FAILED"] = Field(
-        default="PASSED",
-        description="Status verifikasi akhir pengawasan agent utama",
-    )
-    table_comparisons: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description="Rincian komparasi tiap tabel (nama tabel, baris MD, baris SQLite, status)",
-    )
-    discrepancies: list[str] = Field(
-        default_factory=list,
-        description="Daftar anomali atau perbedaan antara jalur Markdown dan SQLite",
-    )
-    supervisor_notes: str = Field(
-        default="",
-        description="Catatan pengawasan dan evaluasi kualitas dari Master Supervisor Agent",
-    )
-
-
-class ExtractedDocument(BaseModel):
-    """
-    Hasil ekstraksi lengkap seluruh dokumen dalam format Markdown utuh siap chunking.
-    """
-
-    file_path: str = Field(..., description="Path file input dokumen (PDF/PPTX/Image)")
-    specs: list[str] = Field(
-        default_factory=lambda: ["plain"],
-        description="Daftar karakteristik layout dokumen yang terdeteksi",
-    )
-    total_pages: int = Field(default=1, description="Jumlah total halaman / slide")
-    markdown_content: str = Field(
-        ..., description="Teks Markdown utuh dari awal sampai akhir, siap di-chunking"
-    )
-    pages: list[DocumentPage] = Field(
-        default_factory=list, description="Detail ekstraksi per-halaman"
-    )
-    tabular_events: list[PageTabularEvent] = Field(
-        default_factory=list,
-        description="Log eksekusi pemahaman Sub-Agent Tabular per-halaman",
-    )
-    guardrail_report: DualTrackGuardrailReport | None = Field(
-        default=None,
-        description="Laporan audit guardrail komparatif Markdown vs SQLite",
-    )
-    metadata: dict[str, Any] = Field(
-        default_factory=dict, description="Metadata tambahan dokumen"
-    )
-
-    @property
-    def doc_type(self) -> str:
-        """String gabungan spesifikasi (kompatibilitas)."""
-        return ", ".join(self.specs) if self.specs else "plain"
-
-
-class ChunkItem(BaseModel):
-    """Satu potongan chunk hasil text splitting."""
-
-    chunk_index: int = Field(..., description="Indeks urutan chunk")
-    char_count: int = Field(..., description="Jumlah karakter dalam chunk")
-    metadata: dict[str, Any] = Field(
-        default_factory=dict, description="Metadata header/halaman dari chunk"
-    )
-    content: str = Field(..., description="Isi teks chunk")
-
-
-class ChunkingPreview(BaseModel):
-    """Hasil simulasi chunking pada dokumen."""
-
-    total_chunks: int = Field(..., description="Jumlah total potongan chunk")
-    chunks: list[ChunkItem] = Field(
-        default_factory=list, description="Daftar potongan chunk"
+        default=None, description="Pesan galat SQL jika eksekusi gagal"
     )
 
 
 # ==============================================================================
-# Diagram & Mermaid Specialist Schemas
+# Diagram & Visual Artifact Schemas (Mermaid.js Extraction)
 # ==============================================================================
 
 DiagramTypeLiteral = Literal[
@@ -377,75 +375,219 @@ DiagramTypeLiteral = Literal[
     "generic_diagram",
 ]
 
-DiagramFormatRecommendation = Literal[
-    "mermaid",
-    "markdown_table",
-    "text_description",
-    "none",
-]
+
+class DiagramFormatRecommendation(BaseModel):
+    """Rekomendasi format ekstraksi visual (Mermaid vs Deskripsi)."""
+
+    diagram_type: DiagramTypeLiteral = Field(
+        ..., description="Tipe visual yang diidentifikasi"
+    )
+    recommended_format: str = Field(
+        default="mermaid_code",
+        description="Format representasi output yang direkomendasikan",
+    )
+    is_mermaid_compatible: bool = Field(
+        ..., description="True jika visual cocok dijadikan diagram Mermaid.js"
+    )
+    suggested_syntax: str | None = Field(
+        default=None, description="Saran sintaks Mermaid (mis. flowchart TD, sequenceDiagram)"
+    )
+    rationale: str = Field(
+        default="", description="Alasan logis pemilihan format ekstraksi"
+    )
 
 
 class DiagramConvertibilityResult(BaseModel):
-    """Hasil evaluasi kelayakan diagram untuk diubah menjadi kode Mermaid."""
+    """Hasil evaluasi kelayakan diagram visual untuk diekstrak menjadi kode Mermaid.js."""
 
     is_convertible: bool = Field(
-        default=False,
-        description="True jika diagram memiliki topologi diskrit/relasi yang cocok untuk sintaks Mermaid",
+        ...,
+        description="True jika diagram memiliki simpul dan relasi diskrit yang cocok untuk Mermaid",
     )
     diagram_type: DiagramTypeLiteral = Field(
-        default="generic_diagram",
-        description="Tipe semantik diagram yang terdeteksi",
+        ..., description="Kategori diagram visual yang terdeteksi"
     )
-    recommended_format: DiagramFormatRecommendation = Field(
-        default="text_description",
-        description="Format output yang direkomendasikan ('mermaid', 'markdown_table', 'text_description', 'none')",
+    recommended_format: str = Field(
+        default="mermaid_code",
+        description="Format output yang direkomendasikan (mermaid, mermaid_code, text_description, markdown_table)",
     )
     mermaid_type: str | None = Field(
         default=None,
-        description="Jenis diagram Mermaid yang disarankan (mis. 'flowchart TD', 'sequenceDiagram', 'erDiagram', 'stateDiagram-v2', 'classDiagram', 'mindmap', 'gantt')",
+        description="Tipe diagram Mermaid jika cocok (mis. flowchart, sequenceDiagram, erDiagram, classDiagram, stateDiagram, mindmap)",
     )
     confidence: float = Field(
-        default=1.0,
-        description="Tingkat keyakinan evaluasi (0.0 - 1.0)",
+        default=1.0, description="Tingkat keyakinan deteksi kelayakan (0.0 - 1.0)"
     )
     reasoning: str = Field(
         default="",
-        description="Penjelasan detail mengapa diagram cocok atau tidak cocok dikonversi ke Mermaid",
+        description="Alasan mengapa visual ini cocok atau tidak cocok dikonversi ke Mermaid",
     )
     nodes_or_entities: list[str] = Field(
-        default_factory=list,
-        description="Daftar node/entitas utama yang terdeteksi dalam diagram",
+        default_factory=list, description="Daftar node atau entitas utama yang terdeteksi"
     )
 
 
 class DiagramExtractionResult(BaseModel):
-    """Hasil ekstraksi diagram visual menjadi kode Mermaid atau deskripsi terstruktur."""
+    """Hasil ekstraksi diagram visual ke kode Mermaid.js atau deskripsi teks terstruktur."""
 
-    status: Literal["success", "unsuitable", "error"] = Field(
-        default="success",
-        description="Status hasil ekstraksi",
-    )
+    status: Literal["success", "unsuitable", "error"] = Field(default="success")
     is_mermaid: bool = Field(
-        default=False,
-        description="True jika berhasil menghasilkan kode Mermaid valid",
+        ...,
+        description="True jika hasil ekstraksi berupa blok kode Mermaid.js yang valid",
     )
-    diagram_type: str = Field(
-        default="diagram",
-        description="Tipe diagram yang diekstrak",
+    diagram_type: DiagramTypeLiteral = Field(
+        default="flowchart", description="Tipe diagram visual"
     )
     mermaid_code: str | None = Field(
         default=None,
-        description="Kode Mermaid lengkap (dalam blok ```mermaid ... ``` atau raw)",
+        description="Kode Mermaid.js lengkap (termasuk deklarasi tipe dan node/edge)",
     )
-    text_summary: str = Field(
-        default="",
-        description="Deskripsi naratif/ringkasan terstruktur dari diagram",
+    text_description: str | None = Field(
+        default=None,
+        description="Deskripsi terstruktur jika visual tidak cocok untuk Mermaid (mis. grafik statistik, peta)",
     )
-    reasoning: str = Field(
-        default="",
-        description="Penalaran pemilihan format dan konversi diagram",
+    text_summary: str | None = Field(
+        default=None,
+        description="Ringkasan atau catatan visual",
+    )
+    reasoning: str | None = Field(
+        default=None,
+        description="Alasan penentuan status ekstraksi diagram",
     )
     convertibility: DiagramConvertibilityResult | None = Field(
         default=None,
-        description="Hasil evaluasi kelayakan konversi diagram",
+        description="Hasil evaluasi kelayakan diagram",
     )
+    confidence: float = Field(
+        default=1.0, description="Tingkat keyakinan ekstraksi (0.0 - 1.0)"
+    )
+    validation_status: Literal["valid", "syntax_error", "unvalidated"] = Field(
+        default="unvalidated", description="Status validasi sintaks Mermaid"
+    )
+    raw_response: str | None = Field(
+        default=None, description="Respon mentah dari VLM untuk keperluan audit"
+    )
+
+
+# ==============================================================================
+# Dual-Track Multi-Page Tabular Processing & Guardrail Schemas
+# ==============================================================================
+
+
+class PageTabularEvent(BaseModel):
+    """Log proses ekstraksi dan ingesti mandiri sub-agent SQL per-halaman/slide."""
+
+    page_number: int = Field(..., description="Nomor halaman atau slide")
+    source_file: str = Field(default="", description="Path dokumen asal")
+    tables_detected: int = Field(default=0, description="Jumlah tabel yang ditemukan pada halaman ini")
+    tables_ingested: list[str] = Field(
+        default_factory=list, description="Daftar nama tabel SQLite yang dibuat/ditambahkan"
+    )
+    existing_tables_inspected: list[str] = Field(
+        default_factory=list, description="Daftar tabel eksisting yang diinspeksi di SQLite"
+    )
+    actions_taken: list[str] = Field(
+        default_factory=list, description="Daftar tindakan yang diambil sub-agent"
+    )
+    queries_executed: list[Any] = Field(
+        default_factory=list, description="Daftar query SQL yang dieksekusi sub-agent"
+    )
+    rows_ingested_total: int = Field(
+        default=0, description="Total baris data yang berhasil dimasukkan ke SQLite pada halaman ini"
+    )
+    status: str = Field(
+        default="no_tables",
+        description="Status hasil proses tabular pada halaman",
+    )
+    error_message: str | None = Field(default=None, description="Pesan error jika ingesti gagal")
+    queries_run: list[str] = Field(
+        default_factory=list, description="Daftar query SQL verifikasi mandiri yang dijalankan sub-agent"
+    )
+
+
+class DualTrackGuardrailReport(BaseModel):
+    """Laporan audit keselarasan jalur Teks Markdown vs Jalur Database SQLite oleh Supervisor Agent."""
+
+    source_file: str = Field(..., description="Path file dokumen yang diaudit")
+    database_path: str = Field(
+        default="", description="Path absolut file basis data SQLite"
+    )
+    total_pages_processed: int = Field(
+        default=1, description="Jumlah halaman yang diaudit"
+    )
+    total_pages_audited: int = Field(
+        default=1, description="Jumlah halaman yang diaudit"
+    )
+    total_markdown_tables: int = Field(
+        default=0, description="Jumlah total tabel yang muncul di teks Markdown"
+    )
+    total_sqlite_tables: int = Field(
+        default=0, description="Jumlah tabel terstruktur yang tersimpan di SQLite"
+    )
+    total_markdown_rows: int = Field(
+        default=0, description="Jumlah total baris data dari tabel Markdown"
+    )
+    total_sqlite_rows: int = Field(
+        default=0, description="Jumlah total baris data yang tersimpan di SQLite"
+    )
+    guardrail_status: str = Field(
+        default="passed",
+        description="Status kesesuaian jalur teks vs jalur database tabular",
+    )
+    table_comparisons: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Rincian perbandingan skema dan baris antar tabel",
+    )
+    discrepancies: list[str] = Field(
+        default_factory=list,
+        description="Catatan selisih atau anomali jika ditemukan ketidaksesuaian",
+    )
+    supervisor_notes: str = Field(
+        default="", description="Catatan ringkasan dari Supervisor Agent"
+    )
+
+
+class ExtractedDocument(BaseModel):
+    """Hasil akhir dokumen lengkap dengan metadata hierarki, database tabular, & diagram Mermaid."""
+
+    source_file: str = Field(..., description="Path file input")
+    doc_type: str = Field(
+        default="plain",
+        description="Spesifikasi tata letak utama: plain, markdown_hierarchy, bilingual_journal, presentation_slides",
+    )
+    pages: list[DocumentPage] = Field(
+        default_factory=list, description="Daftar hasil ekstraksi per halaman"
+    )
+    full_markdown: str = Field(
+        ..., description="Teks Markdown lengkap gabungan seluruh halaman"
+    )
+    sections: list[DocumentSection] = Field(
+        default_factory=list, description="Bagian-bagian dokumen berbasis heading"
+    )
+    diagrams: list[DiagramExtractionResult] = Field(
+        default_factory=list,
+        description="Daftar diagram visual yang berhasil diekstrak menjadi kode Mermaid",
+    )
+    tabular_results: list[TableIngestionResult] = Field(
+        default_factory=list,
+        description="Daftar tabel transaksional yang berhasil di-ingest dan diverifikasi ke SQLite",
+    )
+    page_tabular_events: list[PageTabularEvent] = Field(
+        default_factory=list,
+        description="Log per-halaman pemrosesan dan query mandiri oleh Sub-Agent SQL Tabular",
+    )
+    guardrail_report: DualTrackGuardrailReport | None = Field(
+        default=None,
+        description="Laporan audit keselarasan jalur Teks Markdown vs Database SQLite dari Supervisor Agent",
+    )
+    total_pages: int = Field(default=1, description="Jumlah total halaman")
+
+    @property
+    def markdown_content(self) -> str:
+        """Alias untuk full_markdown agar kompatibel."""
+        return self.full_markdown
+
+    @property
+    def file_path(self) -> str:
+        """Alias untuk source_file agar kompatibel."""
+        return self.source_file

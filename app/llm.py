@@ -4,7 +4,8 @@ Pembangun model chat (`ChatOpenAI`) untuk endpoint OpenAI-compatible.
 Menyediakan:
   - build_chat_model(base_url, model, api_key, ...) : builder generik
   - build_vlm(settings)  : VLM normal (ekstraksi bebas + agent, structured output)
-  - build_ocr(settings)  : OCR (VLM kecil, output teks terstruktur)
+  - get_vlm(settings)    : Helper singleton / factory untuk VLM
+  - encode_image, encode_image_to_base64, image_data_uri : utility encoding citra
 
 Endpoint dapat berupa LM Studio lokal, `llama-server`, atau server remote -
 cukup ubah `.env`.
@@ -16,13 +17,14 @@ import base64
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from langchain_openai import ChatOpenAI
 
-from .config import Settings
+from .config import Settings, get_settings
 
 logger = logging.getLogger("app.llm")
 
@@ -39,103 +41,76 @@ class LoggingCallbackHandler(BaseCallbackHandler):
         self, serialized: dict[str, Any], prompts: list[str], **kwargs: Any
     ) -> None:
         self._start_time = time.perf_counter()
-        prompt_len = sum(len(p) for p in prompts)
         logger.info(
-            "--> [LLM Request] Mengirim ke %s | Model: %s | Prompt: %d karakter (%d batch)",
-            self.base_url,
+            "--> [LLM Request] Model: %s | URL: %s | Prompts: %d item",
             self.model_name,
-            prompt_len,
+            self.base_url,
             len(prompts),
         )
+        for i, p in enumerate(prompts):
+            preview = p[:120].replace("\n", " ")
+            logger.debug("    Prompt #%d: %s...", i + 1, preview)
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
         elapsed = time.perf_counter() - self._start_time
-        gen_count = len(response.generations)
-        total_tokens = ""
-        if response.llm_output and "token_usage" in response.llm_output:
-            usage = response.llm_output["token_usage"]
-            total_tokens = f" | Tokens: {usage.get('total_tokens', 'N/A')}"
-
-        text_preview = ""
-        if response.generations and response.generations[0]:
-            first_gen = response.generations[0][0].text
-            preview = first_gen[:80].replace("\n", " ").strip()
-            text_preview = (
-                f" | Preview: '{preview}...'"
-                if len(first_gen) > 80
-                else f" | Res: '{preview}'"
-            )
-
+        gen_count = sum(len(g) for g in response.generations)
         logger.info(
-            "<-- [LLM Response] Selesai dalam %.2fs | Generasi: %d%s%s",
+            "<-- [LLM Response] Model: %s | Waktu: %.2fs | Generasi: %d item",
+            self.model_name,
             elapsed,
             gen_count,
-            total_tokens,
-            text_preview,
-        )
-
-    def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
-        elapsed = time.perf_counter() - self._start_time if self._start_time else 0.0
-        logger.error(
-            "<xx [LLM Error] Gagal setelah %.2fs pada %s (Model: %s): %s",
-            elapsed,
-            self.base_url,
-            self.model_name,
-            error,
         )
 
 
-def _read_image_base64(image_path: str) -> str:
-    with open(image_path, "rb") as f:
+def encode_image(image_path: str | Path) -> str:
+    """Baca file gambar dan encode ke base64 string."""
+    with open(str(image_path), "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
-def _guess_mime(image_path: str) -> str:
-    ext = os.path.splitext(image_path)[1].lower()
-    return {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-        ".bmp": "image/bmp",
-    }.get(ext, "image/png")
+def encode_image_to_base64(image_path: str | Path) -> tuple[str, str]:
+    """
+    Encode file gambar ke base64 dan tentukan tipe mime.
+    Returns:
+        (b64_string, mime_type) contoh: ("abc...", "image/png")
+    """
+    path_str = str(image_path)
+    ext = os.path.splitext(path_str)[1].lower().lstrip(".")
+    mime_sub = "jpeg" if ext in ("jpg", "jpeg") else ext
+    mime = f"image/{mime_sub}" if mime_sub else "image/png"
+    b64 = encode_image(path_str)
+    return b64, mime
 
 
-def image_data_uri(image_path: str) -> str:
-    """Baca gambar menjadi data URI untuk content block `image_url`."""
-    return f"data:{_guess_mime(image_path)};base64,{_read_image_base64(image_path)}"
+def image_data_uri(image_path: str | Path) -> str:
+    """Format file gambar menjadi data URI (data:image/...;base64,...)."""
+    b64, mime = encode_image_to_base64(image_path)
+    return f"data:{mime};base64,{b64}"
 
 
 def build_chat_model(
+    *,
     base_url: str,
     model: str,
     api_key: str,
-    temperature: float,
-    timeout: float,
+    temperature: float = 0.1,
+    timeout: float = 300,
     enable_thinking: bool | None = None,
-    **kwargs,
+    callbacks: list[Any] | None = None,
+    **extra_kwargs: Any,
 ) -> ChatOpenAI:
-    """ChatOpenAI generik ke endpoint OpenAI-compatible dengan logging transparan.
-
-    Args:
-        enable_thinking: bila tidak None, kirim
-            `chat_template_kwargs: {enable_thinking: <value>}` di body request
-            (dipakai model qwen family agar tidak membuang token thinking).
-            None = jangan kirim parameter ini sama sekali.
     """
-    params = dict(kwargs)
-    if enable_thinking is not None:
-        extra_body = dict(params.pop("extra_body", None) or {})
-        extra_body["chat_template_kwargs"] = {"enable_thinking": bool(enable_thinking)}
-        params["extra_body"] = extra_body
+    Buat instance `ChatOpenAI` generik untuk endpoint OpenAI-compatible.
+    """
+    params: dict[str, Any] = dict(extra_kwargs)
 
-    callbacks = list(params.pop("callbacks", None) or [])
-    callbacks.append(LoggingCallbackHandler(model_name=model, base_url=base_url))
+    # Dukungan model reasoning (mis. Qwen 2.5 / DeepSeek-R1 / Qwen3)
+    if enable_thinking is not None:
+        params["extra_body"] = {"enable_thinking": enable_thinking}
 
     return ChatOpenAI(
-        model=model,
         base_url=base_url,
+        model=model,
         api_key=api_key,
         temperature=temperature,
         timeout=timeout,
@@ -144,25 +119,19 @@ def build_chat_model(
     )
 
 
-def build_vlm(settings: Settings) -> ChatOpenAI:
+def build_vlm(settings: Settings | None = None) -> ChatOpenAI:
     """VLM normal (ekstraksi + agent), dengan enable_thinking dari config."""
+    resolved = settings or get_settings()
     return build_chat_model(
-        base_url=settings.vlm_base_url,
-        model=settings.vlm_model,
-        api_key=settings.vlm_api_key,
-        temperature=settings.vlm_temperature,
-        timeout=settings.vlm_timeout,
-        enable_thinking=settings.vlm_enable_thinking,
+        base_url=resolved.vlm_base_url,
+        model=resolved.vlm_model,
+        api_key=resolved.vlm_api_key,
+        temperature=resolved.vlm_temperature,
+        timeout=resolved.vlm_timeout,
+        enable_thinking=resolved.vlm_enable_thinking,
     )
 
 
-def build_ocr(settings: Settings) -> ChatOpenAI:
-    """OCR (VLM kecil, output teks terstruktur)."""
-    return build_chat_model(
-        base_url=settings.ocr_base_url,
-        model=settings.ocr_model,
-        api_key=settings.ocr_api_key,
-        temperature=settings.ocr_temperature,
-        timeout=settings.ocr_timeout,
-        max_tokens=settings.ocr_max_tokens,
-    )
+def get_vlm(settings: Settings | None = None) -> ChatOpenAI:
+    """Alias/Helper untuk mendapatkan instance VLM."""
+    return build_vlm(settings)

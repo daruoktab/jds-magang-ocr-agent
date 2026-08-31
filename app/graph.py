@@ -12,6 +12,7 @@ import logging
 import time
 from typing import Any, TypedDict, cast
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -39,9 +40,13 @@ class DocumentExtractionState(TypedDict, total=False):
 class DocumentExtractionPipeline:
     """Pipeline LangGraph untuk mengekstrak dokumen gambar/scan ke Markdown siap chunking."""
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        vlm: BaseChatModel | Any | None = None,
+    ) -> None:
         self.settings: Settings = settings or get_settings()
-        self.vlm = build_vlm(self.settings)
+        self.vlm = vlm or build_vlm(self.settings)
         self.extractor = VisionExtractor(self.vlm)
         self.graph: CompiledStateGraph = self._build_graph()
 
@@ -69,140 +74,144 @@ class DocumentExtractionPipeline:
         forced_doc_type: str | None = None,
         previous_page_context: str | None = None,
     ) -> dict[str, Any]:
-        """Jalankan pipeline ekstraksi komposit pada satu gambar dokumen dengan pelacakan waktu & log terperinci."""
-        start_t = time.perf_counter()
-        logger.info(
-            "================================================================================"
-        )
-        logger.info(
-            "[Workflow] Memulai pipeline ekstraksi untuk file: '%s'", image_path
-        )
-        if forced_specs or forced_doc_type:
-            logger.info(
-                "[Workflow] Override spesifikasi layout: %s",
-                forced_specs or forced_doc_type,
-            )
+        """
+        Jalankan pipeline ekstraksi lengkap pada satu gambar halaman dokumen.
 
-        init_state: DocumentExtractionState = {
+        Returns:
+            Dict berisi:
+                - preprocessed_path: path gambar yang telah di-preprocess
+                - specs: list string spesifikasi yang terdeteksi
+                - doc_type: string spesifikasi gabungan terurut (kompatibilitas)
+                - markdown_content: string teks Markdown hasil ekstraksi
+        """
+        initial_state: DocumentExtractionState = {
             "image_path": image_path,
-            "forced_specs": forced_specs or forced_doc_type,
+            "forced_specs": forced_specs,
             "forced_doc_type": forced_doc_type,
             "previous_page_context": previous_page_context,
         }
-        try:
-            result = cast(dict[str, Any], self.graph.invoke(init_state))
-            elapsed = time.perf_counter() - start_t
-            md_len = len(result.get("markdown_content", ""))
-            specs_used = result.get("specs", [])
-            logger.info(
-                "[Workflow Selesai] Total waktu: %.2fs | Specs: %s | Markdown: %d karakter",
-                elapsed,
-                specs_used,
-                md_len,
-            )
-            logger.info(
-                "================================================================================"
-            )
-            return result
-        except Exception:
-            elapsed = time.perf_counter() - start_t
-            logger.exception(
-                "[Workflow Gagal] Terjadi error pada pipeline setelah %.2fs untuk file '%s'",
-                elapsed,
-                image_path,
-            )
-            raise
 
-    def _node_preprocess(self, state: DocumentExtractionState) -> dict[str, Any]:
+        logger.info("[Pipeline] Memulai ekstraksi: %s", image_path)
+        final_state = cast(dict[str, Any], self.graph.invoke(initial_state))
+
+        return {
+            "preprocessed_path": final_state.get("preprocessed_path", image_path),
+            "specs": final_state.get("specs", ["plain"]),
+            "doc_type": final_state.get("doc_type", "plain"),
+            "markdown_content": final_state.get("markdown_content", ""),
+        }
+
+    # =========================================================================
+    # Node Implementations
+    # =========================================================================
+
+    def _node_preprocess(
+        self, state: DocumentExtractionState
+    ) -> DocumentExtractionState:
+        """Tahap 1: Preprocessing gambar."""
+        t0 = time.perf_counter()
         image_path = state["image_path"]
-        t0 = time.perf_counter()
-        logger.info("[Node 1/3: Preprocess] Menyiapkan gambar dokumen...")
-        try:
-            proc = preprocess_image(image_path)
-            dt = time.perf_counter() - t0
-            logger.info(
-                "[Node 1/3: Preprocess] Selesai (%.2fs) | Path: %s | Modifikasi: %s | Dimensi: %s",
-                dt,
-                proc.processed_path,
-                proc.is_modified,
-                proc.dimensions,
-            )
-            return {"preprocessed_path": proc.processed_path}
-        except Exception as e:
-            dt = time.perf_counter() - t0
-            logger.warning(
-                "[Node 1/3: Preprocess] Gagal dalam %.2fs (%s). Menggunakan gambar asli: '%s'",
-                dt,
-                e,
-                image_path,
-                exc_info=True,
-            )
-            return {"preprocessed_path": image_path}
 
-    def _node_classify(self, state: DocumentExtractionState) -> dict[str, Any]:
-        forced = state.get("forced_specs") or state.get("forced_doc_type")
-        if forced:
-            specs = normalize_specs(forced)
-            logger.info(
-                "[Node 2/3: Classify] Spesifikasi layout dipaksa (forced): %s", specs
-            )
-            return {"specs": specs, "doc_type": specs[0]}
+        result = preprocess_image(image_path)
+        elapsed = (time.perf_counter() - t0) * 1000
 
-        img_path = state.get("preprocessed_path") or state["image_path"]
-        t0 = time.perf_counter()
         logger.info(
-            "[Node 2/3: Classify] Mengidentifikasi karakteristik layout dokumen via VLM..."
+            "[Pipeline:Preprocess] %s -> %s (modified: %s, %dx%d, %.1fms)",
+            image_path,
+            result.processed_path,
+            result.is_modified,
+            result.dimensions[0],
+            result.dimensions[1],
+            elapsed,
         )
-        try:
-            specs = self.extractor.classify(img_path)
-            dt = time.perf_counter() - t0
+
+        return {
+            **state,
+            "preprocessed_path": result.processed_path,
+        }
+
+    def _node_classify(
+        self, state: DocumentExtractionState
+    ) -> DocumentExtractionState:
+        """Tahap 2: Klasifikasi multi-trait karakteristik dokumen."""
+        forced_specs = state.get("forced_specs")
+        forced_doc_type = state.get("forced_doc_type")
+
+        # Jika dipaksa manual oleh user, gunakan langsung
+        if forced_specs:
+            norm_specs = normalize_specs(forced_specs)
             logger.info(
-                "[Node 2/3: Classify] Selesai (%.2fs) | Terdeteksi: %s", dt, specs
+                "[Pipeline:Classify] Menggunakan forced_specs: %s", norm_specs
             )
-            return {"specs": specs, "doc_type": specs[0] if specs else "plain"}
-        except Exception as e:
-            dt = time.perf_counter() - t0
-            logger.warning(
-                "[Node 2/3: Classify] Klasifikasi otomatis gagal dalam %.2fs (%s). Fallback ke ['plain']",
-                dt,
-                e,
-                exc_info=True,
+            return {
+                **state,
+                "specs": norm_specs,
+                "doc_type": ",".join(norm_specs),
+            }
+
+        if forced_doc_type:
+            norm_specs = normalize_specs(forced_doc_type)
+            logger.info(
+                "[Pipeline:Classify] Menggunakan forced_doc_type: %s", norm_specs
             )
-            return {"specs": ["plain"], "doc_type": "plain"}
+            return {
+                **state,
+                "specs": norm_specs,
+                "doc_type": ",".join(norm_specs),
+            }
 
-    def _node_extract_markdown(self, state: DocumentExtractionState) -> dict[str, Any]:
-        img_path = state.get("preprocessed_path") or state["image_path"]
-        specs = state.get("specs") or ["plain"]
-        previous_context = state.get("previous_page_context") or None
-
+        # Klasifikasi otomatis via VLM
         t0 = time.perf_counter()
+        img = state.get("preprocessed_path") or state["image_path"]
+        detected_specs = self.extractor.classify(img)
+        elapsed = (time.perf_counter() - t0) * 1000
+
         logger.info(
-            "[Node 3/3: Extract] Menjalankan ekstraksi Markdown dengan spesifikasi: %s...",
-            specs,
+            "[Pipeline:Classify] Karakteristik terdeteksi: %s (%.1fms)",
+            detected_specs,
+            elapsed,
         )
+
+        return {
+            **state,
+            "specs": detected_specs,
+            "doc_type": ",".join(detected_specs),
+        }
+
+    def _node_extract_markdown(
+        self, state: DocumentExtractionState
+    ) -> DocumentExtractionState:
+        """Tahap 3: Ekstraksi teks Markdown menggunakan Specialized Composite Agent."""
+        t0 = time.perf_counter()
+        img = state.get("preprocessed_path") or state["image_path"]
+        specs = state.get("specs", ["plain"])
+        prev_context = state.get("previous_page_context")
+
+        # Dapatkan agen komposit yang sesuai dengan seluruh trait spesifikasi
         agent = get_agent(specs)
-        try:
-            md_text = agent.run(
-                image_path=img_path,
-                llm=self.vlm,
-                previous_page_context=previous_context,
-            )
-            dt = time.perf_counter() - t0
-            logger.info(
-                "[Node 3/3: Extract] Selesai (%.2fs) | Panjang Markdown: %d karakter | %d baris",
-                dt,
-                len(md_text),
-                len(md_text.splitlines()),
-            )
-            return {"markdown_content": md_text}
-        except Exception:
-            dt = time.perf_counter() - t0
-            logger.exception(
-                "[Node 3/3: Extract] Gagal dalam %.2fs saat ekstraksi Markdown",
-                dt,
-            )
-            raise
+        md_text = agent.run(
+            img,
+            llm=self.vlm,
+            previous_page_context=prev_context,
+        )
+
+        elapsed = (time.perf_counter() - t0) * 1000
+        logger.info(
+            "[Pipeline:ExtractMarkdown] Selesai (%d karakter, %.1fms)",
+            len(md_text),
+            elapsed,
+        )
+
+        return {
+            **state,
+            "markdown_content": md_text,
+        }
 
 
-# Alias untuk kompatibilitas ke belakang
 VisionRAGPipeline = DocumentExtractionPipeline
+
+__all__ = [
+    "DocumentExtractionPipeline",
+    "DocumentExtractionState",
+    "VisionRAGPipeline",
+]

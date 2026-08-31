@@ -1,5 +1,5 @@
 """
-Streamlit Launcher & Viewer untuk Pipeline Ekstraksi Dokumen Vision OCR, Sub-Agent SQL Tabular, & Dual-Track Guardrail.
+Streamlit Launcher & Viewer untuk Pipeline Ekstraksi Dokumen Vision VLM, Sub-Agent SQL Tabular, & Dual-Track Guardrail.
 
 Fitur:
   - Menjalankan pipeline utama `main.py` pada file PDF, PPTX, PPT, atau Gambar.
@@ -169,15 +169,15 @@ def _get_sqlite_db_for_file(input_file: Path) -> Path | None:
 # ==============================================================================
 
 st.set_page_config(
-    page_title="Vision OCR & Dual-Track Sub-Agent",
+    page_title="Vision VLM & Dual-Track Sub-Agent",
     page_icon="📑",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("📑 Document Text, Vision OCR & Dual-Track Sub-Agent")
+st.title("📑 Document Text, Vision VLM & Dual-Track Sub-Agent")
 st.caption(
-    "Ekstraksi Multi-Page Vision OCR, Sub-Agent SQL Tabular Otomatis, & Dual-Track Guardrail Cross-Verification."
+    "Ekstraksi Multi-Page Vision VLM, Sub-Agent SQL Tabular Otomatis, & Dual-Track Guardrail Cross-Verification."
 )
 
 with st.sidebar:

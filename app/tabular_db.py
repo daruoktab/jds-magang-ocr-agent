@@ -475,7 +475,7 @@ def infer_table_schema(
 
     return TableSchema(
         table_name=sanitize_identifier(table_name),
-        source_file=source_file,
+        source_file=source_file or "",
         columns=col_schemas,
         metadata=metadata or {},
     )
@@ -576,7 +576,7 @@ class TabularDatabaseManager:
         ingested_at = datetime.now(UTC).isoformat()
         prepared_rows: list[tuple[Any, ...]] = []
 
-        for row_idx, r in enumerate(rows):
+        for _row_idx, r in enumerate(rows):
             row_values: list[Any] = []
             for col in schema.columns:
                 c_idx = header_to_idx.get(col.name)
@@ -939,14 +939,35 @@ class TabularVerifier:
             continuity_mismatches = 0
             if len(s_rows) >= 2:
                 for idx in range(1, len(s_rows)):
-                    prev_bal = s_rows[idx - 1].get(balance_col) or 0.0
-                    curr_deb = s_rows[idx].get(debit_col) or 0.0
-                    curr_crd = s_rows[idx].get(credit_col) or 0.0
-                    curr_bal = s_rows[idx].get(balance_col) or 0.0
+                    val_prev = s_rows[idx - 1].get(balance_col)
+                    val_deb = s_rows[idx].get(debit_col)
+                    val_crd = s_rows[idx].get(credit_col)
+                    val_bal = s_rows[idx].get(balance_col)
 
-                    expected_bal = prev_bal + curr_crd - curr_deb
+                    prev_bal = (
+                        val_prev
+                        if isinstance(val_prev, (int, float))
+                        else (parse_numeric_value(str(val_prev)) if val_prev is not None else 0.0)
+                    ) or 0.0
+                    curr_deb = (
+                        val_deb
+                        if isinstance(val_deb, (int, float))
+                        else (parse_numeric_value(str(val_deb)) if val_deb is not None else 0.0)
+                    ) or 0.0
+                    curr_crd = (
+                        val_crd
+                        if isinstance(val_crd, (int, float))
+                        else (parse_numeric_value(str(val_crd)) if val_crd is not None else 0.0)
+                    ) or 0.0
+                    curr_bal = (
+                        val_bal
+                        if isinstance(val_bal, (int, float))
+                        else (parse_numeric_value(str(val_bal)) if val_bal is not None else 0.0)
+                    ) or 0.0
+
+                    expected_bal = float(prev_bal) + float(curr_crd) - float(curr_deb)
                     # Toleransi selisih floating point 1.0 (karena pembulatan sen)
-                    if abs(expected_bal - curr_bal) > 1.0:
+                    if abs(expected_bal - float(curr_bal)) > 1.0:
                         continuity_mismatches += 1
 
             checks.append(

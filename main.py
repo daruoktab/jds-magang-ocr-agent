@@ -1,7 +1,7 @@
 """
-CLI Document VLM & OCR Text Extractor (Ready for Chunking).
+CLI Document VLM Text Extractor (Ready for Chunking).
 
-Secara default, mengeksekusi ekstraksi dokumen:
+Secara default, mengeksekusi ekstraksi dokumen via Vision Language Model (VLM):
   - File PPTX / PPT   : Dirender otomatis menjadi gambar kanvas per slide dan dikirim ke VLM (default), atau via `--ppt-native` untuk parser cepat tanpa VLM.
   - File Gambar / PDF : Diekstrak via pipeline VLM / Deep Reasoning Agent.
   - Data Tabular / DB : Sub-Agent SQL aktif mandiri per-halaman/slide untuk memahami, menginspeksi, meng-ingest tabel ke SQLite (`output/databases/{nama_dokumen}.sqlite`), serta diakhiri Guardrail Cross-Verification oleh Agent Pusat.
@@ -30,12 +30,15 @@ for _stream in (sys.stdout, sys.stderr):
         _reconfigure(encoding="utf-8", errors="replace")
 
 from app.agents import AGENT_REGISTRY
-from app.batch import batch_extract_documents, scan_document_directories
+from app.batch import (
+    batch_extract_documents,
+    find_document_files,
+    scan_document_directories,
+)
 from app.config import get_settings, setup_logging
 from app.deep_agent import build_deep_agent
 from app.graph import DocumentExtractionPipeline
 from app.multi_page import preview_markdown_chunks
-from app.ocr import build_ocr_extractor
 from app.pdf import pdf_to_images, process_multipage_pdf
 from app.ppt import process_presentation, process_presentation_vision
 from app.tabular_db import cross_verify_dual_track, process_page_tabular_agent
@@ -44,218 +47,191 @@ logger = logging.getLogger("app.cli")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="vision-doc-extractor",
-        description="Ekstraksi Dokumen Vision OCR -> Markdown Bersih Siap Chunking & Database Tabular SQLite via Dual-Track Sub-Agent.",
+    parser = argparse.ArgumentParser(
+        prog="jds-magang",
+        description="Ekstraksi dokumen berbasis VLM -> Markdown siap chunking RAG, Tabular SQLite Database, & Mermaid Diagrams.",
     )
-    p.add_argument(
-        "document", nargs="?", help="Path file dokumen (PDF, PPTX, PPT, atau Gambar)"
-    )
-    p.add_argument(
-        "-o",
-        "--out",
+    parser.add_argument(
+        "document",
+        nargs="?",
         default=None,
-        help="Path file output .md untuk menyimpan hasil ekstraksi (atau direktori output batch)",
+        help="Path ke file dokumen yang akan diproses (PDF, PPTX, PPT, atau Gambar).",
     )
-    p.add_argument(
+    parser.add_argument(
         "-t",
-        "--type",
+        "--doc-type",
         dest="doc_type",
         default=None,
-        help="Paksa spesifikasi tata letak dokumen, bisa komposit dipisah koma (mis. 'journal,hierarchy', 'plain', 'presentation_slides')",
+        help="Karakteristik dokumen (plain, markdown_hierarchy, bilingual_journal, presentation_slides, atau komposit misal 'journal,hierarchy').",
     )
-    p.add_argument(
-        "--vision",
-        "--vlm",
+    parser.add_argument(
+        "-o",
+        "--out",
+        dest="out",
+        default=None,
+        help="Path file/folder output Markdown (default: stdout atau output/{nama_file}.md).",
+    )
+    parser.add_argument(
+        "--db-path",
+        dest="db_path",
+        default=None,
+        help="Path file database SQLite target untuk data tabular (default: output/databases/{nama_file}.sqlite).",
+    )
+    parser.add_argument(
+        "--force-all-tables",
         action="store_true",
-        dest="vision",
-        help="Kompatibilitas lama: gunakan jalur VLM untuk PPT/PDF (default)",
+        help="Paksa seluruh tabel (termasuk tabel matriks/naratif) untuk di-ingest ke basis data SQLite.",
     )
-    p.add_argument(
-        "--ppt-native",
-        action="store_true",
-        help="Gunakan parser native python-pptx untuk PPT/PPTX tanpa render gambar dan tanpa VLM",
+    parser.add_argument(
+        "--dpi",
+        type=int,
+        default=200,
+        help="Resolusi DPI untuk render PDF / slide PPTX ke gambar (default: 200).",
     )
-    p.add_argument(
+    parser.add_argument(
         "--preview-chunks",
         action="store_true",
-        help="Tampilkan simulasi pemecahan chunk",
+        help="Tampilkan pratinjau statistik pemecahan chunking (char count, token estimate, sample preview).",
     )
-    p.add_argument(
+    parser.add_argument(
         "--chunk-size",
         type=int,
         default=1000,
-        help="Ukuran chunk karakter untuk preview (default 1000)",
+        help="Ukuran target karakter per chunk (default: 1000).",
     )
-    p.add_argument(
+    parser.add_argument(
         "--chunk-overlap",
         type=int,
         default=150,
-        help="Overlap chunk karakter (default 150)",
+        help="Ukuran overlap karakter antar chunk (default: 150).",
     )
-    p.add_argument(
-        "--dpi", type=int, default=200, help="DPI render untuk PDF (default 200)"
-    )
-    p.add_argument(
+    parser.add_argument(
         "--agent",
         action="store_true",
-        help="Paksa gunakan Deep Reasoning Agent (memerlukan endpoint LLM aktif)",
+        help="Jalankan ekstraksi menggunakan Deep Reasoning Multi-Agent Harness (LangGraph StateGraph).",
     )
-    p.add_argument(
+    parser.add_argument(
+        "--ppt-native",
+        action="store_true",
+        help="Ekstrak slide PPTX/PPT secara native murni teks/tabel tanpa rendering gambar kanvas.",
+    )
+    parser.add_argument(
+        "--vision",
+        action="store_true",
+        help="Paksa ekstraksi visual berbasis VLM untuk semua tipe dokumen.",
+    )
+    parser.add_argument(
         "--direct-graph",
         action="store_true",
-        help="Gunakan eksekusi grafik deterministik langsung",
+        help="Jalankan via alur LangGraph StateGraph.",
     )
-    p.add_argument(
-        "--ocr-only", action="store_true", help="Hanya jalankan model OCR tanpa VLM"
-    )
-    p.add_argument(
+    parser.add_argument(
         "--classify-only",
         action="store_true",
-        help="Hanya klasifikasi karakteristik dokumen",
+        help="Hanya jalankan klasifikasi multi-karakteristik tanpa melakukan ekstraksi teks.",
     )
-    p.add_argument(
+    parser.add_argument(
         "--pdf-split-only",
         action="store_true",
-        help="Hanya render PDF menjadi gambar per-halaman",
+        help="Hanya render halaman PDF menjadi file gambar di folder output.",
     )
-    p.add_argument(
+    parser.add_argument(
+        "--scan-folders",
+        metavar="FOLDER",
+        help="Pindai direktori FOLDER secara rekursif untuk mendata seluruh file dokumen yang tersedia.",
+    )
+    parser.add_argument(
+        "--batch",
+        metavar="FOLDERS_OR_FILES",
+        help="Ekstraksi massal dokumen dari daftar folder/file (dipisah koma).",
+    )
+    parser.add_argument(
         "--list-types",
         action="store_true",
-        help="Daftar spesifikasi karakteristik dokumen yang didukung",
+        help="Tampilkan daftar spesifikasi/tipe dokumen yang didukung.",
     )
-
-    # SQLite Tabular Database options
-    p.add_argument(
-        "--no-db",
-        action="store_true",
-        help="Nonaktifkan auto-ingest tabel dokumen ke database SQLite",
-    )
-    p.add_argument(
-        "--force-all-tables",
-        action="store_true",
-        help="Ingest seluruh tabel yang ditemukan ke database SQLite (termasuk tabel naratif/umum)",
-    )
-    p.add_argument(
-        "--db-path",
-        default=None,
-        help="Custom path tujuan database SQLite (default: output/databases/{nama_dokumen}.sqlite)",
-    )
-
-    # Logging options
-    p.add_argument(
+    parser.add_argument(
         "--debug",
         action="store_true",
-        help="Aktifkan log DEBUG lengkap untuk melacak workflow & LLM requests",
+        help="Aktifkan pesan log level DEBUG.",
     )
-    p.add_argument(
-        "--log-level",
-        default=None,
-        help="Atur level logging (DEBUG, INFO, WARNING, ERROR)",
-    )
-
-    # Batch & Folder Scanning Options
-    p.add_argument(
-        "--scan-folders",
-        nargs="?",
-        const=".",
-        help="Pindai direktori untuk mendeteksi folder-folder dokumen",
-    )
-    p.add_argument(
-        "--batch-folders",
-        dest="batch_folders",
-        help="Ekstrak batch dokumen dari folder-folder yang dipisah koma (mis. 'dataset/indonesian,dataset/english')",
-    )
-    p.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Batas total dokumen yang diproses pada batch",
-    )
-    p.add_argument(
-        "--limit-per-folder",
-        type=int,
-        default=None,
-        help="Batas dokumen per-folder pada batch",
-    )
-    return p
+    return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
 
-    # Setup Logging terpusat
-    if args.debug:
-        setup_logging("DEBUG")
-    elif args.log_level:
-        setup_logging(args.log_level)
-    else:
-        setup_logging()
-
-    if args.list_types:
-        print(
-            "Spesifikasi Tata Letak & Kemampuan Ekstraksi Dokumen (Dapat Dikombinasikan):"
-        )
-        for name, agent in AGENT_REGISTRY.items():
-            print(f"- {name:22s} : {agent.description}")
-        return 0
+    # Konfigurasi level logging
+    log_level = "DEBUG" if args.debug else "INFO"
+    setup_logging(level=log_level)
 
     settings = get_settings()
 
-    # 1. Mode Pemindaian Folder Dokumen (--scan-folders)
-    if args.scan_folders is not None:
-        scan_root = args.scan_folders if args.scan_folders else "."
-        try:
-            folders = scan_document_directories(scan_root)
-            print(
-                f"Hasil Pemindaian Direktori Dokumen di '{Path(scan_root).resolve()}':"
-            )
-            print(f"Ditemukan {len(folders)} folder berisi file dokumen:\n")
-            for idx, f_info in enumerate(folders, 1):
-                ext_str = ", ".join(
-                    f"{k}: {v}" for k, v in f_info["extension_counts"].items()
-                )
-                print(f"[{idx}] {f_info['relative_path']}")
-                print(f"    Path Penuh: {f_info['folder_path']}")
-                print(f"    Total Dokumen: {f_info['total_documents']} ({ext_str})")
-                print(f"    Contoh File: {', '.join(f_info['sample_files'][:3])}\n")
-            return 0
-        except Exception:
-            logger.exception("Gagal saat memindai folder")
-            return 1
-
-    # 2. Mode Batch Ekstraksi dari Folder Terpilih (--batch-folders)
-    if args.batch_folders:
-        out_target = args.out or "output/extracted_md"
-        print(f"Menjalankan Batch Ekstraksi Dokumen dari: {args.batch_folders}")
-        print(
-            f"Kuota: total_limit={args.limit}, limit_per_folder={args.limit_per_folder}"
-        )
-        print(f"Folder Output: {out_target}\n")
-
-        batch_res = batch_extract_documents(
-            folders=args.batch_folders,
-            limit=args.limit,
-            limit_per_folder=args.limit_per_folder,
-            specs=args.doc_type or "plain",
-            output_dir=out_target,
-            preview_chunks=args.preview_chunks,
-            chunk_size=args.chunk_size,
-            chunk_overlap=args.chunk_overlap,
-            settings=settings,
-        )
-
-        print(json.dumps(batch_res, indent=2, ensure_ascii=False))
+    # Opsi informasional: Daftar tipe dokumen
+    if args.list_types:
+        print("Spesifikasi Karakteristik Dokumen:")
+        for name, agent in AGENT_REGISTRY.items():
+            print(f"  - {name:<22}: {agent.description}")
         return 0
 
-    if not args.document:
-        print(
-            "ERROR: argumen file 'document' wajib diisi (atau gunakan --scan-folders / --batch-folders)",
-            file=sys.stderr,
+    # Opsi utilitas: Pindai folder dokumen
+    if args.scan_folders:
+        folder_path = Path(args.scan_folders).resolve()
+        if not folder_path.exists():
+            print(f"ERROR: Folder tidak ditemukan: {folder_path}", file=sys.stderr)
+            return 1
+        catalog = scan_document_directories(folder_path)
+        print(f"Hasil Pemindaian Direktori: {folder_path}")
+        total = 0
+        for entry in catalog:
+            folder_name = entry["relative_path"]
+            doc_count = entry["total_documents"]
+            ext_counts = entry["extension_counts"]
+            samples = entry["sample_files"]
+            print(f"\n[{folder_name}] ({doc_count} file) - {ext_counts}:")
+            for sample in samples:
+                print(f"  - {sample}")
+            total += doc_count
+        print(f"\nTotal Dokumen Ditemukan: {total}")
+        return 0
+
+    # Opsi utilitas: Ekstraksi massal (batch)
+    if args.batch:
+        raw_items = [s.strip() for s in args.batch.split(",") if s.strip()]
+        files_to_process: list[Path] = []
+        for item in raw_items:
+            p = Path(item).resolve()
+            if p.is_dir():
+                files_to_process.extend(find_document_files(p))
+            elif p.is_file():
+                files_to_process.append(p)
+
+        if not files_to_process:
+            print(
+                f"ERROR: Tidak ditemukan file yang valid dari: {args.batch}",
+                file=sys.stderr,
+            )
+            return 1
+
+        out_dir = Path(args.out).resolve() if args.out else Path("output/batch").resolve()
+        batch_extract_documents(
+            files_to_process,
+            output_dir=out_dir,
+            forced_specs=args.doc_type,
+            dpi=args.dpi,
+            preview_chunks=args.preview_chunks,
+            use_agent=args.agent,
+            settings=settings,
         )
+        return 0
+
+    # Validasi input file tunggal
+    if not args.document:
+        parser.print_help()
         return 1
 
-    input_path = Path(args.document)
+    input_path = Path(args.document).resolve()
     if not input_path.exists():
         print(f"ERROR: File tidak ditemukan: {input_path}", file=sys.stderr)
         return 1
@@ -280,31 +256,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(str(p))
             return 0
 
-        # 4. Mode OCR Teks Mentah saja
-        if args.ocr_only:
-            ocr = build_ocr_extractor(settings)
-            if ext == ".pdf":
-                pages = pdf_to_images(input_path, dpi=args.dpi)
-                full_ocr = []
-                for idx, pg in enumerate(pages, 1):
-                    full_ocr.append(
-                        f"--- Halaman {idx} ---\n{ocr.extract(str(pg)).text}"
-                    )
-                res_text = "\n\n".join(full_ocr)
-            else:
-                res_text = ocr.extract(str(input_path)).text
-
-            print(res_text)
-            return 0
-
-        # 5. Mode Klasifikasi Saja
+        # 4. Mode Klasifikasi Saja
         if args.classify_only:
             pipeline = DocumentExtractionPipeline(settings)
             specs = pipeline.extractor.classify(str(input_path))
             print(json.dumps({"file": str(input_path), "specs": specs}, indent=2))
             return 0
 
-        # 6. File Presentasi (PPTX/PPT)
+        # 5. File Presentasi (PPTX/PPT)
         if ext in (".pptx", ".ppt") and not args.agent:
             if args.ppt_native and not args.vision and not args.direct_graph:
                 markdown_content = process_presentation(input_path)
@@ -318,146 +277,106 @@ def main(argv: list[str] | None = None) -> int:
                     pipeline=pipeline,
                     forced_specs=args.doc_type or "presentation_slides",
                     db_path=db_target_file,
-                    auto_tabular_db=not args.no_db,
                     force_all_tables=args.force_all_tables,
                 )
 
-        # 7. Mode Agent (jika eksplisit diminta --agent)
-        elif args.agent:
-            logger.info(
-                "Menjalankan Deep Reasoning Agent dengan model di %s...",
-                settings.vlm_base_url,
+        # 6. File PDF Multi-Halaman
+        elif ext == ".pdf" and not args.agent:
+            logger.info("Mengekstrak PDF multi-halaman via Dual-Track Vision & Sub-Agent SQL...")
+            pipeline = DocumentExtractionPipeline(settings)
+            doc_result = process_multipage_pdf(
+                pdf_path=input_path,
+                pipeline=pipeline,
+                forced_specs=args.doc_type,
+                dpi=args.dpi,
+                db_path=db_target_file,
+                force_all_tables=args.force_all_tables,
             )
-            deep_agent = build_deep_agent(settings)
-            instruction_parts = [
-                f"Tolong proses dan ekstrak file dokumen berikut secara lengkap: '{input_path.resolve()}'.",
-                "Analisis tata letak dan delegasikan ke sub-agent spesialis yang sesuai.",
-            ]
-            if args.doc_type:
-                instruction_parts.append(
-                    f"Spesifikasi tata letak dokumen yang dipaksakan: {args.doc_type}."
-                )
-            if args.preview_chunks:
-                instruction_parts.append(
-                    f"Sertakan simulasi preview chunking (chunk_size={args.chunk_size}, overlap={args.chunk_overlap})."
-                )
-            instruction_parts.append(
-                "Pastikan hasil akhir berupa teks Markdown bersih siap chunking."
-            )
+            markdown_content = doc_result.full_markdown
 
-            user_instruction = " ".join(instruction_parts)
-            resp = deep_agent.invoke(
-                {"messages": [{"role": "user", "content": user_instruction}]}
-            )
+        # 7. File Gambar Tunggal
+        elif ext in (".png", ".jpg", ".jpeg", ".webp") and not args.agent:
+            logger.info("Mengekstrak gambar via Dual-Track Vision & Sub-Agent SQL...")
+            pipeline = DocumentExtractionPipeline(settings)
+            result = pipeline.run(str(input_path), forced_specs=args.doc_type)
+            markdown_content = result["markdown_content"]
 
-            messages = resp.get("messages", [])
-            markdown_content = messages[-1].content if messages else str(resp)
-
-        # 8. Mode Pipeline Standar (PDF Multi-Halaman & Gambar)
-        else:
-            if ext == ".pdf":
-                pipeline = DocumentExtractionPipeline(settings)
-                extracted_doc = process_multipage_pdf(
-                    pdf_path=input_path,
-                    pipeline=pipeline,
-                    dpi=args.dpi,
-                    forced_specs=args.doc_type,
+            # Sub-Agent SQL mandiri pada gambar tunggal
+            if db_target_file:
+                _tab_event, _tab_results = process_page_tabular_agent(
+                    page_markdown=markdown_content,
+                    page_number=1,
+                    source_file=str(input_path),
                     db_path=db_target_file,
-                    auto_tabular_db=not args.no_db,
+                    table_name_prefix=input_path.stem,
                     force_all_tables=args.force_all_tables,
                 )
-                markdown_content = extracted_doc.markdown_content
+                cross_verify_dual_track(
+                    stitched_markdown=markdown_content,
+                    db_path=db_target_file,
+                    source_file=str(input_path),
+                    total_pages=1,
+                )
 
-                if extracted_doc.guardrail_report:
-                    rep = extracted_doc.guardrail_report
-                    logger.info(
-                        "[Supervisor Guardrail Audit] Status: %s | Markdown Tables: %d (%d rows) | SQLite Tables: %d (%d rows)",
-                        rep.guardrail_status,
-                        rep.total_markdown_tables,
-                        rep.total_markdown_rows,
-                        rep.total_sqlite_tables,
-                        rep.total_sqlite_rows,
-                    )
-            else:
-                pipeline = DocumentExtractionPipeline(settings)
-                res = pipeline.run(str(input_path), forced_specs=args.doc_type)
-                markdown_content = res["markdown_content"]
+        # 8. Deep Agent Mode
+        elif args.agent:
+            logger.info("Mengekstrak via Master Deep Reasoning Agent & 7 Sub-Agent Spesialis...")
+            deep_agent = build_deep_agent(settings)
+            res = deep_agent.invoke({
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Ekstrak dokumen berikut ke Markdown bersih, evaluasi diagram visual jika ada, "
+                            f"dan ingest tabel transaksional ke database SQLite '{db_target_file}':\n{input_path}"
+                        ),
+                    }
+                ]
+            })
+            markdown_content = (
+                res.get("messages", [])[-1].content
+                if res.get("messages")
+                else ""
+            )
 
-                # Single-Image Dual-Track
-                if not args.no_db and db_target_file:
-                    tab_event, _ = process_page_tabular_agent(
-                        page_markdown=markdown_content,
-                        page_number=1,
-                        source_file=str(input_path.resolve()),
-                        db_path=db_target_file,
-                        table_name_prefix=input_path.stem,
-                        force_all_tables=args.force_all_tables,
-                    )
-                    guard_rep = cross_verify_dual_track(
-                        stitched_markdown=markdown_content,
-                        db_path=db_target_file,
-                        source_file=str(input_path.resolve()),
-                        total_pages=1,
-                    )
-                    if tab_event.tables_detected > 0:
-                        logger.info(
-                            "[Sub-Agent SQL Single-Page] Terdeteksi %d tabel | SQLite: %s | Guardrail: %s",
-                            tab_event.tables_detected,
-                            db_target_file,
-                            guard_rep.guardrail_status,
-                        )
+        else:
+            print(f"ERROR: Format file tidak didukung: {ext}", file=sys.stderr)
+            return 1
 
-        # Simpan ke file jika diminta (-o / --out), atau tampilkan ke terminal jika tidak ada -o
+        # Output Markdown hasil ekstraksi
         if args.out:
-            out_file = Path(args.out)
+            out_file = Path(args.out).resolve()
             out_file.parent.mkdir(parents=True, exist_ok=True)
             out_file.write_text(markdown_content, encoding="utf-8")
-            logger.info(
-                "[OK] Dokumen Markdown berhasil disimpan ke: %s (%d karakter, %d baris)",
-                out_file,
-                len(markdown_content),
-                len(markdown_content.splitlines()),
-            )
+            logger.info("Hasil Markdown berhasil disimpan ke: %s", out_file)
         else:
-            # Tampilkan teks markdown di stdout hanya jika user tidak menentukan file output
             print(markdown_content)
 
-        # Preview Chunks jika diminta
+        # Simulasi Chunking jika diminta
         if args.preview_chunks:
             chunks = preview_markdown_chunks(
                 markdown_content,
+                source_file=input_path.name,
                 chunk_size=args.chunk_size,
                 chunk_overlap=args.chunk_overlap,
             )
-            print("\n" + "=" * 60, file=sys.stderr)
-            print(
-                f"--- PREVIEW CHUNKING ({len(chunks)} Potongan Chunk) ---",
-                file=sys.stderr,
-            )
-            print("=" * 60, file=sys.stderr)
-            for ch in chunks:
-                print(
-                    f"\n[Chunk #{ch['chunk_index']} | {ch['char_count']} chars | Meta: {ch['metadata']}]",
-                    file=sys.stderr,
-                )
-                print(ch["content"], file=sys.stderr)
-                print("-" * 40, file=sys.stderr)
+            print("\n" + "=" * 60)
+            print("SIMULASI PEMBAGIAN CHUNKING (SIAP RAG):")
+            print(f"Total Karakter : {chunks.total_characters}")
+            print(f"Total Chunks    : {chunks.total_chunks}")
+            print(f"Target Size     : {chunks.chunk_size} char (overlap: {chunks.chunk_overlap})")
+            print(f"Rata-rata Size  : {chunks.avg_chunk_size:.1f} char")
+            print("=" * 60)
+            for c in chunks.chunks[:3]:
+                print(f"[Chunk #{c.chunk_id} | {c.char_count} chars | ~{c.token_estimate} tokens]")
+                print(f"{c.preview}\n---")
 
-    except Exception as e:
-        logger.error(
-            "Terjadi kesalahan saat memproses '%s': %s\n"
-            "Info konfigurasi endpoint: VLM_BASE_URL='%s', VLM_MODEL='%s'.\n"
-            "Pastikan server LLM/VLM sedang berjalan atau periksa koneksi jaringan/konfigurasi .env.",
-            input_path,
-            e,
-            settings.vlm_base_url,
-            settings.vlm_model,
-            exc_info=args.debug,
-        )
+        return 0
+
+    except Exception:
+        logger.exception("Terjadi kesalahan saat memproses dokumen.")
         return 1
-
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

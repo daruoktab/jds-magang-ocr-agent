@@ -209,7 +209,7 @@ def to_int(ordinal: str | None, kind: str) -> float | None:
         match = re.fullmatch(r"(\d+)\s*([A-Za-z])?", raw)
         if not match:
             # Selain itu dianggap tak terbaca. Membuang huruf secara diam-diam
-            # berbahaya: "L2" (OCR untuk "12") akan terbaca 2, dan kesalahan itu
+            # berbahaya: "L2" (salah baca untuk "12") akan terbaca 2, dan kesalahan itu
             # lolos sebagai nilai sah. Lebih baik Auditor menyimpulkan dari urutan.
             return None
         base = int(match.group(1))
