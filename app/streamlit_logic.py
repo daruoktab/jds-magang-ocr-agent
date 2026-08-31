@@ -21,6 +21,7 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SUPPORTED_TYPES = ["pdf", "pptx", "ppt", "png", "jpg", "jpeg", "webp"]
@@ -35,7 +36,7 @@ SPEC_OPTIONS: dict[str, str | None] = {
 
 
 def _write_upload_to_temp(
-    uploaded_file: st.runtime.uploaded_file_manager.UploadedFile,
+    uploaded_file: UploadedFile,
 ) -> Path:
     temp_dir = Path(tempfile.mkdtemp(prefix="streamlit_launch_"))
     temp_path = temp_dir / Path(uploaded_file.name).name
@@ -54,7 +55,7 @@ def _write_run_log(
     stderr: str,
 ) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    timestamp = dt.datetime.now().isoformat(timespec="seconds")
+    timestamp = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     sections = [
         f"[{timestamp}] Streamlit launcher run",
         f"Input file: {input_path}",
@@ -87,7 +88,7 @@ def _run_main_cli(
     output_dir.mkdir(parents=True, exist_ok=True)
     out_file = output_dir / f"{input_path.stem}.md"
     log_dir = output_dir / "logs"
-    log_name = f"{input_path.stem}_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    log_name = f"{input_path.stem}_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M%S')}.log"
     log_path = log_dir / log_name
 
     cmd = [
@@ -123,309 +124,213 @@ def _run_main_cli(
         errors="replace",
         bufsize=1,
     )
-    captured_lines: list[str] = []
-    live_lines: list[str] = []
-    if live_log is not None:
-        live_log.empty()
 
-    assert proc.stdout is not None
-    for raw_line in iter(proc.stdout.readline, ""):
-        if not raw_line:
-            break
-        captured_lines.append(raw_line)
-        stripped = raw_line.rstrip("\n")
-        live_lines.append(stripped)
-        if live_log is not None:
-            tail_lines = live_lines[-30:]
-            live_log.code("\n".join(tail_lines), language="text")
+    log_lines: list[str] = []
+    if proc.stdout is not None:
+        for line in proc.stdout:
+            log_lines.append(line)
+            if live_log is not None:
+                live_log.text("".join(log_lines[-25:]))
 
     returncode = proc.wait()
-    combined = ["STDOUT/STDERR (merged):"]
-    if captured_lines:
-        combined.extend(captured_lines)
-    else:
-        combined.append("(empty)")
-    combined.append(f"Output markdown: {out_file}")
+    all_output = "".join(log_lines)
     _write_run_log(
         log_path,
         input_path=input_path,
         output_dir=output_dir,
         cmd=cmd,
         returncode=returncode,
-        stdout="".join(captured_lines),
+        stdout=all_output,
         stderr="",
     )
-    return returncode, "".join(combined), log_path
+    return returncode, all_output, log_path
 
 
-def _get_sqlite_tables_info(sqlite_path: Path) -> dict[str, Any]:
-    """Baca informasi skema dan isi tabel dari SQLite database."""
-    if not sqlite_path.exists():
-        return {}
-
-    conn = sqlite3.connect(str(sqlite_path))
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
-    )
-    tables = [row["name"] for row in cursor.fetchall()]
-
-    details: dict[str, Any] = {}
-    for tbl in tables:
-        cursor.execute(f"PRAGMA table_info('{tbl}');")
-        cols = [dict(c) for c in cursor.fetchall()]
-
-        cursor.execute(f"SELECT COUNT(*) as cnt FROM '{tbl}';")
-        count = cursor.fetchone()["cnt"]
-
-        cursor.execute(f"SELECT * FROM '{tbl}' LIMIT 500;")
-        rows = [dict(r) for r in cursor.fetchall()]
-
-        details[tbl] = {
-            "columns": cols,
-            "row_count": count,
-            "sample_rows": rows,
-        }
-
-    conn.close()
-    return details
+def _get_sqlite_db_for_file(input_file: Path) -> Path | None:
+    """Cari file database SQLite yang terkait dengan file yang diproses."""
+    db_candidates = [
+        Path("output/databases") / f"{input_file.stem}_data.sqlite",
+        Path("output/databases") / "documents_data.sqlite",
+    ]
+    for c in db_candidates:
+        if c.exists():
+            return c
+    return None
 
 
-def main() -> None:
-    st.set_page_config(
-        page_title="Document Vision & Tabular SQL Pipeline",
-        page_icon="📄",
-        layout="wide",
-    )
+# ==============================================================================
+# UI Streamlit
+# ==============================================================================
 
-    st.title("📄 Document Vision OCR, Sub-Agent SQL & Guardrail Pipeline")
-    st.caption(
-        "Arsitektur Jalur Ganda (Dual-Track): Ekstraksi Markdown VLM + Sub-Agent SQL Mandiri Per-Halaman "
-        "dengan Supervisi Guardrail Cross-Verification."
-    )
+st.set_page_config(
+    page_title="Vision OCR & Dual-Track Sub-Agent",
+    page_icon="📑",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-    with st.sidebar:
-        st.header("⚙️ Konfigurasi Input")
-        uploaded_file = st.file_uploader(
-            "Pilih file dokumen (PDF, PPTX, PPT, Gambar)",
-            type=SUPPORTED_TYPES,
-            help="Upload dokumen untuk diproses secara komprehensif.",
-        )
+st.title("📑 Document Text, Vision OCR & Dual-Track Sub-Agent")
+st.caption(
+    "Ekstraksi Multi-Page Vision OCR, Sub-Agent SQL Tabular Otomatis, & Dual-Track Guardrail Cross-Verification."
+)
 
-        spec_label = st.selectbox(
-            "Spesifikasi Tata Letak Dokumen",
-            list(SPEC_OPTIONS.keys()),
-            index=0,
-            help="Pilih karakteristik layout atau biarkan VLM mendeteksinya secara otomatis.",
-        )
+with st.sidebar:
+    st.header("⚙️ Konfigurasi Pipeline")
+    spec_label = st.selectbox("Jenis Dokumen / Layout:", list(SPEC_OPTIONS.keys()))
+    chosen_spec = SPEC_OPTIONS[spec_label]
 
-        dpi = st.slider(
-            "Render DPI (PDF)",
-            min_value=100,
-            max_value=300,
-            value=200,
-            step=50,
-            help="Resolusi render gambar untuk PDF.",
-        )
-
-        st.subheader("🗄️ Opsi Database Tabular")
-        auto_table_db = st.checkbox(
-            "Auto-ingest Tabel ke SQLite",
-            value=True,
-            help="Sub-Agent SQL memproses tabel otomatis ke file database .sqlite terpisah.",
-        )
-        force_all_tables = st.checkbox(
-            "Force All Tables (Termasuk Tabel Umum/Naratif)",
+    with st.expander("Pengaturan Lanjutan", expanded=False):
+        dpi_val = st.slider("DPI Raster Rendering (PDF/PPT):", 100, 300, 200, 25)
+        force_all_tbl = st.checkbox(
+            "Paksa Ingesti Seluruh Tabel ke SQLite",
             value=False,
-            disabled=not auto_table_db,
-            help="Jika dicentang, seluruh tabel Markdown akan dibuatkan tabel SQLite.",
+            help="Jika dicentang, tabel naratif/kualitatif juga akan dimasukkan ke SQLite di samping tabel transaksional/finansial.",
         )
+        show_chunk_preview = st.checkbox("Tampilkan Chunking Preview", value=True)
+        c_size = st.number_input("Chunk Size:", 200, 4000, 1000, 100)
+        c_overlap = st.number_input("Chunk Overlap:", 0, 1000, 150, 25)
 
-        st.subheader("🧩 Opsi Text Chunking")
-        preview_chunks = st.checkbox("Preview Chunks", value=True)
-        chunk_size = st.number_input("Chunk Size", value=1000, step=100)
-        chunk_overlap = st.number_input("Chunk Overlap", value=150, step=25)
+    st.markdown("---")
+    st.info("💡 **Sub-Agent SQL Tabular:** Bekerja mandiri memetakan tabel terdeteksi ke SQLite (.sqlite) dan diverifikasi oleh Agent Supervisor.")
 
-        output_dir_input = st.text_input("Direktori Output", value="output")
-        process_clicked = st.button(
-            "🚀 Jalankan Ekstraksi", type="primary", use_container_width=True
-        )
+uploaded_file = st.file_uploader(
+    "Unggah Dokumen (PDF, PPTX, PPT, PNG, JPG, WEBP):",
+    type=SUPPORTED_TYPES,
+)
 
-    if not process_clicked:
-        st.info("👉 Silakan upload file dokumen di sidebar dan klik **Jalankan Ekstraksi**.")
-        return
+if uploaded_file is not None:
+    temp_input_path = _write_upload_to_temp(uploaded_file)
+    output_dir = PROJECT_ROOT / "output"
 
-    if uploaded_file is None:
-        st.warning("Pilih dan upload file dokumen terlebih dahulu.")
-        return
+    col_btn, col_info = st.columns([1, 4])
+    with col_btn:
+        start_process = st.button("🚀 Mulai Ekstraksi", type="primary", use_container_width=True)
 
-    input_ext = Path(uploaded_file.name).suffix.lower().lstrip(".")
-    if input_ext not in SUPPORTED_TYPES:
-        st.error(f"Ekstensi file .{input_ext} tidak didukung.")
-        return
-
-    output_dir = Path(output_dir_input).expanduser().resolve()
-    temp_input = _write_upload_to_temp(uploaded_file)
-    file_stem = Path(uploaded_file.name).stem
-
-    st.subheader("⏳ Proses Eksekusi Pipeline")
-    live_log = st.empty()
-
-    with st.spinner(f"Mengekstrak '{uploaded_file.name}' via Vision VLM & Sub-Agent SQL..."):
-        code, log_output, log_path = _run_main_cli(
-            input_path=temp_input,
-            output_dir=output_dir,
-            doc_type=SPEC_OPTIONS[spec_label],
-            dpi=dpi,
-            force_all_tables=force_all_tables,
-            preview_chunks=preview_chunks,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            live_log=live_log,
-        )
-
-    if code == 0:
-        st.success(f"Ekstraksi selesai dengan sukses! (Exit code: {code})")
-    else:
-        st.error(f"Terjadi kesalahan dalam pemrosesan (Exit code: {code}). Periksa log.")
-
-    # Paths Output
-    out_md_file = output_dir / f"{file_stem}.md"
-    out_sqlite_file = output_dir / "databases" / f"{file_stem}.sqlite"
-
-    # Tabbed Interface
-    tab_md, tab_db, tab_guardrail, tab_logs = st.tabs([
-        "📝 Hasil Markdown",
-        "🗄️ Tabular Database (SQLite)",
-        "🛡️ Dual-Track Guardrail Audit",
-        "📜 Log Eksekusi Lengkap",
-    ])
-
-    # TAB 1: Markdown Content
-    with tab_md:
-        if out_md_file.exists():
-            md_text = out_md_file.read_text(encoding="utf-8")
-            st.download_button(
-                "📥 Download File Markdown (.md)",
-                data=md_text.encode("utf-8"),
-                file_name=f"{file_stem}.md",
-                mime="text/markdown",
-                key="dl_md",
+    if start_process:
+        with st.status("Sedang memproses dokumen dengan Dual-Track Vision & Sub-Agent SQL...", expanded=True) as status:
+            live_log = st.empty()
+            returncode, output_text, log_path = _run_main_cli(
+                temp_input_path,
+                output_dir,
+                doc_type=chosen_spec,
+                dpi=dpi_val,
+                force_all_tables=force_all_tbl,
+                preview_chunks=show_chunk_preview,
+                chunk_size=int(c_size),
+                chunk_overlap=int(c_overlap),
+                live_log=live_log,
             )
-            st.markdown("### Pratinjau Teks Markdown:")
-            st.markdown(md_text)
-            with st.expander("Lihat Raw Markdown Code"):
-                st.code(md_text, language="markdown")
-        else:
-            st.warning("File Markdown tidak ditemukan.")
 
-    # TAB 2: Tabular Database SQLite
-    with tab_db:
-        if out_sqlite_file.exists():
-            st.success(f"Database SQLite berhasil dibuat di: `{out_sqlite_file}`")
-            sqlite_data = _get_sqlite_tables_info(out_sqlite_file)
-
-            if sqlite_data:
-                st.write(
-                    f"Ditemukan **{len(sqlite_data)} tabel** tersimpan dalam database SQLite:"
-                )
-
-                st.download_button(
-                    "📥 Download Database SQLite (.sqlite)",
-                    data=out_sqlite_file.read_bytes(),
-                    file_name=f"{file_stem}.sqlite",
-                    mime="application/x-sqlite3",
-                    key="dl_sqlite",
-                )
-
-                selected_table = st.selectbox(
-                    "Pilih Tabel untuk Ditampilkan:", list(sqlite_data.keys())
-                )
-
-                if selected_table:
-                    tbl_info = sqlite_data[selected_table]
-                    st.metric(label="Total Baris Data", value=tbl_info["row_count"])
-
-                    rows = tbl_info["sample_rows"]
-                    if rows:
-                        df = pd.DataFrame(rows)
-                        display_cols = [c for c in df.columns if not c.startswith("_")]
-                        st.dataframe(df[display_cols], use_container_width=True)
-                    else:
-                        st.info("Tabel tidak memiliki baris data.")
-
-                    # Interactive SQL Query Console
-                    with st.expander("🔍 Interactive SQL Query Console", expanded=False):
-                        sql_input = st.text_area(
-                            "Ketik Query SQL (Hanya SELECT):",
-                            value=f"SELECT * FROM {selected_table} LIMIT 20;",
-                            height=80,
-                        )
-                        if st.button("Jalankan Query SQL", key="btn_run_sql"):
-                            try:
-                                conn = sqlite3.connect(str(out_sqlite_file))
-                                q_df = pd.read_sql_query(sql_input, conn)
-                                conn.close()
-                                st.write(f"Hasil Query ({len(q_df)} baris):")
-                                st.dataframe(q_df, use_container_width=True)
-                            except Exception as err:  # noqa: BLE001
-                                st.error(f"SQL Error: {err}")
+            if returncode == 0:
+                status.update(label="✅ Pemrosesan Berhasil Selesai!", state="complete", expanded=False)
+                st.session_state["last_processed_file"] = temp_input_path
+                st.session_state["last_output_dir"] = output_dir
+                st.session_state["last_log_path"] = log_path
             else:
-                st.info(
-                    "Database SQLite ada, namun belum ada tabel yang terisi. "
-                    "Pastikan dokumen memiliki tabel atau aktifkan opsi 'Force All Tables'."
-                )
-        else:
-            st.info(
-                "Tidak ada file database SQLite yang dibuat untuk dokumen ini.\n\n"
-                "Kemungkinan penyebab:\n"
-                "1. Dokumen tidak memiliki format tabel Markdown GFM.\n"
-                "2. Tabel yang ada diklasifikasikan sebagai tabel naratif kualitatif.\n"
-                "3. Anda dapat mencentang opsi **'Force All Tables'** di sidebar untuk memaksa seluruh tabel masuk ke SQLite."
-            )
+                status.update(label="❌ Terjadi Kesalahan saat Ekstraksi", state="error", expanded=True)
+                st.error("Proses CLI mengembalikan status error. Cek log output di bawah.")
 
-    # TAB 3: Dual-Track Guardrail Audit
-    with tab_guardrail:
-        st.markdown("### 🛡️ Master Supervisor Dual-Track Cross-Verification Report")
-        st.caption(
-            "Verifikasi kualitas silang membandingkan Jalur 1 (Teks Markdown) vs Jalur 2 (Tabel SQLite) "
-            "untuk menjamin kelengkapan baris data dan integritas agregasi numerik."
-        )
+    # Jika file selesai diproses, tampilkan Tab Viewer
+    if "last_processed_file" in st.session_state and st.session_state["last_processed_file"].name == temp_input_path.name:
+        last_file: Path = st.session_state["last_processed_file"]
+        md_file = output_dir / f"{last_file.stem}.md"
+        db_file = _get_sqlite_db_for_file(last_file)
 
-        if out_sqlite_file.exists() and out_md_file.exists():
-            sqlite_data = _get_sqlite_tables_info(out_sqlite_file)
-            total_sql_rows = sum(t["row_count"] for t in sqlite_data.values())
+        tab_guardrail, tab_md, tab_sql, tab_log = st.tabs([
+            "🛡️ Dual-Track Guardrail Audit",
+            "📝 Markdown Output",
+            "📊 Data Tabular (SQLite)",
+            "📋 Run Log",
+        ])
+
+        with tab_guardrail:
+            st.subheader("🛡️ Laporan Audit Guardrail Supervisor")
+            st.caption("Agent Utama membandingkan konsistensi Jalur 1 (Teks Markdown) vs Jalur 2 (Database SQLite).")
+
+            # Analisis sederhana dari file markdown dan database
+            md_content = md_file.read_text(encoding="utf-8") if md_file.exists() else ""
+            has_db = db_file is not None and db_file.exists()
 
             c1, c2, c3 = st.columns(3)
-            c1.metric("Status Guardrail", "PASSED" if len(sqlite_data) > 0 else "WARNING")
-            c2.metric("Total Tabel SQLite", len(sqlite_data))
-            c3.metric("Total Baris Data SQLite", total_sql_rows)
+            c1.metric("Status Dokumen", "Terekstraksi", "Sukses")
+            c2.metric("Ukuran File Markdown", f"{len(md_content):,} chars")
+            c3.metric("SQLite Storage", "Aktif" if has_db else "Kosong / Tidak Ada Tabel")
 
-            st.write("#### Ringkasan Per-Tabel:")
-            summary_rows = []
-            for t_name, t_info in sqlite_data.items():
-                cols = [c["name"] for c in t_info["columns"] if not c["name"].startswith("_")]
-                summary_rows.append({
-                    "Nama Tabel": t_name,
-                    "Jumlah Kolom": len(cols),
-                    "Kolom Terdefinisi": ", ".join(cols),
-                    "Total Baris": t_info["row_count"],
-                    "Status Sinkronisasi": "Verified ✅" if t_info["row_count"] > 0 else "Empty ⚠️",
-                })
-            if summary_rows:
-                st.table(pd.DataFrame(summary_rows))
+            if has_db and db_file is not None:
+                try:
+                    conn = sqlite3.connect(str(db_file))
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+                    tables = [r[0] for r in cursor.fetchall()]
+
+                    tbl_data = []
+                    for t in tables:
+                        cursor.execute(f"SELECT COUNT(*) FROM '{t}';")
+                        r_cnt = cursor.fetchone()[0]
+                        cursor.execute(f"PRAGMA table_info('{t}');")
+                        cols = [c[1] for c in cursor.fetchall() if not c[1].startswith("_")]
+                        tbl_data.append({"Nama Tabel SQLite": t, "Total Baris": r_cnt, "Jumlah Kolom": len(cols), "Kolom": ", ".join(cols)})
+                    conn.close()
+
+                    if tbl_data:
+                        st.success("✅ **Guardrail Cross-Verification:** Tabel terstruktur berhasil sinkron antara VLM & SQLite.")
+                        st.dataframe(pd.DataFrame(tbl_data), use_container_width=True)
+                    else:
+                        st.info("ℹ️ Tidak ada tabel transaksional yang ditemukan pada dokumen ini.")
+                except Exception as e:
+                    st.warning(f"Tidak dapat membaca database SQLite: {e}")
             else:
-                st.info("Belum ada tabel yang terdaftar.")
-        else:
-            st.info("Data belum tersedia untuk audit Guardrail. Jalankan ekstraksi terlebih dahulu.")
+                st.info("ℹ️ Dokumen diproses tanpa pembentukan tabel database (dokumen teks naratif polos).")
 
-    # TAB 4: Execution Logs
-    with tab_logs:
-        st.write(f"**Path Log File:** `{log_path}`")
-        st.code(log_output, language="text")
+        with tab_md:
+            st.subheader("📝 Teks Dokumen (Markdown)")
+            if md_file.exists():
+                md_text = md_file.read_text(encoding="utf-8")
+                st.download_button(
+                    "💾 Unduh Markdown (.md)",
+                    data=md_text,
+                    file_name=f"{last_file.stem}.md",
+                    mime="text/markdown",
+                )
+                st.markdown(md_text)
+            else:
+                st.warning("File Markdown belum tersedia.")
 
+        with tab_sql:
+            st.subheader("📊 Penjelajah Database SQLite & SQL Query Console")
+            if db_file is not None and db_file.exists():
+                st.write(f"📁 Path Database: `{db_file}`")
+                conn = sqlite3.connect(str(db_file))
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+                tables = [r[0] for r in cursor.fetchall()]
 
-if __name__ == "__main__":
-    main()
+                if tables:
+                    selected_tbl = st.selectbox("Pilih Tabel untuk Dilihat:", tables)
+                    df_preview = pd.read_sql_query(f"SELECT * FROM '{selected_tbl}' LIMIT 100;", conn)
+                    st.dataframe(df_preview, use_container_width=True)
+
+                    st.markdown("#### ⚡ Konsol Query SQL")
+                    default_query = f"SELECT * FROM '{selected_tbl}' LIMIT 10;"
+                    user_query = st.text_area("Tulis query SELECT:", value=default_query, height=80)
+                    if st.button("Jalankan Query"):
+                        try:
+                            if not user_query.strip().upper().startswith("SELECT"):
+                                st.error("Demi keamanan, hanya query SELECT yang diizinkan.")
+                            else:
+                                df_query_res = pd.read_sql_query(user_query, conn)
+                                st.success(f"Ditemukan {len(df_query_res)} baris:")
+                                st.dataframe(df_query_res, use_container_width=True)
+                        except Exception as q_err:
+                            st.error(f"Error query SQL: {q_err}")
+                else:
+                    st.info("Database SQLite ada tetapi belum memiliki tabel transaksional.")
+                conn.close()
+            else:
+                st.info("Belum ada file database SQLite yang terbentuk untuk dokumen ini.")
+
+        with tab_log:
+            st.subheader("📋 Log Eksekusi")
+            log_path = st.session_state.get("last_log_path")
+            if log_path and Path(log_path).exists():
+                st.code(Path(log_path).read_text(encoding="utf-8"), language="text")

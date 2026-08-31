@@ -804,7 +804,7 @@ class TabularVerifier:
     Engine Verifikasi Ganda (Double-Verification):
       1. Integritas baris & skema kolom.
       2. Uji coba query kalkulasi agregat (SUM & AVG).
-      3. Uji konsistensi aritmatika saldo rekening (Balance[n-1] + Credit - Debit = Balance[n]).
+      3. Uji konsistensi aritmatika saldo rekening (Balance[n-1] + Credit - Debit ≈ Balance[n]).
       4. Refleksi verifikasi model LLM bila tersedia.
     """
 
@@ -1303,3 +1303,21 @@ def query_sqlite(
     """Eksekusi query SQL pada database SQLite dokumen secara aman."""
     db_mgr = TabularDatabaseManager(db_path)
     return db_mgr.execute_query(sql_query)
+
+
+__all__ = [
+    "TRANSACTIONAL_HEADER_KEYWORDS",
+    "TabularDatabaseManager",
+    "TabularVerifier",
+    "classify_table_heuristic",
+    "clean_cell_text",
+    "cross_verify_dual_track",
+    "extract_and_ingest_tables_from_markdown",
+    "infer_table_schema",
+    "parse_date_value",
+    "parse_markdown_tables",
+    "parse_numeric_value",
+    "process_page_tabular_agent",
+    "query_sqlite",
+    "sanitize_identifier",
+]
