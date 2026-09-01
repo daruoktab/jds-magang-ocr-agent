@@ -34,7 +34,13 @@ class DocumentExtractionState(TypedDict, total=False):
     previous_page_context: str | None
     specs: list[str]
     doc_type: str
+    has_diagram: bool
+    diagram_type: str | None
+    has_table: bool
     markdown_content: str
+    diagram_mermaid_code: str | None
+    diagram_summary: str | None
+    final_markdown: str
 
 
 class DocumentExtractionPipeline:
@@ -55,14 +61,18 @@ class DocumentExtractionPipeline:
 
         # Node pipeline
         builder.add_node("preprocess", self._node_preprocess)
-        builder.add_node("classify", self._node_classify)
+        builder.add_node("inspect_and_classify", self._node_inspect_and_classify)
         builder.add_node("extract_markdown", self._node_extract_markdown)
+        builder.add_node("summon_diagram_specialist", self._node_summon_diagram_specialist)
+        builder.add_node("aggregate_and_judge", self._node_aggregate_and_judge)
 
         # Edges
         builder.add_edge(START, "preprocess")
-        builder.add_edge("preprocess", "classify")
-        builder.add_edge("classify", "extract_markdown")
-        builder.add_edge("extract_markdown", END)
+        builder.add_edge("preprocess", "inspect_and_classify")
+        builder.add_edge("inspect_and_classify", "extract_markdown")
+        builder.add_edge("extract_markdown", "summon_diagram_specialist")
+        builder.add_edge("summon_diagram_specialist", "aggregate_and_judge")
+        builder.add_edge("aggregate_and_judge", END)
 
         return builder.compile()
 
@@ -82,7 +92,9 @@ class DocumentExtractionPipeline:
                 - preprocessed_path: path gambar yang telah di-preprocess
                 - specs: list string spesifikasi yang terdeteksi
                 - doc_type: string spesifikasi gabungan terurut (kompatibilitas)
-                - markdown_content: string teks Markdown hasil ekstraksi
+                - markdown_content: string teks Markdown hasil ekstraksi & koreksi
+                - has_diagram: boolean keberadaan diagram
+                - diagram_mermaid_code: kode Mermaid jika diekstrak oleh sub-agent
         """
         initial_state: DocumentExtractionState = {
             "image_path": image_path,
@@ -99,6 +111,8 @@ class DocumentExtractionPipeline:
             "specs": final_state.get("specs", ["plain"]),
             "doc_type": final_state.get("doc_type", "plain"),
             "markdown_content": final_state.get("markdown_content", ""),
+            "has_diagram": final_state.get("has_diagram", False),
+            "diagram_mermaid_code": final_state.get("diagram_mermaid_code"),
         }
 
     # =========================================================================
@@ -130,45 +144,53 @@ class DocumentExtractionPipeline:
             "preprocessed_path": result.processed_path,
         }
 
-    def _node_classify(
+    def _node_inspect_and_classify(
         self, state: DocumentExtractionState
     ) -> DocumentExtractionState:
-        """Tahap 2: Klasifikasi multi-trait karakteristik dokumen."""
+        """Tahap 2: Inspeksi multimodal karakteristik dokumen & deteksi elemen visual/diagram."""
         forced_specs = state.get("forced_specs")
         forced_doc_type = state.get("forced_doc_type")
+        img = state.get("preprocessed_path") or state["image_path"]
 
-        # Jika dipaksa manual oleh user, gunakan langsung
+        # Jika spesifikasi dipaksa secara manual oleh user
         if forced_specs:
             norm_specs = normalize_specs(forced_specs)
-            logger.info(
-                "[Pipeline:Classify] Menggunakan forced_specs: %s", norm_specs
-            )
+            logger.info("[Pipeline:Classify] Menggunakan forced_specs: %s", norm_specs)
             return {
                 **state,
                 "specs": norm_specs,
                 "doc_type": ",".join(norm_specs),
+                "has_diagram": "presentation_slides" in norm_specs,
+                "diagram_type": "generic_diagram" if "presentation_slides" in norm_specs else None,
             }
 
         if forced_doc_type:
             norm_specs = normalize_specs(forced_doc_type)
-            logger.info(
-                "[Pipeline:Classify] Menggunakan forced_doc_type: %s", norm_specs
-            )
+            logger.info("[Pipeline:Classify] Menggunakan forced_doc_type: %s", norm_specs)
             return {
                 **state,
                 "specs": norm_specs,
                 "doc_type": ",".join(norm_specs),
+                "has_diagram": "presentation_slides" in norm_specs,
+                "diagram_type": "generic_diagram" if "presentation_slides" in norm_specs else None,
             }
 
-        # Klasifikasi otomatis via VLM
+        # Inspeksi otomatis via VLM
         t0 = time.perf_counter()
-        img = state.get("preprocessed_path") or state["image_path"]
-        detected_specs = self.extractor.classify(img)
+        insp_res = self.extractor.inspect_page(img)
         elapsed = (time.perf_counter() - t0) * 1000
 
+        detected_specs = insp_res.get("specs", ["plain"])
+        has_diag = bool(insp_res.get("has_diagram", False))
+        diag_type = insp_res.get("diagram_type")
+        has_tbl = bool(insp_res.get("has_table", False))
+
         logger.info(
-            "[Pipeline:Classify] Karakteristik terdeteksi: %s (%.1fms)",
+            "[Pipeline:Classify] Layout: %s | Diagram: %s (%s) | Tabel: %s (%.1fms)",
             detected_specs,
+            has_diag,
+            diag_type,
+            has_tbl,
             elapsed,
         )
 
@@ -176,18 +198,20 @@ class DocumentExtractionPipeline:
             **state,
             "specs": detected_specs,
             "doc_type": ",".join(detected_specs),
+            "has_diagram": has_diag,
+            "diagram_type": diag_type,
+            "has_table": has_tbl,
         }
 
     def _node_extract_markdown(
         self, state: DocumentExtractionState
     ) -> DocumentExtractionState:
-        """Tahap 3: Ekstraksi teks Markdown menggunakan Specialized Composite Agent."""
+        """Tahap 3: Ekstraksi teks & tata letak Markdown menggunakan Composite Agent."""
         t0 = time.perf_counter()
         img = state.get("preprocessed_path") or state["image_path"]
         specs = state.get("specs", ["plain"])
         prev_context = state.get("previous_page_context")
 
-        # Dapatkan agen komposit yang sesuai dengan seluruh trait spesifikasi
         agent = get_agent(specs)
         md_text = agent.run(
             img,
@@ -197,7 +221,7 @@ class DocumentExtractionPipeline:
 
         elapsed = (time.perf_counter() - t0) * 1000
         logger.info(
-            "[Pipeline:ExtractMarkdown] Selesai (%d karakter, %.1fms)",
+            "[Pipeline:ExtractMarkdown] Ekstraksi teks selesai (%d karakter, %.1fms)",
             len(md_text),
             elapsed,
         )
@@ -205,6 +229,97 @@ class DocumentExtractionPipeline:
         return {
             **state,
             "markdown_content": md_text,
+        }
+
+    def _node_summon_diagram_specialist(
+        self, state: DocumentExtractionState
+    ) -> DocumentExtractionState:
+        """Tahap 4: Summon Sub-Agent Spesialis Diagram Mermaid jika terdeteksi diagram/visual."""
+        has_diag = state.get("has_diagram", False)
+        specs = state.get("specs", [])
+        img = state.get("preprocessed_path") or state["image_path"]
+
+        # Summon spesialis diagram jika terindikasi diagram atau slide presentasi
+        should_summon = has_diag or "presentation_slides" in specs
+
+        if not should_summon:
+            return state
+
+        t0 = time.perf_counter()
+        logger.info("[Pipeline:SummonSpecialist] Men-summon Sub-Agent Diagram Mermaid...")
+        diag_hint = state.get("diagram_type")
+
+        from .diagram import extract_diagram_to_mermaid
+
+        diag_result = extract_diagram_to_mermaid(
+            image_path=img,
+            llm=self.vlm,
+            forced_diagram_type=diag_hint,
+        )
+        elapsed = (time.perf_counter() - t0) * 1000
+
+        mermaid_code = diag_result.mermaid_code
+        diag_summary = diag_result.text_summary
+
+        if mermaid_code:
+            logger.info(
+                "[Pipeline:SummonSpecialist] Berhasil mengekstrak Diagram Mermaid (%s, %.1fms)",
+                diag_result.diagram_type,
+                elapsed,
+            )
+        else:
+            logger.info(
+                "[Pipeline:SummonSpecialist] Diagram tidak cocok ke Mermaid, fallback ke deskripsi (%.1fms)",
+                elapsed,
+            )
+
+        return {
+            **state,
+            "diagram_mermaid_code": mermaid_code,
+            "diagram_summary": diag_summary,
+        }
+
+    def _node_aggregate_and_judge(
+        self, state: DocumentExtractionState
+    ) -> DocumentExtractionState:
+        """
+        Tahap 5: Aggregator & Judge (Koreksi Ulang).
+        Menggabungkan teks markdown dengan luaran spesialis diagram, lalu memverifikasi ulang terhadap gambar asli.
+        """
+        t0 = time.perf_counter()
+        img = state.get("preprocessed_path") or state["image_path"]
+        md_text = state.get("markdown_content", "")
+        mermaid_code = state.get("diagram_mermaid_code")
+        diag_summary = state.get("diagram_summary")
+        specs = state.get("specs", ["plain"])
+
+        # 1. Satukan blok diagram Mermaid ke Markdown jika belum ada
+        combined_md = md_text
+        if mermaid_code and "```mermaid" not in combined_md:
+            mermaid_block = f"\n\n```mermaid\n{mermaid_code}\n```"
+            if diag_summary:
+                mermaid_block += f"\n\n> **[Diagram Summary]:** {diag_summary}"
+            combined_md = combined_md + "\n" + mermaid_block
+
+        # 2. Lakukan evaluasi koreksi ulang (Judge & Refine)
+        final_md = self.extractor.judge_and_refine(
+            image_path=img,
+            draft_markdown=combined_md,
+            specs=specs,
+        )
+        elapsed = (time.perf_counter() - t0) * 1000
+
+        logger.info(
+            "[Pipeline:AggregateJudge] Koreksi ulang selesai: %d -> %d karakter (%.1fms)",
+            len(combined_md),
+            len(final_md),
+            elapsed,
+        )
+
+        return {
+            **state,
+            "markdown_content": final_md,
+            "final_markdown": final_md,
         }
 
 

@@ -266,3 +266,108 @@ def test_process_page_tabular_agent_no_table() -> None:
         assert event.tables_detected == 0
         assert event.status == "no_tables"
         assert len(res) == 0
+
+
+def test_process_page_tabular_all_tables_ingested_including_narrative() -> None:
+    """Memastikan seluruh data tabular (termasuk kualitatif / naratif) tetap di-ingest ke SQLite."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "narrative.sqlite"
+        page_md = """
+# Matriks Analisis Kualitatif
+Berikut adalah tabel perbandingan fitur sistem:
+
+| Fitur | Deskripsi Singkat | Status Implementasi | Catatan Tambahan |
+|---|---|---|---|
+| Autentikasi | Login menggunakan OAuth2 dan MFA | Selesai | Sudah lolos pentest |
+| Otorisasi | RBAC berbasis peran pengguna | Dalam Proses | Menunggu approval tim security |
+| Audit Trail | Pencatatan log seluruh mutasi | Selesai | Terintegrasi dengan SIEM |
+"""
+        event, res = process_page_tabular_agent(
+            page_markdown=page_md,
+            page_number=1,
+            source_file="matriks_fitur.pdf",
+            db_path=db_path,
+            table_name_prefix="matriks_fitur",
+            append_if_matching=True,
+            force_all_tables=True,
+        )
+
+        assert event.tables_detected == 1
+        assert event.rows_ingested_total == 3
+        assert len(res) == 1
+        assert event.tagged_markdown is not None
+        assert "<!-- sqlite_table:" in event.tagged_markdown
+
+        db_mgr = TabularDatabaseManager(db_path)
+        cnt = db_mgr.execute_query(f'SELECT COUNT(*) as cnt FROM "{res[0].table_name}";').rows[0]["cnt"]
+        assert cnt == 3
+
+
+def test_multipage_bank_statement_tagged_metadata_single_sqlite_table() -> None:
+    """Memastikan dokumen bank statement multi-halaman tersimpan dalam 1 tabel SQLite tunggal dan sinkron."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "bank_statement.sqlite"
+        
+        # Halaman 1
+        p1_md = """
+# Bank Statement Page 1
+| Date | Description | Reference | Debit | Credit | Balance |
+|---|---|---|---|---|---|
+| 2024-01-01 | Opening Balance | REF001 | 0.00 | 5000000.00 | 5000000.00 |
+| 2024-01-05 | ATM Withdrawal | REF002 | 500000.00 | 0.00 | 4500000.00 |
+"""
+        event1, _res1 = process_page_tabular_agent(
+            page_markdown=p1_md,
+            page_number=1,
+            source_file="08_bank-statement-SYNTHETIC-1-2.pdf",
+            db_path=db_path,
+            table_name_prefix="08_bank_statement",
+            append_if_matching=True,
+        )
+        assert event1.tables_detected == 1
+        assert event1.rows_ingested_total == 2
+        p1_tagged = event1.tagged_markdown or p1_md
+
+        # Halaman 2 (Lanjutan)
+        p2_md = """
+# Bank Statement Page 2
+| Date | Description | Reference | Debit | Credit | Balance |
+|---|---|---|---|---|---|
+| 2024-01-10 | Payroll Deposit | REF003 | 0.00 | 12000000.00 | 16500000.00 |
+| 2024-01-15 | Electric Bill | REF004 | 750000.00 | 0.00 | 15750000.00 |
+| 2024-01-20 | Transfer Out | REF005 | 2000000.00 | 0.00 | 13750000.00 |
+"""
+        event2, _res2 = process_page_tabular_agent(
+            page_markdown=p2_md,
+            page_number=2,
+            source_file="08_bank-statement-SYNTHETIC-1-2.pdf",
+            db_path=db_path,
+            table_name_prefix="08_bank_statement",
+            append_if_matching=True,
+        )
+        assert event2.tables_detected == 1
+        assert event2.rows_ingested_total == 3
+        assert event2.status == "appended_existing_table"
+        p2_tagged = event2.tagged_markdown or p2_md
+
+        # SQLite harus HANYA memiliki 1 tabel
+        db_mgr = TabularDatabaseManager(db_path)
+        tables = list(db_mgr.inspect_database()["tables"].keys())
+        assert len(tables) == 1
+        t_name = tables[0]
+        total_rows = db_mgr.execute_query(f'SELECT COUNT(*) as cnt FROM "{t_name}";').rows[0]["cnt"]
+        assert total_rows == 5
+
+        # Cross Verification Dual Track
+        stitched = f"{p1_tagged}\n\n<!-- PAGE: 2 -->\n\n{p2_tagged}"
+        report = cross_verify_dual_track(
+            stitched_markdown=stitched,
+            db_path=db_path,
+            source_file="08_bank-statement-SYNTHETIC-1-2.pdf",
+            total_pages=2,
+        )
+        assert report.guardrail_status == "PASSED"
+        assert report.total_sqlite_tables == 1
+        assert report.total_sqlite_rows == 5
+        assert len(report.discrepancies) == 0
+

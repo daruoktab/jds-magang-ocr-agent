@@ -201,7 +201,7 @@ def parse_date_value(val_str: str) -> str | None:
 def parse_markdown_tables(markdown_text: str) -> list[dict[str, Any]]:
     """
     Ekstrak dan parse seluruh tabel format GFM Markdown dari teks dokumen.
-    Mengembalikan daftar objek berisi header asli, baris terurai, dan teks konteks di atas tabel.
+    Mengembalikan daftar objek berisi header asli, baris terurai, teks konteks, dan metadata tag SQLite jika ada.
     """
     lines = markdown_text.splitlines()
     tables: list[dict[str, Any]] = []
@@ -219,11 +219,20 @@ def parse_markdown_tables(markdown_text: str) -> list[dict[str, Any]]:
                 header_raw = [c.strip() for c in line.strip("|").split("|")]
                 rows_raw: list[list[str]] = []
 
+                # Cek apakah ada tag metadata <!-- sqlite_table: ... --> tepat di atas tabel
+                sqlite_table_hint: str | None = None
+                for k in range(max(0, i - 2), i):
+                    prev_line = lines[k].strip()
+                    m_tag = re.search(r"<!--\s*sqlite_table:\s*([\w\-_]+).*?-->", prev_line, re.IGNORECASE)
+                    if m_tag:
+                        sqlite_table_hint = m_tag.group(1).strip()
+                        break
+
                 # Konteks teks sebelum tabel (3 baris sebelumnya)
                 context_lines = [
                     lines[k].strip()
                     for k in range(max(0, i - 3), i)
-                    if lines[k].strip()
+                    if lines[k].strip() and not lines[k].strip().startswith("<!--")
                 ]
                 context = " ".join(context_lines)
 
@@ -247,6 +256,7 @@ def parse_markdown_tables(markdown_text: str) -> list[dict[str, Any]]:
                             "headers": header_raw,
                             "rows": rows_raw,
                             "context": context,
+                            "sqlite_table_hint": sqlite_table_hint,
                             "line_start": i,
                             "line_end": j,
                         }
@@ -256,6 +266,41 @@ def parse_markdown_tables(markdown_text: str) -> list[dict[str, Any]]:
         i += 1
 
     return tables
+
+
+def tag_markdown_tables_with_sqlite_metadata(
+    markdown_text: str,
+    table_mappings: list[tuple[dict[str, Any], str]],
+) -> str:
+    """
+    Sematkan tag metadata <!-- sqlite_table: <table_name> --> di atas setiap blok tabel pada Markdown.
+    Jika tag sudah ada, pertahankan atau perbarui nama tabelnya.
+    """
+    if not table_mappings or not markdown_text:
+        return markdown_text
+
+    lines = markdown_text.splitlines()
+    # Urutkan pemetaan dari line_start paling bawah ke atas agar indeks baris tidak bergeser saat disisipkan
+    sorted_mappings = sorted(table_mappings, key=lambda x: x[0].get("line_start", 0), reverse=True)
+
+    for tbl_dict, target_table in sorted_mappings:
+        line_start = tbl_dict.get("line_start", 0)
+        tag_str = f"<!-- sqlite_table: {target_table} -->"
+
+        # Cek apakah baris persis sebelumnya sudah memiliki tag
+        has_existing_tag = False
+        if line_start > 0:
+            prev_line = lines[line_start - 1].strip()
+            if prev_line.startswith("<!--") and "sqlite_table:" in prev_line:
+                # Perbarui tag yang ada
+                lines[line_start - 1] = tag_str
+                has_existing_tag = True
+
+        if not has_existing_tag:
+            # Sisipkan baris tag baru
+            lines.insert(line_start, tag_str)
+
+    return "\n".join(lines)
 
 
 # ==============================================================================
@@ -609,28 +654,69 @@ class TabularDatabaseManager:
     def find_matching_table(
         self,
         headers: list[str],
-        threshold: float = 0.70,
+        threshold: float = 0.50,
+        explicit_table_name: str | None = None,
+        doc_prefix: str | None = None,
     ) -> tuple[str, TableSchema] | None:
         """
-        Cari tabel eksisting di database yang memiliki kecocokan skema kolom >= threshold.
+        Cari tabel eksisting di database yang memiliki kecocokan skema kolom atau kelanjutan tabel.
         Mengembalikan (table_name, TableSchema) jika ditemukan, atau None jika skema baru.
         """
-        sanitized_incoming = {sanitize_identifier(h) for h in headers if h.strip()}
-        if not sanitized_incoming:
-            return None
+        valid_sql_types = {
+            "TEXT",
+            "INTEGER",
+            "REAL",
+            "NUMERIC",
+            "DATE",
+            "DATETIME",
+        }
 
         with self._get_connection() as conn:
             cursor = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
             )
             tables = [row["name"] for row in cursor.fetchall()]
+            if not tables:
+                return None
+
+            # 1. Jika ada nama tabel eksplisit dari metadata tag <!-- sqlite_table: ... -->
+            if explicit_table_name and explicit_table_name in tables:
+                col_cur = conn.execute(f'PRAGMA table_info("{explicit_table_name}");')
+                cols = [dict(c) for c in col_cur.fetchall()]
+                schema_cols = [
+                    TableColumnSchema(
+                        name=c["name"],
+                        original_name=c["name"],
+                        sql_type=(
+                            c["type"]
+                            if c["type"].upper() in valid_sql_types
+                            else "TEXT"
+                        ),
+                        is_nullable=not bool(c["notnull"]),
+                        description="",
+                        sample_values=[],
+                    )
+                    for c in cols
+                    if not c["name"].startswith("_")
+                ]
+                return explicit_table_name, TableSchema(
+                    table_name=explicit_table_name,
+                    source_file="",
+                    columns=schema_cols,
+                    primary_key=None,
+                    metadata={"is_continuation": True, "matched_by": "explicit_tag"},
+                )
+
+            sanitized_incoming = {sanitize_identifier(h) for h in headers if h.strip()}
+            if not sanitized_incoming:
+                return None
 
             best_match: str | None = None
             best_score: float = 0.0
             best_schema: TableSchema | None = None
 
             for t in tables:
-                col_cur = conn.execute(f"PRAGMA table_info('{t}');")
+                col_cur = conn.execute(f'PRAGMA table_info("{t}");')
                 cols = [dict(c) for c in col_cur.fetchall()]
                 existing_cols = {
                     c["name"] for c in cols if not c["name"].startswith("_")
@@ -644,17 +730,19 @@ class TabularDatabaseManager:
                     len(sanitized_incoming), len(existing_cols)
                 )
 
+                # Cek apakah subset kolom penting cocok (mis. date, description, debit, credit, balance, amount)
+                key_financial = {"date", "tanggal", "description", "keterangan", "debit", "kredit", "credit", "balance", "saldo", "amount", "nominal"}
+                matched_keys = intersection.intersection(key_financial)
+                if len(matched_keys) >= 2:
+                    score = max(score, 0.75)
+
+                # Jika berasal dari dokumen prefix yang sama dan jumlah kolom sama/hampir sama
+                if doc_prefix and t.startswith(doc_prefix) and abs(len(sanitized_incoming) - len(existing_cols)) <= 1:
+                    score = max(score, 0.70)
+
                 if score >= threshold and score > best_score:
                     best_score = score
                     best_match = t
-                    valid_sql_types = {
-                        "TEXT",
-                        "INTEGER",
-                        "REAL",
-                        "NUMERIC",
-                        "DATE",
-                        "DATETIME",
-                    }
                     schema_cols = [
                         TableColumnSchema(
                             name=c["name"],
@@ -676,7 +764,7 @@ class TabularDatabaseManager:
                         source_file="",
                         columns=schema_cols,
                         primary_key=None,
-                        metadata={"is_continuation": True},
+                        metadata={"is_continuation": True, "score": score},
                     )
 
             if best_match and best_schema:
@@ -1044,16 +1132,17 @@ def process_page_tabular_agent(
     db_path: str | Path | None = None,
     table_name_prefix: str | None = None,
     append_if_matching: bool = True,
-    force_all_tables: bool = False,
+    force_all_tables: bool = True,
     llm: BaseChatModel | None = None,
 ) -> tuple[PageTabularEvent, list[TableIngestionResult]]:
     """
     Sub-Agent SQL Tabular Engine yang berjalan mandiri per-halaman/slide:
-      1. Memahami konten tabel pada halaman secara independen.
+      1. Memahami konten seluruh tabel pada halaman secara independen.
       2. Menginspeksi tabel dan skema eksisting yang sudah ada di database SQLite.
-      3. Melakukan query SQL awal jika ada tabel kelanjutan (misal mengecek baris/saldo terakhir).
+      3. Melakukan query SQL awal jika ada tabel kelanjutan (multi-page continuation table).
       4. Meng-ingest atau meng-append data baris halaman ini ke tabel SQLite yang sesuai.
-      5. Menjalankan query SQL mandiri untuk memverifikasi kondisi tabel setelah ingesti.
+      5. Menyematkan metadata tag <!-- sqlite_table: <table_name> --> pada Markdown.
+      6. Menjalankan query SQL mandiri untuk memverifikasi kondisi tabel setelah ingesti.
     """
     db_manager = TabularDatabaseManager(db_path)
     verifier = TabularVerifier(db_manager, llm=llm)
@@ -1076,12 +1165,14 @@ def process_page_tabular_agent(
             queries_executed=[],
             rows_ingested_total=0,
             status="no_tables",
+            tagged_markdown=page_markdown,
         )
         return event, []
 
     actions: list[str] = []
     queries_run: list[dict[str, Any]] = []
     ingestion_results: list[TableIngestionResult] = []
+    table_mappings_for_tagging: list[tuple[dict[str, Any], str]] = []
     total_page_rows = 0
     event_status: Any = "no_tables"
 
@@ -1089,19 +1180,22 @@ def process_page_tabular_agent(
         headers = tbl["headers"]
         rows = tbl["rows"]
         context = tbl["context"]
+        sqlite_hint = tbl.get("sqlite_table_hint")
 
-        # Klasifikasi semantik tabel
-        classification = classify_table_heuristic(headers, rows, context=context)
-        if not classification.is_transactional and not force_all_tables:
-            actions.append(
-                f"Tabel #{idx} ({len(rows)} baris, {len(headers)} kolom) diklasifikasikan sebagai {classification.table_type} naratif (dilewati dari SQLite)."
-            )
+        if not rows:
             continue
 
-        # Cari tabel yang cocok di SQLite
-        matched = (
-            db_manager.find_matching_table(headers) if append_if_matching else None
-        )
+        # Klasifikasi semantik tabel (untuk logging & metadata)
+        classification = classify_table_heuristic(headers, rows, context=context)
+
+        # Cari tabel yang cocok di SQLite (utamakan explicit tag jika ada, lalu skema similarity)
+        matched = None
+        if append_if_matching:
+            matched = db_manager.find_matching_table(
+                headers=headers,
+                explicit_table_name=sqlite_hint,
+                doc_prefix=base_prefix,
+            )
 
         if matched:
             target_table, schema = matched
@@ -1118,21 +1212,23 @@ def process_page_tabular_agent(
                 }
             )
             actions.append(
-                f"Tabel #{idx} cocok dengan tabel eksisting '{target_table}' ({prev_count} baris awal). Menambahkan baris halaman {page_number}."
+                f"Tabel #{idx} cocok dengan tabel eksisting '{target_table}' ({prev_count} baris awal). Menambahkan {len(rows)} baris halaman {page_number}."
             )
         else:
-            target_table = f"{base_prefix}_t{idx}"
+            target_table = sqlite_hint or f"{base_prefix}_t{idx}"
             schema = infer_table_schema(
                 table_name=target_table,
                 headers=headers,
                 rows=rows,
                 source_file=source_file,
-                metadata={"context": context, "page": page_number},
+                metadata={"context": context, "page": page_number, "classification": classification.table_type},
             )
             is_append = False
             actions.append(
-                f"Tabel #{idx} adalah tabel baru. Membuat skema tabel '{target_table}' dengan {len(schema.columns)} kolom."
+                f"Tabel #{idx} adalah tabel baru ({classification.table_type}). Membuat skema tabel '{target_table}' dengan {len(schema.columns)} kolom."
             )
+
+        table_mappings_for_tagging.append((tbl, target_table))
 
         # Ingest baris data
         rows_ingested = db_manager.ingest_records(
@@ -1183,12 +1279,15 @@ def process_page_tabular_agent(
                 message=(
                     f"Tabel bersambung '{target_table}' halaman {page_number} berhasil ditambah (+{rows_ingested} baris, total {total_cnt})."
                     if is_append
-                    else f"Tabel baru '{target_table}' halaman {page_number} dibuat ({rows_ingested} baris)."
+                    else f"Tabel '{target_table}' halaman {page_number} dibuat ({rows_ingested} baris)."
                 ),
             )
         )
 
         event_status = "appended_existing_table" if is_append else "created_new_table"
+
+    # Sematkan metadata tag <!-- sqlite_table: <name> --> ke Markdown halaman
+    tagged_markdown = tag_markdown_tables_with_sqlite_metadata(page_markdown, table_mappings_for_tagging)
 
     event = PageTabularEvent(
         page_number=page_number,
@@ -1198,6 +1297,7 @@ def process_page_tabular_agent(
         queries_executed=queries_run,
         rows_ingested_total=total_page_rows,
         status=event_status,
+        tagged_markdown=tagged_markdown,
     )
     return event, ingestion_results
 
@@ -1221,6 +1321,20 @@ def cross_verify_dual_track(
     total_md_tables = len(md_tables)
     total_sqlite_tables = len(sqlite_tables)
 
+    # Petakan setiap tabel Markdown ke tabel SQLite tujuannya
+    md_rows_per_sqlite_table: dict[str, int] = {}
+    for tbl in md_tables:
+        t_target = tbl.get("sqlite_table_hint")
+        if not t_target and sqlite_tables:
+            matched = db_manager.find_matching_table(tbl["headers"])
+            if matched:
+                t_target = matched[0]
+            elif len(sqlite_tables) == 1:
+                t_target = next(iter(sqlite_tables.keys()))
+
+        if t_target:
+            md_rows_per_sqlite_table[t_target] = md_rows_per_sqlite_table.get(t_target, 0) + len(tbl["rows"])
+
     total_md_rows = sum(len(t["rows"]) for t in md_tables)
     total_sqlite_rows = sum(t_info.get("row_count", 0) for t_info in sqlite_tables.values())
 
@@ -1229,21 +1343,31 @@ def cross_verify_dual_track(
 
     for t_name, t_info in sqlite_tables.items():
         sql_rows = t_info.get("row_count", 0)
+        expected_md_rows = md_rows_per_sqlite_table.get(t_name, 0)
         cols = [c["name"] for c in t_info.get("columns", []) if not c["name"].startswith("_")]
+
+        # Tabel dianggap tersinkronisasi jika row count sama, atau jika hanya 1 tabel dan total baris cocok
+        is_synced = (sql_rows == expected_md_rows) or (sql_rows > 0 and expected_md_rows == 0 and total_md_rows == sql_rows)
+        if not is_synced and expected_md_rows > 0:
+            discrepancies.append(
+                f"Tabel SQLite '{t_name}' ({sql_rows} baris) berbeda dengan data Markdown terkait ({expected_md_rows} baris)."
+            )
+
         table_comparisons.append(
             {
                 "table_name": t_name,
                 "sqlite_rows": sql_rows,
+                "markdown_rows_matched": expected_md_rows or sql_rows,
                 "columns_count": len(cols),
                 "columns": cols,
-                "status": "synchronized" if sql_rows > 0 else "empty",
+                "status": "synchronized" if is_synced else "row_count_mismatch",
             }
         )
 
     # Cek discrepansi jumlah tabel & baris
     if total_md_tables > 0 and total_sqlite_tables == 0:
         discrepancies.append(
-            f"Ditemukan {total_md_tables} tabel pada teks Markdown, namun tidak ada tabel yang masuk ke SQLite (kemungkinan tabel naratif atau belum di-ingest)."
+            f"Ditemukan {total_md_tables} tabel pada teks Markdown, namun tidak ada tabel yang masuk ke SQLite."
         )
     elif total_md_rows > 0 and total_sqlite_rows < (total_md_rows * 0.5):
         discrepancies.append(
@@ -1266,7 +1390,7 @@ def cross_verify_dual_track(
     else:
         guardrail_status = "PASSED" if total_md_tables == 0 else "WARNING"
         supervisor_notes = (
-            "Dokumen tidak memiliki tabel transaksional aktif untuk SQLite."
+            "Dokumen tidak memiliki tabel aktif untuk SQLite."
             if total_md_tables == 0
             else f"Perhatian: {'; '.join(discrepancies)}"
         )

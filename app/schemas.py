@@ -499,9 +499,11 @@ class PageTabularEvent(BaseModel):
         default="no_tables",
         description="Status hasil proses tabular pada halaman",
     )
-    error_message: str | None = Field(default=None, description="Pesan error jika ingesti gagal")
     queries_run: list[str] = Field(
         default_factory=list, description="Daftar query SQL verifikasi mandiri yang dijalankan sub-agent"
+    )
+    tagged_markdown: str | None = Field(
+        default=None, description="Teks Markdown halaman yang telah diperkaya tag metadata <!-- sqlite_table: ... -->"
     )
 
 

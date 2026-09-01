@@ -429,20 +429,40 @@ def process_presentation_vision(
     if resolved_db_path and auto_tabular_db:
         resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if pipeline is None:
+        from .graph import DocumentExtractionPipeline
+        pipeline = DocumentExtractionPipeline(vlm=vlm_llm)
+    elif hasattr(pipeline, "invoke") and not hasattr(pipeline, "run"):
+        from .graph import DocumentExtractionPipeline
+        pipeline = DocumentExtractionPipeline(vlm=pipeline)
+
     for idx, img_path in enumerate(slide_images, start=1):
         logger.info(
-            "[Vision PPT] [Slide %d/%d] Mengirim gambar '%s' langsung ke VLM...",
+            "[Vision PPT] [Slide %d/%d] Memproses slide '%s' via DocumentExtractionPipeline...",
             idx,
             total_images,
             img_path.name,
         )
-        page_md = _extract_slide_markdown(
-            llm=vlm_llm,
-            image_path=str(img_path),
-            slide_number=idx,
-            total_slides=total_images,
-            previous_slide_context=previous_context,
-        )
+        if hasattr(pipeline, "run"):
+            res = pipeline.run(
+                str(img_path),
+                forced_specs=forced_specs or "presentation_slides",
+                previous_page_context=previous_context,
+            )
+            page_md = res.get("markdown_content", "")
+        else:
+            page_md = _extract_slide_markdown(
+                llm=vlm_llm,
+                image_path=str(img_path),
+                slide_number=idx,
+                total_slides=total_images,
+                previous_slide_context=previous_context,
+            )
+
+        # Pastikan penanda slide ada
+        if not page_md.startswith(f"<!-- SLIDE: {idx} -->") and not page_md.startswith(f"<!-- slide: {idx} -->"):
+            page_md = f"<!-- SLIDE: {idx} -->\n" + page_md
+
         slide_markdowns.append(page_md)
         previous_context = page_md[-400:] if len(page_md) > 400 else page_md
 
@@ -457,6 +477,10 @@ def process_presentation_vision(
                 append_if_matching=True,
                 force_all_tables=force_all_tables,
             )
+            if tab_event.tagged_markdown:
+                page_md = tab_event.tagged_markdown
+                slide_markdowns[-1] = page_md
+
             if tab_event.tables_detected > 0:
                 logger.info(
                     "[Sub-Agent SQL Slide %d] Terdeteksi %d tabel | Status: %s | Baris: %d",

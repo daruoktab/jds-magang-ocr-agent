@@ -93,6 +93,122 @@ class VisionExtractor:
         logger.info("[Extractor:Classify] Fallback regex layout: %s", final_specs)
         return final_specs
 
+    def inspect_page(self, image_path: str) -> dict[str, Any]:
+        """
+        Inspeksi komprehensif layout dokumen & elemen visual (diagram, tabel, hierarki).
+        Mengembalikan dict berisi specs, has_diagram, diagram_type, dan has_table.
+        """
+        inspect_prompt = (
+            "Analisis gambar dokumen ini secara menyeluruh untuk mendeteksi karakteristik tata letak dan elemen visual.\n\n"
+            "Evaluasi hal berikut:\n"
+            "1. specs: Karakteristik dokumen (pilih dari: 'plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides').\n"
+            "2. has_diagram: true jika terdapat diagram visual (flowchart, alur proses, sequence diagram, ERD, arsitektur blok, mindmap, state diagram, org chart), false jika hanya teks biasa atau foto polos.\n"
+            "3. diagram_type: Tipe diagram jika has_diagram=true (contoh: 'flowchart', 'sequence_diagram', 'er_diagram', 'block_architecture', 'mindmap', dll., atau null jika tidak ada).\n"
+            "4. has_table: true jika terdapat tabel data/baris kolom.\n\n"
+            "Outputkan HANYA format JSON valid tanpa pengantar:\n"
+            "{\n"
+            '  "specs": ["spec1", "spec2"],\n'
+            '  "has_diagram": true/false,\n'
+            '  "diagram_type": "string" atau null,\n'
+            '  "has_table": true/false\n'
+            "}"
+        )
+
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": inspect_prompt},
+            {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},
+        ]
+        messages = [
+            SystemMessage(content=CLASSIFY_SYSTEM),
+            HumanMessage(content=cast(Any, content)),
+        ]
+
+        try:
+            resp = self.llm.invoke(messages)
+            text_resp = str(resp.content).strip()
+            match = re.search(r"\{.*?\}", text_resp, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+                raw_specs = data.get("specs") or [data.get("doc_type")]
+                norm_specs = normalize_specs(raw_specs)
+                has_diag = bool(data.get("has_diagram", False))
+                diag_type = data.get("diagram_type")
+                has_tbl = bool(data.get("has_table", False))
+                return {
+                    "specs": norm_specs,
+                    "has_diagram": has_diag,
+                    "diagram_type": diag_type,
+                    "has_table": has_tbl,
+                }
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[Extractor:Inspect] Gagal inspect JSON (%s), fallback ke classify biasa.", e)
+
+        # Fallback
+        specs = self.classify(image_path)
+        return {
+            "specs": specs,
+            "has_diagram": "presentation_slides" in specs,
+            "diagram_type": "generic_diagram" if "presentation_slides" in specs else None,
+            "has_table": False,
+        }
+
+    def judge_and_refine(
+        self,
+        image_path: str,
+        draft_markdown: str,
+        *,
+        specs: list[str] | str | None = None,
+    ) -> str:
+        """
+        Tahap Aggregator Judge & Self-Correction (Koreksi Ulang):
+        Membandingkan draft gabungan Markdown (teks + Mermaid + tabel) terhadap citra asli dokumen.
+        Memperbaiki kekurangan atau mempertahankan draft jika sudah akurat dan lengkap.
+        """
+        if not draft_markdown or not draft_markdown.strip():
+            return draft_markdown
+
+        judge_prompt = (
+            "Anda adalah AI Chief Quality Auditor & Document Aggregator Verifier.\n\n"
+            "Tugas Anda: Bandingkan DRAFT MARKDOWN di bawah ini dengan GAMBAR ASLI DOKUMEN.\n\n"
+            "Evaluasi dan lakukan koreksi ulang dengan panduan:\n"
+            "1. KELENGKAPAN: Pastikan seluruh teks, judul, poin-poin, dan data angka pada gambar telah tercakup dalam Markdown.\n"
+            "2. DIAGRAM VISUAL (MERMAID): Jika pada gambar terdapat diagram alur/relasi/arsitektur/proses, pastikan sudah direpresentasikan dengan blok kode ```mermaid yang valid dan lengkap atau deskripsi terstruktur.\n"
+            "3. INTEGRITAS TABEL: Pastikan tabel diformat sebagai tabel Markdown (GFM) yang rapi.\n"
+            "4. KEBERSIHAN: Hapus duplikasi atau ketidakkonsistenan antarseksi.\n"
+            "5. JIKA DRAFT SUDAH BENAR DAN LENGKAP: Kembalikan teks Markdown tersebut secara presisi tanpa merusak format.\n\n"
+            f"[DRAFT MARKDOWN SEBELUM KOREKSI]:\n'''markdown\n{draft_markdown}\n'''\n\n"
+            "Outputkan HANYA teks Markdown hasil perbaikan akhir tanpa basa-basi pengantar atau penutup."
+        )
+
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": judge_prompt},
+            {"type": "image_url", "image_url": {"url": image_data_uri(image_path)}},
+        ]
+        messages = [
+            SystemMessage(content=self.system_prompt),
+            HumanMessage(content=cast(Any, content)),
+        ]
+
+        try:
+            resp = self.llm.invoke(messages)
+            refined_md = str(resp.content).strip()
+            # Bersihkan wrapper code fence jika ada
+            if refined_md.startswith("```markdown") and refined_md.endswith("```"):
+                refined_md = refined_md[len("```markdown") : -3].strip()
+            elif refined_md.startswith("```md") and refined_md.endswith("```"):
+                refined_md = refined_md[len("```md") : -3].strip()
+            elif (
+                refined_md.startswith("```")
+                and refined_md.endswith("```")
+                and not refined_md.startswith("```mermaid")
+            ):
+                refined_md = refined_md[3:-3].strip()
+
+            return refined_md if refined_md else draft_markdown
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[Extractor:Judge] Terjadi kesalahan pada tahap judge & refine (%s). Menggunakan draft awal.", e)
+            return draft_markdown
+
     def extract_markdown(
         self,
         image_path: str,

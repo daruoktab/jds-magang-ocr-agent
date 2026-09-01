@@ -306,6 +306,10 @@ def process_multipage_pdf(
                     llm=llm or getattr(pipeline, "vlm", None),
                 )
                 tabular_events.append(tab_event)
+                if tab_event.tagged_markdown:
+                    page_md = tab_event.tagged_markdown
+                    pages[-1].markdown_content = page_md
+                    pages_md[-1] = page_md
 
     # Jahit teks seluruh halaman menjadi satu teks Markdown utuh
     full_md = stitch_pages_to_markdown(pages_md)

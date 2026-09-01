@@ -182,6 +182,13 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         report = verifier.verify_table(table_name, expected_row_count=expected_rows)
         return json.dumps(report.model_dump(), indent=2, ensure_ascii=False)
 
+    @tool
+    def judge_and_refine_markdown(image_path: str, draft_markdown: str, specs: str = "plain") -> str:
+        """Lakukan audit verifikasi & koreksi ulang (Judge & Self-Correction) dengan membandingkan draft gabungan Markdown terhadap citra asli dokumen."""
+        proc = preprocess_image(image_path)
+        refined = extractor.judge_and_refine(proc.processed_path, draft_markdown, specs=specs.split(","))
+        return refined
+
     tools = [
         classify_layout,
         extract_to_markdown,
@@ -195,6 +202,7 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         inspect_sqlite_tables,
         query_sqlite_database,
         verify_table_data_integrity,
+        judge_and_refine_markdown,
     ]
 
     # --- Sub-Agent Definitions ---
@@ -290,9 +298,9 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         "  - 'tabular-db-specialist'     : Memisahkan tabel transaksional ke SQLite dan melakukan double-verification.\n\n"
         "Instruksi Kerja:\n"
         "1. Identifikasi format dokumen masukan (PDF, PPTX, gambar tunggal).\n"
-        "2. Delegasikan tugas ke sub-agent yang relevan.\n"
-        "3. Jika ada diagram visual, evaluasi kelayakannya dan ekstrak kode Mermaid.js.\n"
-        "4. Jika ada tabel transaksional, pisahkan ke basis data SQLite dan lakukan audit verifikasi ganda.\n"
+        "2. Delegasikan tugas ke sub-agent yang relevan (misal summon 'diagram-mermaid-specialist' jika ada diagram visual, 'tabular-db-specialist' jika ada tabel data).\n"
+        "3. Gabungkan hasil ekstraksi teks dengan blok Mermaid dan tabel.\n"
+        "4. Lakukan tahap Judge / Koreksi Ulang ('judge_and_refine_markdown') untuk memverifikasi bahwa Markdown gabungan benar-benar merefleksikan seluruh isi visual dokumen tanpa ada yang terlewat.\n"
         "5. Sajikan hasil ekstraksi akhir yang rapi, lengkap dengan laporan database SQLite dan blok kode Mermaid bila ada."
     )
 
