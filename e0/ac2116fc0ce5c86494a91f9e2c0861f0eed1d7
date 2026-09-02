@@ -1,0 +1,24 @@
+README.md
+  s_8a58ddf7751670::t_ed8de607257120 142
+  s_8a58ddf7751670::t_515b8437065dd1 165-167,174
+  s_8a58ddf7751670::t_1177249b1d17ea 180-185,188-191,194-201,203-207,212-216,218-219,222-231,238-240,243,245-249,251-264
+  s_8a58ddf7751670::t_58a61f17fd0e17 3,10,12,16-56
+  s_8a58ddf7751670::t_a1e4c21caa26f0 122-124,126
+  s_8a58ddf7751670::t_7f0d7591f70e03 175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "e0ac2116fc0ce5c86494a91f9e2c0861f0eed1d7",
+  "prompts": {},
+  "sessions": {
+    "s_8a58ddf7751670": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f9f0309cfffeYJ7Llt3yqTI2jB",
+        "model": "unknown"
+      },
+      "human_author": "daruoktab <daruokta@gmail.com>"
+    }
+  }
+}
