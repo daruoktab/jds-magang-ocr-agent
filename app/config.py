@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 DEFAULT_DPI: int = 200
 PDF_PAGE_BATCH: int = 10
@@ -103,15 +105,22 @@ def get_settings() -> Settings:
     return _settings
 
 
-def setup_logging(level: str | None = None) -> None:
-    """Inisialisasi logging terformat dengan timestamp."""
+def setup_logging(level: str | None = None, log_file: str | Path | None = None) -> None:
+    """Inisialisasi logging terformat dengan timestamp ke konsol dan opsional ke file."""
     effective_level = (level or get_settings().log_level).upper()
     log_format = "%(asctime)s | %(levelname)-7s | [%(name)s] %(message)s"
     date_format = "%H:%M:%S"
+
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    if log_file:
+        p = Path(log_file).resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(str(p), mode="a", encoding="utf-8"))
 
     logging.basicConfig(
         level=getattr(logging, effective_level, logging.INFO),
         format=log_format,
         datefmt=date_format,
+        handlers=handlers,
         force=True,
     )

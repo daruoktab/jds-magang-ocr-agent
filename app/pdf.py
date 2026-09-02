@@ -2,7 +2,7 @@
 Modul Pemrosesan Dokumen PDF Multi-Halaman.
 
 Menyediakan fungsi untuk:
-  - Render PDF menjadi citra (DPI tinggi) menggunakan PyMuPDF (fitz) atau pypdfium2.
+  - Render PDF menjadi citra (DPI tinggi) menggunakan PyMuPDF atau pypdfium2.
   - Menghitung jumlah halaman PDF.
   - Memproses seluruh halaman PDF dalam batch 10 halaman (PDF_PAGE_BATCH).
   - Ekstraksi teks native / terstruktur per-halaman langsung via PyMuPDF.
@@ -36,9 +36,9 @@ def pdf_page_count(pdf_path: str | Path) -> int:
         raise FileNotFoundError(f"File PDF tidak ditemukan: {path_obj}")
 
     try:
-        import fitz  # PyMuPDF
+        import pymupdf
 
-        doc = fitz.open(str(path_obj))
+        doc = pymupdf.open(str(path_obj))
         count = len(doc)
         doc.close()
         return count
@@ -92,11 +92,11 @@ def pdf_to_images(
 
     # Coba PyMuPDF terlebih dahulu (lebih cepat dan tajam)
     try:
-        import fitz  # PyMuPDF
+        import pymupdf
 
-        doc = fitz.open(str(path_obj))
+        doc = pymupdf.open(str(path_obj))
         zoom = dpi / 72.0
-        mat = fitz.Matrix(zoom, zoom)
+        mat = pymupdf.Matrix(zoom, zoom)
 
         target_pages = pages if pages is not None else list(range(len(doc)))
 
@@ -152,9 +152,9 @@ def extract_pdf_markdown_mupdf(
     if not path_obj.exists():
         raise FileNotFoundError(f"File PDF tidak ditemukan: {path_obj}")
 
-    import fitz
+    import pymupdf
 
-    doc = fitz.open(str(path_obj))
+    doc = pymupdf.open(str(path_obj))
     total_pages = len(doc)
     doc.close()
 
@@ -170,21 +170,26 @@ def extract_pdf_markdown_mupdf(
             image_path=str(output_dir) if output_dir else None,
         )
     except ImportError:
-        import fitz
+        import pymupdf
 
-        doc = fitz.open(str(path_obj))
+        doc = pymupdf.open(str(path_obj))
         chunks = []
         target_indices = pages if pages is not None else list(range(len(doc)))
         for pno in target_indices:
             if pno < len(doc):
-                chunks.append({"text": doc[pno].get_text("text"), "metadata": {"page": pno + 1}})
+                chunks.append({
+                    "text": doc[pno].get_text("text"),
+                    "metadata": {"page": pno + 1},
+                })
         doc.close()
         md_text = chunks
 
     result: dict[str, Any] = {
         "file_path": str(path_obj),
         "total_pages": total_pages,
-        "extracted_pages_count": len(md_text) if isinstance(md_text, list) else total_pages,
+        "extracted_pages_count": len(md_text)
+        if isinstance(md_text, list)
+        else total_pages,
         "pages": [],
     }
 
@@ -193,15 +198,13 @@ def extract_pdf_markdown_mupdf(
         for idx, item in enumerate(md_text, start=1):
             meta = item.get("metadata", {})
             page_num = meta.get("page", idx)
-            formatted_pages.append(
-                {
-                    "page": page_num,
-                    "text": item.get("text", ""),
-                    "metadata": meta,
-                    "tables": item.get("tables", []),
-                    "images": item.get("images", []),
-                }
-            )
+            formatted_pages.append({
+                "page": page_num,
+                "text": item.get("text", ""),
+                "metadata": meta,
+                "tables": item.get("tables", []),
+                "images": item.get("images", []),
+            })
         return formatted_pages
 
     return result
@@ -233,9 +236,11 @@ def process_multipage_pdf(
 
     if pipeline is None:
         from .graph import DocumentExtractionPipeline
+
         pipeline = DocumentExtractionPipeline(vlm=llm)
     elif hasattr(pipeline, "invoke") and not hasattr(pipeline, "run"):
         from .graph import DocumentExtractionPipeline
+
         pipeline = DocumentExtractionPipeline(vlm=pipeline)
 
     pages: list[DocumentPage] = []
@@ -250,9 +255,13 @@ def process_multipage_pdf(
     if db_path:
         resolved_db_path: Path | None = Path(db_path).resolve()
     elif output_dir:
-        resolved_db_path = Path(output_dir).resolve() / "databases" / f"{pdf_path.stem}.sqlite"
+        resolved_db_path = (
+            Path(output_dir).resolve() / "databases" / f"{pdf_path.stem}.sqlite"
+        )
     else:
-        resolved_db_path = Path("output/databases").resolve() / f"{pdf_path.stem}.sqlite"
+        resolved_db_path = (
+            Path("output/databases").resolve() / f"{pdf_path.stem}.sqlite"
+        )
 
     if resolved_db_path:
         resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -268,7 +277,12 @@ def process_multipage_pdf(
         )
 
         for idx, img_path in enumerate(page_images, start=b_start + 1):
-            logger.info("Memproses Halaman %d / %d dari '%s'...", idx, total_pages, pdf_path.name)
+            logger.info(
+                "Memproses Halaman %d / %d dari '%s'...",
+                idx,
+                total_pages,
+                pdf_path.name,
+            )
 
             # Jalur 1: Ekstraksi Teks Markdown VLM dengan konteks halaman sebelumnya
             res = pipeline.run(
@@ -282,7 +296,9 @@ def process_multipage_pdf(
 
             pages_md.append(page_md)
             all_page_specs.append(detected_specs)
-            previous_context = page_md[-400:] if len(page_md) > 400 else page_md
+            previous_context = (
+                page_md[-400:] if len(page_md) > 400 else page_md
+            )
 
             pages.append(
                 DocumentPage(
@@ -325,7 +341,9 @@ def process_multipage_pdf(
         )
 
     # Hitung konsensus spesifikasi layout utama dokumen
-    flat_specs = [s for page_spec in all_page_specs for s in page_spec if s != "plain"]
+    flat_specs = [
+        s for page_spec in all_page_specs for s in page_spec if s != "plain"
+    ]
     dominant_specs = normalize_specs(flat_specs) if flat_specs else ["plain"]
     primary_doc_type = dominant_specs[0] if dominant_specs else "plain"
 

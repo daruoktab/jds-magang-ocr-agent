@@ -17,6 +17,7 @@ Fitur:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import time
@@ -27,6 +28,8 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
+
+logger = logging.getLogger("app.tabular_db")
 
 from .schemas import (
     DualTrackGuardrailReport,
@@ -1149,6 +1152,12 @@ def process_page_tabular_agent(
 
     # 1. Pahami tabel pada halaman
     parsed_tables = parse_markdown_tables(page_markdown)
+    if parsed_tables:
+        logger.info(
+            "Sub-Agent SQL [Halaman %d]: Terdeteksi %d tabel, mengevaluasi ingesti ke SQLite...",
+            page_number,
+            len(parsed_tables),
+        )
     src_stem = Path(source_file).stem if source_file else "doc"
     base_prefix = sanitize_identifier(table_name_prefix or src_stem)
 
@@ -1286,6 +1295,13 @@ def process_page_tabular_agent(
 
         event_status = "appended_existing_table" if is_append else "created_new_table"
 
+    if total_page_rows > 0:
+        logger.info(
+            "Sub-Agent SQL [Halaman %d]: Sukses ingesti total %d baris ke tabel SQLite.",
+            page_number,
+            total_page_rows,
+        )
+
     # Sematkan metadata tag <!-- sqlite_table: <name> --> ke Markdown halaman
     tagged_markdown = tag_markdown_tables_with_sqlite_metadata(page_markdown, table_mappings_for_tagging)
 
@@ -1337,6 +1353,11 @@ def cross_verify_dual_track(
 
     total_md_rows = sum(len(t["rows"]) for t in md_tables)
     total_sqlite_rows = sum(t_info.get("row_count", 0) for t_info in sqlite_tables.values())
+    logger.info(
+        "Guardrail Cross-Verification: Memeriksa integritas teks Markdown vs SQLite (%d tabel MD, %d tabel SQLite)...",
+        total_md_tables,
+        total_sqlite_tables,
+    )
 
     table_comparisons: list[dict[str, Any]] = []
     discrepancies: list[str] = []
@@ -1394,6 +1415,13 @@ def cross_verify_dual_track(
             if total_md_tables == 0
             else f"Perhatian: {'; '.join(discrepancies)}"
         )
+
+    logger.info(
+        "Guardrail Cross-Verification selesai: Status '%s', Total baris MD: %d, Total baris SQLite: %d",
+        guardrail_status,
+        total_md_rows,
+        total_sqlite_rows,
+    )
 
     return DualTrackGuardrailReport(
         source_file=source_file,

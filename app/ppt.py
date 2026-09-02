@@ -59,7 +59,11 @@ def _find_libreoffice_binary() -> str | None:
                 return str(c)
 
     # 3. Lokasi standar Linux / macOS
-    for loc in ("/usr/bin/soffice", "/usr/bin/libreoffice", "/Applications/LibreOffice.app/Contents/MacOS/soffice"):
+    for loc in (
+        "/usr/bin/soffice",
+        "/usr/bin/libreoffice",
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+    ):
         if Path(loc).exists():
             return loc
 
@@ -107,8 +111,11 @@ def _convert_presentation_to_pdf(
     target_dir = output_dir or Path(tempfile.mkdtemp(prefix="pptx_pdf_"))
     target_dir.mkdir(parents=True, exist_ok=True)
 
+    # Gunakan profile isolated agar bebas dari file lock jika LibreOffice GUI sedang dibuka
+    user_profile = (target_dir / "lo_profile").as_uri()
     cmd = [
         soffice,
+        f"-env:UserInstallation={user_profile}",
         "--headless",
         "--convert-to",
         "pdf",
@@ -150,7 +157,9 @@ def _render_slides_native_pptx(
 
     # Buat sub-folder sementara untuk PDF perantara
     temp_pdf_dir = Path(tempfile.mkdtemp(prefix="pptx_render_"))
-    pdf_file = _convert_presentation_to_pdf(presentation_path, output_dir=temp_pdf_dir)
+    pdf_file = _convert_presentation_to_pdf(
+        presentation_path, output_dir=temp_pdf_dir
+    )
 
     if not pdf_file or not pdf_file.exists():
         raise RuntimeError(
@@ -220,7 +229,9 @@ def render_presentation_slides_to_images(
     )
 
 
-def pptx_to_structured_text(presentation_path: str | Path) -> list[dict[str, Any]]:
+def pptx_to_structured_text(
+    presentation_path: str | Path,
+) -> list[dict[str, Any]]:
     """
     Ekstrak teks, tabel, dan catatan pembicara (speaker notes) dari file PowerPoint secara native.
     """
@@ -249,265 +260,265 @@ def pptx_to_structured_text(presentation_path: str | Path) -> list[dict[str, Any
                 if shape == slide.shapes.title:
                     slide_title = text
                 else:
-                    for p in text_frame.paragraphs:
-                        p_text = p.text.strip()
-                        if p_text:
-                            level = p.level
-                            prefix = "  " * level + "- " if level > 0 else "- "
-                            paragraphs.append(f"{prefix}{p_text}")
+                    paragraphs.append(text)
 
+            # Ekstrak tabel jika ada di dalam slide
             elif shape.has_table:
-                tbl = shape.table
-                table_rows: list[list[str]] = []
-                for row in tbl.rows:
-                    row_cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
-                    table_rows.append(row_cells)
-                tables_extracted.append(table_rows)
+                table = shape.table
+                table_matrix: list[list[str]] = []
+                for row in table.rows:
+                    row_vals = [cell.text.strip() for cell in row.cells]
+                    table_matrix.append(row_vals)
+                if table_matrix:
+                    tables_extracted.append(table_matrix)
 
-        # Speaker notes jika ada
+        # Ekstrak catatan pembicara (notes_slide) jika ada
         notes_text = ""
         if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
             notes_text = slide.notes_slide.notes_text_frame.text.strip()
 
-        # Susun Markdown per slide
-        md_lines: list[str] = []
-        md_lines.append(f"<!-- SLIDE: {idx} -->")
-        if slide_title:
-            md_lines.append(f"# {slide_title}\n")
-        elif paragraphs:
-            md_lines.append(f"# Slide {idx}\n")
-
-        if paragraphs:
-            md_lines.extend(paragraphs)
-            md_lines.append("")
-
-        # Format tabel jika ada
-        for tbl in tables_extracted:
-            if not tbl:
-                continue
-            header = tbl[0]
-            md_lines.append("| " + " | ".join(header) + " |")
-            md_lines.append("| " + " | ".join(["---"] * len(header)) + " |")
-            for r in tbl[1:]:
-                padded = r + [""] * (len(header) - len(r))
-                md_lines.append("| " + " | ".join(padded[: len(header)]) + " |")
-            md_lines.append("")
-
-        if notes_text:
-            md_lines.append(f"> **Speaker Notes:** {notes_text}\n")
-
-        slides_data.append(
-            {
-                "slide_number": idx,
-                "title": slide_title,
-                "paragraphs": paragraphs,
-                "tables_count": len(tables_extracted),
-                "has_notes": bool(notes_text),
-                "markdown": "\n".join(md_lines).strip(),
-            }
-        )
+        slides_data.append({
+            "slide_number": idx,
+            "title": slide_title,
+            "paragraphs": paragraphs,
+            "tables": tables_extracted,
+            "notes": notes_text,
+        })
 
     return slides_data
 
 
-def _extract_slide_markdown(
-    llm: BaseChatModel,
-    image_path: str | Path,
-    slide_number: int,
-    total_slides: int,
-    previous_slide_context: str | None = None,
+def process_presentation(
+    presentation_path: str | Path | None = None,
+    output_markdown_path: str | Path | None = None,
+    source_name: str | None = None,
+    force_all_tables: bool = False,
+    db_path: str | Path | None = None,
+    *,
+    pptx_path: str | Path | None = None,
+    **kwargs: Any,
 ) -> str:
-    """Ekstrak konten satu gambar slide PowerPoint menggunakan Vision LLM."""
-    base64_img, mime = encode_image_to_base64(image_path)
-    img_data_url = f"data:{mime};base64,{base64_img}"
+    """
+    Pipeline ekstraksi PPT native (sangat cepat, tanpa butuh Vision LLM).
+    Mengembalikan string Markdown hasil ekstraksi, dan opsional menyimpan ke file jika output_markdown_path ditentukan.
+    """
+    path_val = presentation_path or pptx_path
+    if path_val is None:
+        raise ValueError("presentation_path atau pptx_path harus ditentukan.")
+    path_obj = Path(path_val).resolve()
+    if not path_obj.exists():
+        raise FileNotFoundError(f"File presentasi tidak ditemukan: {path_obj}")
 
-    system_prompt = get_vision_system_prompt(["presentation_slides"])
+    src = source_name or path_obj.name
+    slides = pptx_to_structured_text(path_obj)
 
-    context_prompt = ""
-    if previous_slide_context:
-        context_prompt = (
-            f"\n\n[Konteks Slide Sebelumnya #{slide_number - 1}]:\n"
-            f"'''\n{previous_slide_context[-300:]}\n'''\n"
-            "Gunakan konteks ini untuk menjaga kesinambungan poin bahasan jika slide ini merupakan kelanjutan topik."
+    pages_markdown: list[str] = []
+    for s in slides:
+        idx = s["slide_number"]
+        title = s["title"] or f"Slide {idx}"
+        lines = [f"## {title}\n"]
+
+        if s["paragraphs"]:
+            for p in s["paragraphs"]:
+                lines.append(f"{p}\n")
+
+        if s["tables"]:
+            for t in s["tables"]:
+                if len(t) >= 1:
+                    headers = t[0]
+                    lines.append("| " + " | ".join(headers) + " |")
+                    lines.append(
+                        "| " + " | ".join(["---"] * len(headers)) + " |"
+                    )
+                    for r in t[1:]:
+                        lines.append("| " + " | ".join(r) + " |")
+                    lines.append("")
+
+        if s["notes"]:
+            lines.append(f"> **Speaker Notes:** {s['notes']}\n")
+
+        pages_markdown.append("\n".join(lines))
+
+    stitched_md = stitch_pages_to_markdown(pages_markdown, source_name=src)
+
+    # Sub-agent SQL per-slide pada teks yang terdeteksi
+    if db_path:
+        db_out_path = Path(db_path).resolve()
+    elif output_markdown_path:
+        db_out_path = (
+            Path(output_markdown_path).resolve().parent
+            / "databases"
+            / f"{path_obj.stem}.sqlite"
+        )
+    else:
+        db_out_path = (
+            Path("output/databases").resolve() / f"{path_obj.stem}.sqlite"
+        )
+    db_out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    for page_no, p_md in enumerate(pages_markdown, start=1):
+        process_page_tabular_agent(
+            page_markdown=p_md,
+            page_number=page_no,
+            source_file=src,
+            db_path=db_out_path,
+            table_name_prefix=path_obj.stem,
+            force_all_tables=force_all_tables,
         )
 
-    user_instruction = (
-        f"Ekstrak Slide Presentasi #{slide_number} dari total {total_slides} slide.{context_prompt}\n\n"
-        "Aturan Khusus Slide Presentasi:\n"
-        f"1. Awali hasil dengan penanda `<!-- SLIDE: {slide_number} -->`.\n"
-        "2. Judul slide jadikan `# Judul Slide`.\n"
-        "3. Poin-poin peluru jadikan `- Poin` dengan indentasi yang tepat jika bertingkat.\n"
-        "4. Jika terdapat tabel, tulis sebagai tabel Markdown standar.\n"
-        "5. Jika terdapat diagram alur/hierarki visual sederhana, buatkan ```mermaid jika memungkinkan atau deskripsikan secara runtut.\n"
-        "6. Jangan berikan teks pembuka atau penutup basa-basi, langsung hasilkan Markdown."
+    # Dual-track guardrail verification
+    cross_verify_dual_track(
+        stitched_markdown=stitched_md,
+        db_path=db_out_path,
+        source_file=src,
+        total_pages=len(slides),
     )
 
-    msg = HumanMessage(
-        content=[
-            {"type": "text", "text": f"{system_prompt}\n\n{user_instruction}"},
-            {"type": "image_url", "image_url": {"url": img_data_url}},
-        ]
-    )
+    if output_markdown_path:
+        out_file = Path(output_markdown_path).resolve()
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(stitched_md, encoding="utf-8")
+        logger.info("Hasil PPT native berhasil disimpan ke: %s", out_file)
 
-    response = llm.invoke([msg])
-    content = response.content if hasattr(response, "content") else str(response)
-    if isinstance(content, list):
-        text_parts = [p.get("text", "") for p in content if isinstance(p, dict)]
-        content = "".join(text_parts)
-
-    return str(content).strip()
-
-
-def pptx_to_markdown_native(pptx_path: str | Path) -> str:
-    """Ekstraksi teks slide PPTX secara instan murni berbasis python-pptx."""
-    slides = pptx_to_structured_text(pptx_path)
-    file_stem = Path(pptx_path).stem.replace("_", " ").title()
-
-    doc_lines: list[str] = [f"# {file_stem}\n"]
-    for s in slides:
-        doc_lines.append(s["markdown"])
-        doc_lines.append("\n---\n")
-
-    return "\n".join(doc_lines).strip()
+    return stitched_md
 
 
 def process_presentation_vision(
-    pptx_path: str | Path,
-    pipeline: Any = None,
-    *,
-    llm: BaseChatModel | None = None,
-    output_dir: str | Path | None = None,
+    presentation_path: str | Path | None = None,
+    output_markdown_path: str | Path | None = None,
+    vlm_model: BaseChatModel | None = None,
+    source_name: str | None = None,
     dpi: int = DEFAULT_DPI,
-    forced_specs: list[str] | str | None = "presentation_slides",
-    db_path: str | Path | None = None,
-    auto_tabular_db: bool = True,
+    image_ext: str = "jpg",
     force_all_tables: bool = False,
+    *,
+    pptx_path: str | Path | None = None,
+    pipeline: Any = None,
+    output_dir: str | Path | None = None,
+    forced_specs: str | None = None,
+    db_path: str | Path | None = None,
+    **kwargs: Any,
 ) -> str:
     """
-    Render slide PPT/PPTX menjadi gambar kanvas per slide dan jalankan arsitektur Dual-Track:
-      - Jalur 1: Mengirim slide langsung ke VLM.
-      - Jalur 2: Sub-Agent SQL mandiri per slide untuk memproses dan meng-ingest tabel SQLite.
-      - Tahap Akhir: Guardrail Cross-Verification oleh Agent Pusat.
+    Pipeline ekstraksi PPT berbasis Vision VLM.
+    Mengembalikan string Markdown hasil ekstraksi, dan opsional menyimpan ke file jika output_markdown_path ditentukan.
     """
-    path_obj = Path(pptx_path).resolve()
+    path_val = presentation_path or pptx_path
+    if path_val is None:
+        raise ValueError("presentation_path atau pptx_path harus ditentukan.")
+    path_obj = Path(path_val).resolve()
+    if not path_obj.exists():
+        raise FileNotFoundError(f"File presentasi tidak ditemukan: {path_obj}")
 
-    logger.info("[Vision PPT] Memulai rendering slide menjadi gambar PNG kanvas...")
+    src = source_name or path_obj.name
+
+    target_slides_dir = (
+        Path(output_dir)
+        if output_dir
+        else Path("output/pptx_slides") / path_obj.stem
+    )
+
+    logger.info("[Vision PPT] Memulai rendering slide menjadi gambar...")
     slide_images = render_presentation_slides_to_images(
-        presentation_path=path_obj,
-        output_dir=output_dir,
+        path_obj,
+        output_dir=target_slides_dir,
         dpi=dpi,
+        image_ext=image_ext,
     )
-    total_images = len(slide_images)
-    if total_images == 0:
-        raise RuntimeError(f"Tidak ada slide yang berhasil dirender dari: {path_obj}")
-
     logger.info(
-        "[Vision PPT] Selesai render %d slide gambar. Memproses jalur ganda (VLM & Tabular Sub-Agent)...",
-        total_images,
+        "[Vision PPT] Selesai render %d slide gambar", len(slide_images)
     )
 
-    slide_markdowns: list[str] = []
-    previous_context: str | None = None
-    file_stem = path_obj.stem.replace("_", " ").title()
+    if db_path:
+        db_out_path = Path(db_path).resolve()
+    elif output_markdown_path:
+        db_out_path = (
+            Path(output_markdown_path).resolve().parent
+            / "databases"
+            / f"{path_obj.stem}.sqlite"
+        )
+    else:
+        db_out_path = (
+            Path("output/databases").resolve() / f"{path_obj.stem}.sqlite"
+        )
+    db_out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    vlm_llm: BaseChatModel | None = llm
-    if vlm_llm is None and pipeline is not None:
-        vlm_llm = getattr(pipeline, "vlm", pipeline)
-    if vlm_llm is None:
+    # Dapatkan model VLM atau pipeline
+    active_vlm = vlm_model
+    if active_vlm is None and pipeline is not None:
+        active_vlm = getattr(pipeline, "vlm", None) or getattr(
+            getattr(pipeline, "extractor", None), "llm", None
+        )
+
+    if active_vlm is None and pipeline is None:
         from .llm import get_vlm
 
-        vlm_llm = get_vlm()
+        active_vlm = get_vlm()
 
-    # Tentukan path SQLite jika aktif
-    if db_path:
-        resolved_db_path: Path | None = Path(db_path).resolve()
-    elif output_dir:
-        resolved_db_path = Path(output_dir).resolve() / "databases" / f"{path_obj.stem}.sqlite"
-    else:
-        resolved_db_path = Path("output/databases").resolve() / f"{path_obj.stem}.sqlite"
+    doc_spec = forced_specs or "presentation_slides"
+    sys_prompt = get_vision_system_prompt(doc_spec)
 
-    if resolved_db_path and auto_tabular_db:
-        resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
+    pages_markdown: list[str] = []
 
-    if pipeline is None:
-        from .graph import DocumentExtractionPipeline
-        pipeline = DocumentExtractionPipeline(vlm=vlm_llm)
-    elif hasattr(pipeline, "invoke") and not hasattr(pipeline, "run"):
-        from .graph import DocumentExtractionPipeline
-        pipeline = DocumentExtractionPipeline(vlm=pipeline)
-
-    for idx, img_path in enumerate(slide_images, start=1):
+    for idx, img_file in enumerate(slide_images, start=1):
         logger.info(
-            "[Vision PPT] [Slide %d/%d] Memproses slide '%s' via DocumentExtractionPipeline...",
+            "[Vision PPT] [Slide %d/%d] Memproses slide '%s'...",
             idx,
-            total_images,
-            img_path.name,
+            len(slide_images),
+            img_file.name,
         )
-        if hasattr(pipeline, "run"):
-            res = pipeline.run(
-                str(img_path),
-                forced_specs=forced_specs or "presentation_slides",
-                previous_page_context=previous_context,
-            )
-            page_md = res.get("markdown_content", "")
+
+        if pipeline is not None and hasattr(pipeline, "run"):
+            res = pipeline.run(str(img_file), forced_specs=doc_spec)
+            slide_md = res.get("markdown_content", "")
         else:
-            page_md = _extract_slide_markdown(
-                llm=vlm_llm,
-                image_path=str(img_path),
-                slide_number=idx,
-                total_slides=total_images,
-                previous_slide_context=previous_context,
+            if active_vlm is None:
+                raise RuntimeError("Model VLM tidak terinisialisasi.")
+            b64_data, mime = encode_image_to_base64(img_file)
+            msg = HumanMessage(
+                content=[
+                    {"type": "text", "text": sys_prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64_data}"},
+                    },
+                ]
             )
+            response = active_vlm.invoke([msg])
+            slide_md = str(response.content)
 
-        # Pastikan penanda slide ada
-        if not page_md.startswith(f"<!-- SLIDE: {idx} -->") and not page_md.startswith(f"<!-- slide: {idx} -->"):
-            page_md = f"<!-- SLIDE: {idx} -->\n" + page_md
+        # Jalankan Sub-Agent SQL mandiri per slide
+        process_page_tabular_agent(
+            page_markdown=slide_md,
+            page_number=idx,
+            source_file=src,
+            db_path=db_out_path,
+            table_name_prefix=path_obj.stem,
+            force_all_tables=force_all_tables,
+        )
 
-        slide_markdowns.append(page_md)
-        previous_context = page_md[-400:] if len(page_md) > 400 else page_md
+        pages_markdown.append(slide_md)
 
-        # Jalur 2: Sub-Agent SQL Tabular Engine per slide
-        if auto_tabular_db and resolved_db_path:
-            tab_event, _ = process_page_tabular_agent(
-                page_markdown=page_md,
-                page_number=idx,
-                source_file=str(path_obj.resolve()),
-                db_path=resolved_db_path,
-                table_name_prefix=path_obj.stem,
-                append_if_matching=True,
-                force_all_tables=force_all_tables,
-            )
-            if tab_event.tagged_markdown:
-                page_md = tab_event.tagged_markdown
-                slide_markdowns[-1] = page_md
+    stitched_md = stitch_pages_to_markdown(pages_markdown, source_name=src)
 
-            if tab_event.tables_detected > 0:
-                logger.info(
-                    "[Sub-Agent SQL Slide %d] Terdeteksi %d tabel | Status: %s | Baris: %d",
-                    idx,
-                    tab_event.tables_detected,
-                    tab_event.status,
-                    tab_event.rows_ingested_total,
-                )
-
-    stitched = stitch_pages_to_markdown(
-        slide_markdowns,
-        document_title=file_stem,
-        include_page_markers=True,
-        is_slide=True,
+    # Jalankan Dual-track Guardrail Cross-Verification
+    cross_verify_dual_track(
+        stitched_markdown=stitched_md,
+        db_path=db_out_path,
+        source_file=src,
+        total_pages=len(slide_images),
     )
 
-    # Supervisor Guardrail Audit
-    if auto_tabular_db and resolved_db_path:
-        cross_verify_dual_track(
-            stitched_markdown=stitched,
-            db_path=resolved_db_path,
-            source_file=str(path_obj.resolve()),
-            total_pages=total_images,
-        )
+    if output_markdown_path:
+        out_file = Path(output_markdown_path).resolve()
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(stitched_md, encoding="utf-8")
+        logger.info("Hasil Vision PPT berhasil disimpan ke: %s", out_file)
 
-    return stitched
+    return stitched_md
 
 
+# Alias kompatibilitas
+process_presentation_native_pipeline = process_presentation
+process_presentation_vision_pipeline = process_presentation_vision
 convert_presentation_to_pdf = _convert_presentation_to_pdf
-process_presentation = pptx_to_markdown_native

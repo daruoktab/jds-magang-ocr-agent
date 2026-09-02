@@ -155,6 +155,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Aktifkan pesan log level DEBUG.",
     )
+    parser.add_argument(
+        "--log-file",
+        dest="log_file",
+        default=None,
+        help="Path ke file untuk menyimpan log eksekusi secara real-time.",
+    )
     return parser
 
 
@@ -164,7 +170,7 @@ def main() -> int:
 
     # Konfigurasi level logging
     log_level = "DEBUG" if args.debug else "INFO"
-    setup_logging(level=log_level)
+    setup_logging(level=log_level, log_file=args.log_file)
 
     settings = get_settings()
 
