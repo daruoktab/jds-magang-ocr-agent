@@ -1,6 +1,16 @@
 """
-Harness Deep Reasoning Agents untuk Ekstraksi Dokumen Vision VLM -> Markdown Siap Chunking, Tabular SQLite Ingestion, & Diagram Mermaid.js.
-Menggunakan arsitektur Master Orchestrator dengan 7 Sub-Agent terspesialisasi berbasis Vision Language Model murni.
+Harness Deep Reasoning Agent (Autonomous Orchestrator) untuk ekstraksi dokumen
+internal perusahaan: Vision VLM -> Markdown siap chunking, SQLite tabular,
+transkrip chat, form tanda tangan, & diagram Mermaid.js.
+
+Berbeda dengan `app/agents.py` (profil prompt deterministik), file ini membangun
+AI agent sungguhan via `deepagents.create_deep_agent`:
+  - Master Orchestrator LLM yang MEMUTUSKAN sendiri tool/sub-agent mana yang
+    dipanggil berdasarkan konteks dokumen.
+  - 7 Sub-Agent terspesialisasi (klasifikasi, ekstraksi, diagram, PPT, PDF,
+    chunking, SQLite) yang dapat di-summon oleh master.
+  - Semua tool terintegrasi dengan flag CLI: `db_path` & `output_markdown_path`
+    di-bake ke dalam tool sehingga deep agent menghormati `-o` dan `--db-path`.
 """
 
 from __future__ import annotations
@@ -36,7 +46,12 @@ from .tabular_db import (
 )
 
 
-def build_deep_agent(settings: Settings | None = None) -> Any:
+def build_deep_agent(
+    settings: Settings | None = None,
+    *,
+    db_path: str | Path | None = None,
+    output_markdown_path: str | Path | None = None,
+) -> Any:
     """
     Bangun Deep Reasoning Agent utama dengan armada 7 Sub-Agent spesialis (Pure VLM):
       1. `layout-classifier`          : Mengklasifikasikan multi-trait dokumen
@@ -46,16 +61,25 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
       5. `pdf-orchestrator`           : Orkestrasi multi-halaman PDF & heading continuity
       6. `chunking-simulator`         : Simulasi partisi teks Markdown siap RAG
       7. `tabular-db-specialist`      : Deteksi tabel transaksional, ingesti ke SQLite, double-verification, & eksekusi SQL
+
+    Args:
+        db_path: Path SQLite target (dari flag CLI --db-path). Semua tool tabular
+                 default ke path ini sehingga deep-agent menghormati flag CLI.
+        output_markdown_path: Path output Markdown (dari flag CLI -o). Tool PPT/PDF
+                              menulis streaming per-halaman ke file ini.
     """
     resolved_settings = settings or get_settings()
     vlm = build_vlm(resolved_settings)
     extractor = VisionExtractor(vlm)
 
+    default_db_path = str(db_path) if db_path else None
+    default_out_path = str(output_markdown_path) if output_markdown_path else None
+
     # --- Tool Definitions ---
 
     @tool
     def classify_layout(image_path: str) -> str:
-        """Analisis gambar dokumen dan kembalikan daftar spesifikasi layout yang aktif (plain, markdown_hierarchy, bilingual_journal, presentation_slides)."""
+        """Analisis gambar dokumen dan kembalikan daftar spesifikasi layout yang aktif (plain, markdown_hierarchy, bilingual_journal, presentation_slides, chat_transcript, signature_form)."""
         proc = preprocess_image(image_path)
         specs = extractor.classify(proc.processed_path)
         return json.dumps({"specs": specs}, ensure_ascii=False)
@@ -66,7 +90,7 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         specs: str = "plain",
         previous_context: str | None = None,
     ) -> str:
-        """Ekstrak gambar dokumen menjadi teks Markdown bersih sesuai satu atau kombinasi spesifikasi (mis. 'journal,hierarchy', 'presentation_slides')."""
+        """Ekstrak gambar dokumen menjadi teks Markdown bersih sesuai satu atau kombinasi spesifikasi (mis. 'journal,hierarchy', 'presentation_slides', 'chat_transcript,signature_form')."""
         proc = preprocess_image(image_path)
         agent = get_agent(specs)
         return agent.run(
@@ -94,8 +118,13 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
 
     @tool
     def extract_presentation_pptx(pptx_path: str) -> str:
-        """Ekstrak dokumen presentasi PowerPoint (.pptx/.ppt) dengan merender tiap slide menjadi gambar kanvas visual lalu dianalisis oleh VLM."""
-        res = process_presentation_vision(pptx_path, llm=vlm)
+        """Ekstrak dokumen presentasi PowerPoint (.pptx/.ppt) dengan merender tiap slide menjadi gambar kanvas visual lalu dianalisis oleh VLM. Output streaming per-slide ke file Markdown target."""
+        res = process_presentation_vision(
+            pptx_path,
+            llm=vlm,
+            db_path=default_db_path,
+            output_markdown_path=default_out_path,
+        )
         return res if isinstance(res, str) else res.full_markdown
 
     @tool
@@ -103,12 +132,14 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         pdf_path: str,
         forced_specs: str | None = None,
     ) -> str:
-        """Ekstrak dokumen PDF multi-halaman dengan heading continuity, ekstraksi tabel mandiri per-halaman ke SQLite, dan audit guardrail jalur ganda."""
+        """Ekstrak dokumen PDF multi-halaman dengan heading continuity, ekstraksi tabel mandiri per-halaman ke SQLite, dan audit guardrail jalur ganda. Output streaming per-halaman ke file Markdown target."""
         res = process_multipage_pdf(
             pdf_path,
             llm=vlm,
             forced_specs=forced_specs,
             auto_tabular_db=True,
+            db_path=default_db_path,
+            output_markdown_path=default_out_path,
         )
         return res.full_markdown
 
@@ -150,7 +181,7 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         """Ekstrak tabel-tabel transaksional dari teks Markdown, buat skema otomatis, ingest ke database SQLite, dan lakukan verifikasi ganda."""
         results = extract_and_ingest_tables_from_markdown(
             markdown_text=markdown_text,
-            db_path=db_path,
+            db_path=db_path or default_db_path,
             table_name_prefix=table_name_prefix,
             force_all_tables=force_all,
             llm=vlm,
@@ -160,14 +191,14 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
     @tool
     def inspect_sqlite_tables(db_path: str | None = None) -> str:
         """Inspeksi database SQLite dokumen untuk melihat daftar seluruh tabel aktif, struktur skema kolom, jumlah baris, dan sampel data."""
-        mgr = TabularDatabaseManager(db_path)
+        mgr = TabularDatabaseManager(db_path or default_db_path)
         info = mgr.inspect_database()
         return json.dumps(info, indent=2, ensure_ascii=False)
 
     @tool
     def query_sqlite_database(query: str, db_path: str | None = None) -> str:
         """Eksekusi query SELECT analitik SQL pada database SQLite dokumen secara aman."""
-        res = query_sqlite(query, db_path=db_path)
+        res = query_sqlite(query, db_path=db_path or default_db_path)
         return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
 
     @tool
@@ -177,7 +208,7 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
         db_path: str | Path | None = None,
     ) -> str:
         """Lakukan audit verifikasi ganda (double-verification) pada tabel SQLite (integritas baris, skema, agregasi SUM/AVG, dan kontinuitas saldo transaksi)."""
-        mgr = TabularDatabaseManager(db_path)
+        mgr = TabularDatabaseManager(db_path or default_db_path)
         verifier = TabularVerifier(mgr, llm=vlm)
         report = verifier.verify_table(table_name, expected_row_count=expected_rows)
         return json.dumps(report.model_dump(), indent=2, ensure_ascii=False)
@@ -211,8 +242,12 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
             name="layout-classifier",
             description="Sub-agent untuk mengidentifikasi dan mengklasifikasikan karakteristik layout dokumen.",
             system_prompt=(
-                "Anda adalah Sub-Agent Spesialis Klasifikasi Dokumen. "
-                "Tugas Anda: Analisis citra dan identifikasi seluruh karakteristik dokumen (plain, hierarchy, journal, slides). "
+                "Anda adalah Sub-Agent Spesialis Klasifikasi Dokumen Internal Perusahaan. "
+                "Tugas Anda: Analisis citra dan identifikasi seluruh karakteristik dokumen. "
+                "Spesifikasi valid: plain, markdown_hierarchy, bilingual_journal, presentation_slides, "
+                "chat_transcript, signature_form. "
+                "Dokumen perusahaan dapat memiliki beberapa spesifikasi sekaligus "
+                "(mis. slide presentasi + form tanda tangan, atau artikel multi-kolom + tabel data). "
                 "Gunakan tool 'classify_layout' untuk menentukan spesifikasi."
             ),
             tools=[classify_layout],
@@ -221,9 +256,12 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
             name="markdown-extractor",
             description="Sub-agent untuk mengekstrak citra halaman dokumen menjadi teks Markdown bersih siap chunking.",
             system_prompt=(
-                "Anda adalah Sub-Agent Spesialis Ekstraksi Markdown. "
+                "Anda adalah Sub-Agent Spesialis Ekstraksi Markdown untuk dokumen internal perusahaan. "
                 "Tugas Anda: Ubah citra dokumen menjadi teks Markdown bersih siap chunking RAG. "
-                "Pertahankan hierarki heading, list, dan konteks antar-halaman."
+                "Pertahankan hierarki heading, list, transkrip percakapan chat, tabel form persetujuan, "
+                "dan konteks antar-halaman. "
+                "Spesifikasi yang mungkin aktif: plain, markdown_hierarchy, bilingual_journal, "
+                "presentation_slides, chat_transcript, signature_form."
             ),
             tools=[extract_to_markdown],
         ),
@@ -287,21 +325,31 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
     ]
 
     master_system_prompt = (
-        "Anda adalah Master Orchestrator Deep Reasoning Agent untuk Sistem Ekstraksi Dokumen Vision VLM -> Markdown Siap Chunking, Tabular Database SQLite, & Diagram Mermaid.js.\n\n"
+        "Anda adalah Master Orchestrator Deep Reasoning Agent untuk Sistem Ekstraksi Dokumen Internal Perusahaan "
+        "(Vision VLM -> Markdown Siap Chunking, Tabular SQLite, & Mermaid).\n\n"
+        "Karakteristik dokumen yang mungkin ditemui: surat/memo/pengumuman (plain), SOP/SK/kebijakan (markdown_hierarchy), "
+        "artikel internal multi-kolom (bilingual_journal), slide presentasi (presentation_slides), "
+        "screenshot chat (chat_transcript), form tanda tangan/paraf (signature_form).\n\n"
         "Anda mengorkestrasi 7 Sub-Agent spesialis:\n"
         "  - 'layout-classifier'         : Menentukan tipe dokumen & karakteristik komposit.\n"
         "  - 'markdown-extractor'        : Mengonversi halaman menjadi Markdown bersih.\n"
-        "  - 'diagram-mermaid-specialist': Menangani diagram alur/relasi visual menjadi sintaks Mermaid.js.\n"
+        "  - 'diagram-mermaid-specialist': Menangani diagram alur/relasi/topologi visual menjadi sintaks Mermaid.js.\n"
         "  - 'presentation-specialist'   : Menangani slide PPT/PPTX visual.\n"
         "  - 'pdf-orchestrator'          : Mengelola multi-halaman PDF dengan heading continuity.\n"
         "  - 'chunking-simulator'        : Mensimulasikan pemotongan chunk siap RAG.\n"
         "  - 'tabular-db-specialist'     : Memisahkan tabel transaksional ke SQLite dan melakukan double-verification.\n\n"
         "Instruksi Kerja:\n"
         "1. Identifikasi format dokumen masukan (PDF, PPTX, gambar tunggal).\n"
-        "2. Delegasikan tugas ke sub-agent yang relevan (misal summon 'diagram-mermaid-specialist' jika ada diagram visual, 'tabular-db-specialist' jika ada tabel data).\n"
+        "2. Delegasikan tugas ke sub-agent yang relevan. Contoh: 'diagram-mermaid-specialist' jika ada diagram/topologi, "
+        "'tabular-db-specialist' jika ada tabel data transaksional.\n"
         "3. Gabungkan hasil ekstraksi teks dengan blok Mermaid dan tabel.\n"
-        "4. Lakukan tahap Judge / Koreksi Ulang ('judge_and_refine_markdown') untuk memverifikasi bahwa Markdown gabungan benar-benar merefleksikan seluruh isi visual dokumen tanpa ada yang terlewat.\n"
-        "5. Sajikan hasil ekstraksi akhir yang rapi, lengkap dengan laporan database SQLite dan blok kode Mermaid bila ada."
+        "4. Lakukan tahap Judge / Koreksi Ulang ('judge_and_refine_markdown') untuk memverifikasi bahwa "
+        "Markdown gabungan benar-benar merefleksikan seluruh isi visual dokumen tanpa ada yang terlewat.\n"
+        "5. Sajikan hasil ekstraksi akhir yang rapi, lengkap dengan laporan database SQLite dan blok kode Mermaid bila ada.\n\n"
+        "CATATAN PENTING:\n"
+        "- Output Markdown dan database SQLite sudah dikonfigurasi oleh sistem berdasarkan flag CLI. "
+        "Tool PPT/PDF dan tabular akan otomatis menulis ke path tersebut.\n"
+        "- Jangan menambahkan reasoning, komentar proses, atau marker halaman/slide ke dalam output."
     )
 
     agent = create_deep_agent(
@@ -313,8 +361,18 @@ def build_deep_agent(settings: Settings | None = None) -> Any:
     return agent
 
 
-def run_deep_reasoning_agent(prompt: str, settings: Settings | None = None) -> str:
+def run_deep_reasoning_agent(
+    prompt: str,
+    settings: Settings | None = None,
+    *,
+    db_path: str | Path | None = None,
+    output_markdown_path: str | Path | None = None,
+) -> str:
     """Eksekusi Deep Reasoning Agent dengan instruksi prompt pengguna."""
-    agent = build_deep_agent(settings)
+    agent = build_deep_agent(
+        settings,
+        db_path=db_path,
+        output_markdown_path=output_markdown_path,
+    )
     res = agent.invoke({"messages": [{"role": "user", "content": prompt}]})
     return res.get("messages", [])[-1].content if res.get("messages") else ""

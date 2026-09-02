@@ -18,7 +18,7 @@ from typing import cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from .llm import encode_image_to_base64 as encode_image_base64
+from .llm import image_data_uri
 from .schemas import (
     DiagramConvertibilityResult,
     DiagramExtractionResult,
@@ -177,7 +177,7 @@ def classify_diagram_convertibility(
     if not path_obj.exists():
         raise FileNotFoundError(f"File citra diagram tidak ditemukan: {path_obj}")
 
-    b64_img = encode_image_base64(path_obj)
+    image_uri = image_data_uri(path_obj)
 
     prompt = (
         "Analisis gambar ini dengan teliti untuk mengevaluasi apakah gambar ini berisi DIAGRAM yang cocok "
@@ -216,7 +216,7 @@ def classify_diagram_convertibility(
                 {"type": "text", "text": prompt},
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64_img}"},
+                    "image_url": {"url": image_uri},
                 },
             ],
         }
@@ -317,7 +317,7 @@ def extract_diagram_to_mermaid(
     if not path_obj.exists():
         raise FileNotFoundError(f"File citra tidak ditemukan: {path_obj}")
 
-    b64_img = encode_image_base64(path_obj)
+    image_uri = image_data_uri(path_obj)
 
     # 1. Evaluasi kelayakan jika tidak dipaksa
     convertibility: DiagramConvertibilityResult | None = None
@@ -341,7 +341,7 @@ def extract_diagram_to_mermaid(
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": f"data:image/png;base64,{b64_img}"
+                                    "url": image_uri
                                 },
                             },
                         ],
@@ -386,7 +386,7 @@ def extract_diagram_to_mermaid(
                 {"type": "text", "text": extract_prompt},
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64_img}"},
+                    "image_url": {"url": image_uri},
                 },
             ],
         }

@@ -124,7 +124,6 @@ def process_document_batch(
     forced_specs: str | None = None,
     dpi: int = 200,
     preview_chunks: bool = True,
-    use_agent: bool = False,
 ) -> str:
     """
     Ekstraksi dokumen massal.
@@ -151,7 +150,6 @@ def process_document_batch(
         forced_specs=forced_specs,
         dpi=dpi,
         preview_chunks=preview_chunks,
-        use_agent=use_agent,
         settings=settings,
     )
 
@@ -225,7 +223,7 @@ def extract_document(
 
 @server.tool(
     name="classify_document_layout",
-    description="Analisis karakteristik visual dokumen untuk mendeteksi spesifikasi layout yang relevan (plain, markdown_hierarchy, bilingual_journal, presentation_slides).",
+    description="Analisis karakteristik visual dokumen untuk mendeteksi spesifikasi layout yang relevan (plain, markdown_hierarchy, bilingual_journal, presentation_slides, chat_transcript, signature_form).",
 )
 def classify_document_layout(image_path: str) -> str:
     """

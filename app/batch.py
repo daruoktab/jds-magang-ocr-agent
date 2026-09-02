@@ -141,7 +141,6 @@ def batch_extract_documents(
     preview_chunks: bool = False,
     chunk_size: int = 1000,
     chunk_overlap: int = 150,
-    use_agent: bool = False,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     """
@@ -151,14 +150,13 @@ def batch_extract_documents(
         folders: Satu path folder/file, list path, atau string dipisah koma.
         limit: Batas total maksimal dokumen yang akan diproses secara keseluruhan.
         limit_per_folder: Batas maksimal dokumen per folder yang dipilih.
-        specs: Spesifikasi layout ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides', atau komposit).
+        specs: Spesifikasi layout ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides', 'chat_transcript', 'signature_form', atau komposit).
         forced_specs: Alias opsional untuk specs.
         output_dir: Direktori tempat menyimpan file Markdown hasil ekstraksi.
         dpi: Resolusi rendering gambar.
         preview_chunks: Apakah menyertakan simulasi statistik chunking.
         chunk_size: Ukuran chunk untuk simulasi.
         chunk_overlap: Overlap chunk untuk simulasi.
-        use_agent: Apakah menggunakan mode LangGraph Agent.
         settings: Pengaturan aplikasi.
     """
     resolved_settings = settings or get_settings()

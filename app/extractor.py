@@ -14,6 +14,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .llm import image_data_uri
+from .multi_page import collapse_consecutive_duplicate_blocks, strip_page_markers
 from .prompts import (
     CLASSIFY_PROMPT,
     CLASSIFY_SYSTEM,
@@ -39,7 +40,7 @@ class VisionExtractor:
     def classify(self, image_path: str) -> list[str]:
         """
         Klasifikasikan satu atau lebih karakteristik layout dokumen yang ada pada gambar:
-        ['plain'], ['bilingual_journal', 'markdown_hierarchy'], dsb.
+        ['plain'], ['bilingual_journal', 'markdown_hierarchy'], ['chat_transcript'], dsb.
         """
         logger.debug(
             "[Extractor:Classify] Menyiapkan payload klasifikasi untuk: %s", image_path
@@ -88,6 +89,21 @@ class VisionExtractor:
             detected.append("markdown_hierarchy")
         if "slide" in text_lower or "presentation" in text_lower or "ppt" in text_lower:
             detected.append("presentation_slides")
+        if (
+            "chat" in text_lower
+            or "whatsapp" in text_lower
+            or "telegram" in text_lower
+            or "percakapan" in text_lower
+        ):
+            detected.append("chat_transcript")
+        if (
+            "signature" in text_lower
+            or "paraf" in text_lower
+            or "approval" in text_lower
+            or "persetujuan" in text_lower
+            or "tanda tangan" in text_lower
+        ):
+            detected.append("signature_form")
 
         final_specs = detected if detected else ["plain"]
         logger.info("[Extractor:Classify] Fallback regex layout: %s", final_specs)
@@ -101,16 +117,27 @@ class VisionExtractor:
         inspect_prompt = (
             "Analisis gambar dokumen ini secara menyeluruh untuk mendeteksi karakteristik tata letak dan elemen visual.\n\n"
             "Evaluasi hal berikut:\n"
-            "1. specs: Karakteristik dokumen (pilih dari: 'plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides').\n"
+            "1. specs: Karakteristik dokumen (pilih dari: 'plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides', 'chat_transcript', 'signature_form').\n"
+            "   - 'plain': dokumen bisnis umum (surat, memo, pengumuman, formulir sederhana).\n"
+            "   - 'markdown_hierarchy': dokumen terstruktur (SOP, SK, kebijakan, peraturan, perjanjian, laporan formal).\n"
+            "   - 'bilingual_journal': artikel internal / dokumen multi-kolom / dokumen dua bahasa.\n"
+            "   - 'presentation_slides': slide presentasi (PowerPoint/PDF landscape, bullet points).\n"
+            "   - 'chat_transcript': screenshot percakapan chat (WhatsApp, Telegram, chat internal).\n"
+            "   - 'signature_form': dokumen dengan kotak tanda tangan, paraf, approval, atau persetujuan.\n"
             "2. has_diagram: true jika terdapat diagram visual (flowchart, alur proses, sequence diagram, ERD, arsitektur blok, mindmap, state diagram, org chart), false jika hanya teks biasa atau foto polos.\n"
             "3. diagram_type: Tipe diagram jika has_diagram=true (contoh: 'flowchart', 'sequence_diagram', 'er_diagram', 'block_architecture', 'mindmap', dll., atau null jika tidak ada).\n"
-            "4. has_table: true jika terdapat tabel data/baris kolom.\n\n"
+            "4. has_table: true jika terdapat tabel data/baris kolom.\n"
+            "5. difficulty: Tingkat kesulitan ekstraksi halaman.\n"
+            "   - 'simple': teks polos, sedikit elemen, tanpa diagram/tabel/kompleksitas.\n"
+            "   - 'standard': ada struktur (list, heading, tabel sederhana).\n"
+            "   - 'complex': ada diagram/topologi, multi-kolom, chat, form tanda tangan, atau teks padat.\n\n"
             "Outputkan HANYA format JSON valid tanpa pengantar:\n"
             "{\n"
             '  "specs": ["spec1", "spec2"],\n'
             '  "has_diagram": true/false,\n'
             '  "diagram_type": "string" atau null,\n'
-            '  "has_table": true/false\n'
+            '  "has_table": true/false,\n'
+            '  "difficulty": "simple" atau "standard" atau "complex"\n'
             "}"
         )
 
@@ -134,11 +161,15 @@ class VisionExtractor:
                 has_diag = bool(data.get("has_diagram", False))
                 diag_type = data.get("diagram_type")
                 has_tbl = bool(data.get("has_table", False))
+                difficulty = str(data.get("difficulty", "standard")).lower()
+                if difficulty not in ("simple", "standard", "complex"):
+                    difficulty = "standard"
                 return {
                     "specs": norm_specs,
                     "has_diagram": has_diag,
                     "diagram_type": diag_type,
                     "has_table": has_tbl,
+                    "difficulty": difficulty,
                 }
         except Exception as e:  # noqa: BLE001
             logger.warning("[Extractor:Inspect] Gagal inspect JSON (%s), fallback ke classify biasa.", e)
@@ -147,9 +178,12 @@ class VisionExtractor:
         specs = self.classify(image_path)
         return {
             "specs": specs,
-            "has_diagram": "presentation_slides" in specs,
-            "diagram_type": "generic_diagram" if "presentation_slides" in specs else None,
+            # Diagram dideteksi post-extraction via output indicators (fast-path),
+            # bukan diasumsikan ada hanya karena spec = presentation_slides.
+            "has_diagram": False,
+            "diagram_type": None,
             "has_table": False,
+            "difficulty": "standard",
         }
 
     def judge_and_refine(
@@ -204,6 +238,8 @@ class VisionExtractor:
             ):
                 refined_md = refined_md[3:-3].strip()
 
+            refined_md = strip_page_markers(refined_md)
+            refined_md = collapse_consecutive_duplicate_blocks(refined_md)
             return refined_md if refined_md else draft_markdown
         except Exception as e:  # noqa: BLE001
             logger.warning("[Extractor:Judge] Terjadi kesalahan pada tahap judge & refine (%s). Menggunakan draft awal.", e)
@@ -221,7 +257,7 @@ class VisionExtractor:
 
         Args:
             image_path: Path ke file gambar dokumen.
-            specs: Satu atau daftar karakteristik dokumen ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides').
+            specs: Satu atau daftar karakteristik dokumen ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides', 'chat_transcript', 'signature_form').
             previous_page_context: Konteks halaman sebelumnya untuk menjaga kontinuitas header.
 
         Returns:
@@ -259,4 +295,6 @@ class VisionExtractor:
         elif md_text.startswith("```") and md_text.endswith("```"):
             md_text = md_text[3:-3].strip()
 
+        md_text = strip_page_markers(md_text)
+        md_text = collapse_consecutive_duplicate_blocks(md_text)
         return md_text

@@ -24,7 +24,11 @@ from langchain_core.messages import HumanMessage
 
 from .config import DEFAULT_DPI
 from .llm import encode_image_to_base64
-from .multi_page import stitch_pages_to_markdown
+from .multi_page import (
+    format_page_delimiter,
+    stitch_pages_to_markdown,
+    strip_page_markers,
+)
 from .prompts import get_vision_system_prompt
 from .tabular_db import cross_verify_dual_track, process_page_tabular_agent
 
@@ -459,6 +463,15 @@ def process_presentation_vision(
     sys_prompt = get_vision_system_prompt(doc_spec)
 
     pages_markdown: list[str] = []
+    total_visuals = 0
+    total_tables = 0
+
+    stream_file: Path | None = None
+    if output_markdown_path:
+        stream_file = Path(output_markdown_path).resolve()
+        stream_file.parent.mkdir(parents=True, exist_ok=True)
+        stream_file.write_text("", encoding="utf-8")
+        logger.info("[Vision PPT] Streaming output Markdown ke: %s", stream_file)
 
     for idx, img_file in enumerate(slide_images, start=1):
         logger.info(
@@ -471,6 +484,14 @@ def process_presentation_vision(
         if pipeline is not None and hasattr(pipeline, "run"):
             res = pipeline.run(str(img_file), forced_specs=doc_spec)
             slide_md = res.get("markdown_content", "")
+            total_visuals += int(res.get("visual_count", 0))
+            total_tables += int(res.get("table_count", 0))
+            if res.get("visual_count", 0) or res.get("table_count", 0):
+                logger.info(
+                    "[Vision PPT] [Slide %d/%d] Metadata: %d visual/diagram, %d tabel",
+                    idx, len(slide_images),
+                    res.get("visual_count", 0), res.get("table_count", 0),
+                )
         else:
             if active_vlm is None:
                 raise RuntimeError("Model VLM tidak terinisialisasi.")
@@ -487,6 +508,8 @@ def process_presentation_vision(
             response = active_vlm.invoke([msg])
             slide_md = str(response.content)
 
+        slide_md = strip_page_markers(slide_md).strip()
+
         # Jalankan Sub-Agent SQL mandiri per slide
         process_page_tabular_agent(
             page_markdown=slide_md,
@@ -499,7 +522,15 @@ def process_presentation_vision(
 
         pages_markdown.append(slide_md)
 
-    stitched_md = stitch_pages_to_markdown(pages_markdown, source_name=src)
+        if stream_file:
+            delimiter = format_page_delimiter(idx, is_slide=True)
+            with open(stream_file, "a", encoding="utf-8") as f:
+                f.write(f"\n{delimiter}\n\n{slide_md}\n\n---\n")
+                f.flush()
+
+    stitched_md = stitch_pages_to_markdown(
+        pages_markdown, source_name=src, is_slide=True
+    )
 
     # Jalankan Dual-track Guardrail Cross-Verification
     cross_verify_dual_track(
@@ -509,11 +540,14 @@ def process_presentation_vision(
         total_pages=len(slide_images),
     )
 
-    if output_markdown_path:
-        out_file = Path(output_markdown_path).resolve()
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        out_file.write_text(stitched_md, encoding="utf-8")
-        logger.info("Hasil Vision PPT berhasil disimpan ke: %s", out_file)
+    logger.info(
+        "[Vision PPT] Selesai: %d slide | %d elemen visual/diagram | %d tabel terdeteksi",
+        len(slide_images), total_visuals, total_tables,
+    )
+
+    if stream_file:
+        stream_file.write_text(stitched_md, encoding="utf-8")
+        logger.info("Hasil Vision PPT berhasil disimpan ke: %s", stream_file)
 
     return stitched_md
 

@@ -51,6 +51,35 @@ def format_page_delimiter(page_number: int, is_slide: bool = False) -> str:
     return f"<!-- {tag}: {page_number} -->"
 
 
+def strip_page_markers(markdown: str) -> str:
+    """
+    Buang seluruh penanda `<!-- PAGE: N -->` / `<!-- SLIDE: N -->` yang mungkin
+    ikut ditulis oleh VLM di dalam konten halaman, agar penomoran hanya berasal
+    dari stitcher (sumber kebenaran tunggal).
+    """
+    cleaned = PAGE_DELIMITER_RE.sub("", markdown)
+    return "\n".join(cleaned.splitlines()).strip()
+
+
+def collapse_consecutive_duplicate_blocks(markdown: str) -> str:
+    """
+    Runtuhkan pengulangan blok identik yang berurutan (gejala degenerasi/loop
+    keluaran VLM). Blok dipisahkan oleh baris kosong; hanya blok yang sama persis
+    dan berurutan yang disatukan menjadi satu kemunculan.
+    """
+    text = markdown.strip()
+    if not text:
+        return markdown
+    blocks = re.split(r"\n{2,}", text)
+    if len(blocks) <= 1:
+        return markdown
+    out: list[str] = [blocks[0]]
+    for b in blocks[1:]:
+        if b.strip() != out[-1].strip():
+            out.append(b)
+    return "\n\n".join(out)
+
+
 def split_markdown_by_pages(
     markdown: str,
     default_page_number: int = 1,

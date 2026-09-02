@@ -4,7 +4,7 @@ Vision VLM & Document Text Extractor (Ready for Chunking, Tabular Database, & Me
 Modul:
   - config.py        : Pengaturan lingkungan & model via .env
   - preprocess.py    : Preprocessing gambar (auto-rotate EXIF, contrast enhancement)
-  - prompts.py       : Prompt spesialisasi 4 spesifikasi tata letak dokumen
+  - prompts.py       : Prompt spesialisasi 6 spesifikasi tata letak dokumen (plain, hierarchy, multi-column, slides, chat, signature)
   - extractor.py     : Ekstraktor VLM multimodal -> Markdown
   - agents.py        : Registry agent untuk spesifikasi dokumen
   - ppt.py           : Ekstraktor presentasi PowerPoint (.pptx / .ppt)

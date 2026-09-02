@@ -105,8 +105,16 @@ def get_settings() -> Settings:
     return _settings
 
 
-def setup_logging(level: str | None = None, log_file: str | Path | None = None) -> None:
-    """Inisialisasi logging terformat dengan timestamp ke konsol dan opsional ke file."""
+def setup_logging(
+    level: str | None = None,
+    log_file: str | Path | None = None,
+    auto_log_stem: str | None = None,
+) -> None:
+    """Inisialisasi logging terformat dengan timestamp ke konsol dan opsional ke file.
+
+    Jika `log_file` tidak diberikan tetapi `auto_log_stem` ada, log otomatis
+    ditulis real-time ke `output/logs/{auto_log_stem}_latest.log`.
+    """
     effective_level = (level or get_settings().log_level).upper()
     log_format = "%(asctime)s | %(levelname)-7s | [%(name)s] %(message)s"
     date_format = "%H:%M:%S"
@@ -116,6 +124,11 @@ def setup_logging(level: str | None = None, log_file: str | Path | None = None) 
         p = Path(log_file).resolve()
         p.parent.mkdir(parents=True, exist_ok=True)
         handlers.append(logging.FileHandler(str(p), mode="a", encoding="utf-8"))
+    elif auto_log_stem:
+        log_dir = Path("output/logs").resolve()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        p = log_dir / f"{auto_log_stem}_latest.log"
+        handlers.append(logging.FileHandler(str(p), mode="w", encoding="utf-8"))
 
     logging.basicConfig(
         level=getattr(logging, effective_level, logging.INFO),

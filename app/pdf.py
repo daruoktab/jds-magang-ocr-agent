@@ -18,7 +18,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .config import DEFAULT_DPI, PDF_PAGE_BATCH
-from .multi_page import stitch_pages_to_markdown
+from .multi_page import (
+    format_page_delimiter,
+    stitch_pages_to_markdown,
+    strip_page_markers,
+)
 from .prompts import normalize_specs
 from .schemas import DocumentPage, ExtractedDocument, PageTabularEvent
 from .tabular_db import cross_verify_dual_track, process_page_tabular_agent
@@ -225,6 +229,7 @@ def process_multipage_pdf(
     db_path: str | Path | None = None,
     auto_tabular_db: bool = True,
     force_all_tables: bool = False,
+    output_markdown_path: str | Path | None = None,
 ) -> ExtractedDocument:
     """
     Proses seluruh halaman PDF dan gabungkan hasil ekstraksi menjadi teks Markdown utuh siap chunking.
@@ -248,6 +253,8 @@ def process_multipage_pdf(
     all_page_specs: list[list[str]] = []
     tabular_events: list[PageTabularEvent] = []
     previous_context: str | None = None
+    total_visuals = 0
+    total_tables = 0
 
     active_forced = forced_specs or forced_doc_type
 
@@ -265,6 +272,13 @@ def process_multipage_pdf(
 
     if resolved_db_path:
         resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    stream_file: Path | None = None
+    if output_markdown_path:
+        stream_file = Path(output_markdown_path).resolve()
+        stream_file.parent.mkdir(parents=True, exist_ok=True)
+        stream_file.write_text("", encoding="utf-8")
+        logger.info("Streaming output Markdown ke: %s", stream_file)
 
     # Proses BERTAHAP per batch 10 halaman: render batch -> ekstrak batch -> lanjut.
     for b_start in range(0, total_pages, PDF_PAGE_BATCH):
@@ -291,8 +305,16 @@ def process_multipage_pdf(
                 previous_page_context=previous_context,
             )
 
-            page_md: str = res["markdown_content"]
+            page_md: str = strip_page_markers(res["markdown_content"]).strip()
             detected_specs: list[str] = res.get("specs") or ["plain"]
+            total_visuals += int(res.get("visual_count", 0))
+            total_tables += int(res.get("table_count", 0))
+            if res.get("visual_count", 0) or res.get("table_count", 0):
+                logger.info(
+                    "[PDF] Halaman %d/%d metadata: %d visual/diagram, %d tabel",
+                    idx, total_pages,
+                    res.get("visual_count", 0), res.get("table_count", 0),
+                )
 
             pages_md.append(page_md)
             all_page_specs.append(detected_specs)
@@ -323,12 +345,18 @@ def process_multipage_pdf(
                 )
                 tabular_events.append(tab_event)
                 if tab_event.tagged_markdown:
-                    page_md = tab_event.tagged_markdown
+                    page_md = strip_page_markers(tab_event.tagged_markdown).strip()
                     pages[-1].markdown_content = page_md
                     pages_md[-1] = page_md
 
+            if stream_file:
+                delimiter = format_page_delimiter(idx, is_slide=False)
+                with open(stream_file, "a", encoding="utf-8") as f:
+                    f.write(f"\n{delimiter}\n\n{page_md}\n\n---\n")
+                    f.flush()
+
     # Jahit teks seluruh halaman menjadi satu teks Markdown utuh
-    full_md = stitch_pages_to_markdown(pages_md)
+    full_md = stitch_pages_to_markdown(pages_md, is_slide=False)
 
     # Jalur 3: Supervisor Guardrail Cross-Verification (Audit Markdown vs SQLite)
     guardrail_report = None
@@ -347,6 +375,11 @@ def process_multipage_pdf(
     dominant_specs = normalize_specs(flat_specs) if flat_specs else ["plain"]
     primary_doc_type = dominant_specs[0] if dominant_specs else "plain"
 
+    logger.info(
+        "[PDF] Selesai: %d halaman | %d elemen visual/diagram | %d tabel terdeteksi",
+        total_pages, total_visuals, total_tables,
+    )
+
     return ExtractedDocument(
         source_file=str(pdf_path),
         doc_type=primary_doc_type,
@@ -355,6 +388,8 @@ def process_multipage_pdf(
         page_tabular_events=tabular_events,
         guardrail_report=guardrail_report,
         total_pages=total_pages,
+        total_visuals=total_visuals,
+        total_tables=total_tables,
     )
 
 

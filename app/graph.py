@@ -9,6 +9,7 @@ Alur StateGraph:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, TypedDict, cast
 
@@ -37,10 +38,81 @@ class DocumentExtractionState(TypedDict, total=False):
     has_diagram: bool
     diagram_type: str | None
     has_table: bool
+    difficulty: str
+    visual_count: int
+    table_count: int
     markdown_content: str
     diagram_mermaid_code: str | None
     diagram_summary: str | None
     final_markdown: str
+
+
+# --- Adaptive Fast-Path Helpers (0 biaya VLM) --------------------------------
+
+DIAGRAM_OUTPUT_INDICATORS: tuple[str, ...] = (
+    "[Diagram/Visual]",
+    "[Gambar/Visual]",
+    "[Topologi]",
+    "[Diagram/Topologi]",
+    "```mermaid",
+)
+
+_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?[\s:|-]*-{3,}[\s:|-]*\|?\s*$")
+
+
+def _has_diagram_indicators(markdown: str) -> bool:
+    """Deteksi indikator diagram/visual dari output ekstraksi (tanpa VLM call tambahan)."""
+    return any(ind in markdown for ind in DIAGRAM_OUTPUT_INDICATORS)
+
+
+def count_visuals(markdown: str) -> int:
+    """Hitung jumlah elemen visual (diagram, topologi, gambar, ilustrasi) dalam output."""
+    count = 0
+    for tag in (
+        "[Diagram/Visual]",
+        "[Gambar/Visual]",
+        "[Topologi]",
+        "[Diagram/Topologi]",
+    ):
+        count += markdown.count(tag)
+    # Blok mermaid yang sudah tertulis juga dihitung sebagai 1 visual
+    count += markdown.count("```mermaid")
+    return count
+
+
+def count_tables(markdown: str) -> int:
+    """Hitung jumlah tabel GFM berdasarkan baris pemisah header (| --- | --- |)."""
+    return sum(
+        1 for line in markdown.splitlines() if _TABLE_SEPARATOR_RE.match(line)
+    )
+
+
+def _assess_difficulty_from_output(markdown: str) -> str:
+    """Heuristic difficulty post-extraction: simple / standard / complex (0 biaya VLM)."""
+    if _has_diagram_indicators(markdown):
+        return "complex"
+    if "|---" in markdown or markdown.count("|") > 8:
+        return "standard"
+    if len(markdown) > 2000:
+        return "standard"
+    return "simple"
+
+
+def _should_skip_judge(markdown: str, difficulty: str, has_diagram: bool) -> bool:
+    """Fast-path: skip judge untuk halaman simple yang output-nya bersih & tidak berisiko."""
+    if difficulty != "simple":
+        return False
+    if has_diagram:
+        return False
+    stripped = markdown.strip()
+    if len(stripped) < 20:
+        # Output mencurigakan (hampir kosong) -> tetap judge
+        return False
+    if "[tidak terbaca]" in markdown:
+        # Ada area tidak terbaca -> tetap judge untuk attempt recovery
+        return False
+    # Ada tabel -> integritas data penting, tetap judge
+    return "|---" not in markdown
 
 
 class DocumentExtractionPipeline:
@@ -50,10 +122,13 @@ class DocumentExtractionPipeline:
         self,
         settings: Settings | None = None,
         vlm: BaseChatModel | Any | None = None,
+        *,
+        thorough: bool = False,
     ) -> None:
         self.settings: Settings = settings or get_settings()
-        self.vlm = vlm or build_vlm(self.settings)
+        self.vlm: BaseChatModel = vlm or build_vlm(self.settings)
         self.extractor = VisionExtractor(self.vlm)
+        self.thorough: bool = thorough
         self.graph: CompiledStateGraph = self._build_graph()
 
     def _build_graph(self) -> CompiledStateGraph:
@@ -106,13 +181,17 @@ class DocumentExtractionPipeline:
         logger.info("[Pipeline] Memulai ekstraksi: %s", image_path)
         final_state = cast(dict[str, Any], self.graph.invoke(initial_state))
 
+        final_md = final_state.get("markdown_content", "")
         return {
             "preprocessed_path": final_state.get("preprocessed_path", image_path),
             "specs": final_state.get("specs", ["plain"]),
             "doc_type": final_state.get("doc_type", "plain"),
-            "markdown_content": final_state.get("markdown_content", ""),
+            "markdown_content": final_md,
             "has_diagram": final_state.get("has_diagram", False),
             "diagram_mermaid_code": final_state.get("diagram_mermaid_code"),
+            "difficulty": final_state.get("difficulty", "standard"),
+            "visual_count": count_visuals(final_md),
+            "table_count": count_tables(final_md),
         }
 
     # =========================================================================
@@ -160,8 +239,11 @@ class DocumentExtractionPipeline:
                 **state,
                 "specs": norm_specs,
                 "doc_type": ",".join(norm_specs),
-                "has_diagram": "presentation_slides" in norm_specs,
-                "diagram_type": "generic_diagram" if "presentation_slides" in norm_specs else None,
+                # Diagram dideteksi post-extraction via output indicators (fast-path),
+                # bukan diasumsikan ada hanya karena spec = presentation_slides.
+                "has_diagram": False,
+                "diagram_type": None,
+                "difficulty": "standard",
             }
 
         if forced_doc_type:
@@ -171,8 +253,9 @@ class DocumentExtractionPipeline:
                 **state,
                 "specs": norm_specs,
                 "doc_type": ",".join(norm_specs),
-                "has_diagram": "presentation_slides" in norm_specs,
-                "diagram_type": "generic_diagram" if "presentation_slides" in norm_specs else None,
+                "has_diagram": False,
+                "diagram_type": None,
+                "difficulty": "standard",
             }
 
         # Inspeksi otomatis via VLM
@@ -184,13 +267,15 @@ class DocumentExtractionPipeline:
         has_diag = bool(insp_res.get("has_diagram", False))
         diag_type = insp_res.get("diagram_type")
         has_tbl = bool(insp_res.get("has_table", False))
+        difficulty = str(insp_res.get("difficulty", "standard"))
 
         logger.info(
-            "[Pipeline:Classify] Layout: %s | Diagram: %s (%s) | Tabel: %s (%.1fms)",
+            "[Pipeline:Classify] Layout: %s | Diagram: %s (%s) | Tabel: %s | Difficulty: %s (%.1fms)",
             detected_specs,
             has_diag,
             diag_type,
             has_tbl,
+            difficulty,
             elapsed,
         )
 
@@ -201,6 +286,7 @@ class DocumentExtractionPipeline:
             "has_diagram": has_diag,
             "diagram_type": diag_type,
             "has_table": has_tbl,
+            "difficulty": difficulty,
         }
 
     def _node_extract_markdown(
@@ -234,15 +320,26 @@ class DocumentExtractionPipeline:
     def _node_summon_diagram_specialist(
         self, state: DocumentExtractionState
     ) -> DocumentExtractionState:
-        """Tahap 4: Summon Sub-Agent Spesialis Diagram Mermaid jika terdeteksi diagram/visual."""
+        """Tahap 4: Summon Sub-Agent Spesialis Diagram Mermaid HANYA jika diagram terdeteksi."""
         has_diag = state.get("has_diagram", False)
         specs = state.get("specs", [])
+        md_content = state.get("markdown_content", "")
         img = state.get("preprocessed_path") or state["image_path"]
 
-        # Summon spesialis diagram jika terindikasi diagram atau slide presentasi
-        should_summon = has_diag or "presentation_slides" in specs
+        # Deteksi diagram dari output ekstraksi (0 biaya VLM).
+        # Prompt presentation_slides menginstruksikan VLM menulis
+        # "> **[Diagram/Visual]:** ..." jika ada diagram -> kita manfaatkan itu.
+        output_has_diagram = _has_diagram_indicators(md_content)
+
+        if self.thorough:
+            should_summon = has_diag or output_has_diagram or "presentation_slides" in specs
+        else:
+            should_summon = has_diag or output_has_diagram
 
         if not should_summon:
+            logger.info(
+                "[Pipeline:SummonSpecialist] Skip diagram specialist (fast mode: tidak ada indikator diagram)"
+            )
             return state
 
         t0 = time.perf_counter()
@@ -285,6 +382,7 @@ class DocumentExtractionPipeline:
         """
         Tahap 5: Aggregator & Judge (Koreksi Ulang).
         Menggabungkan teks markdown dengan luaran spesialis diagram, lalu memverifikasi ulang terhadap gambar asli.
+        Mode adaptif: halaman 'simple' yang bersih di-skip judge-nya (hemat 1 VLM call).
         """
         t0 = time.perf_counter()
         img = state.get("preprocessed_path") or state["image_path"]
@@ -301,7 +399,24 @@ class DocumentExtractionPipeline:
                 mermaid_block += f"\n\n> **[Diagram Summary]:** {diag_summary}"
             combined_md = combined_md + "\n" + mermaid_block
 
-        # 2. Lakukan evaluasi koreksi ulang (Judge & Refine)
+        # 2. Fast-path: skip judge untuk halaman simple yang bersih
+        difficulty = state.get("difficulty") or _assess_difficulty_from_output(md_text)
+        has_diagram = state.get("has_diagram", False) or _has_diagram_indicators(md_text)
+
+        if not self.thorough and _should_skip_judge(combined_md, difficulty, has_diagram):
+            logger.info(
+                "[Pipeline:AggregateJudge] Skip judge (fast mode: difficulty=%s, %d karakter bersih)",
+                difficulty,
+                len(combined_md),
+            )
+            return {
+                **state,
+                "difficulty": difficulty,
+                "markdown_content": combined_md,
+                "final_markdown": combined_md,
+            }
+
+        # 3. Lakukan evaluasi koreksi ulang (Judge & Refine)
         final_md = self.extractor.judge_and_refine(
             image_path=img,
             draft_markdown=combined_md,
@@ -318,6 +433,7 @@ class DocumentExtractionPipeline:
 
         return {
             **state,
+            "difficulty": difficulty,
             "markdown_content": final_md,
             "final_markdown": final_md,
         }

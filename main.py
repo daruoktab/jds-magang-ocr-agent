@@ -1,9 +1,11 @@
 """
 CLI Document VLM Text Extractor (Ready for Chunking).
 
-Secara default, mengeksekusi ekstraksi dokumen via Vision Language Model (VLM):
+Secara default, mengeksekusi ekstraksi dokumen via Vision Language Model (VLM)
+dengan pipeline otomatis (auto-klasifikasi 6 spesifikasi, diagram Mermaid,
+SQLite tabular, judge & refine, streaming per-halaman):
   - File PPTX / PPT   : Dirender otomatis menjadi gambar kanvas per slide dan dikirim ke VLM (default), atau via `--ppt-native` untuk parser cepat tanpa VLM.
-  - File Gambar / PDF : Diekstrak via pipeline VLM / Deep Reasoning Agent.
+  - File Gambar / PDF : Diekstrak via pipeline VLM dengan auto-klasifikasi layout.
   - Data Tabular / DB : Sub-Agent SQL aktif mandiri per-halaman/slide untuk memahami, menginspeksi, meng-ingest tabel ke SQLite (`output/databases/{nama_dokumen}.sqlite`), serta diakhiri Guardrail Cross-Verification oleh Agent Pusat.
 
 Contoh Penggunaan:
@@ -36,7 +38,6 @@ from app.batch import (
     scan_document_directories,
 )
 from app.config import get_settings, setup_logging
-from app.deep_agent import build_deep_agent
 from app.graph import DocumentExtractionPipeline
 from app.multi_page import preview_markdown_chunks
 from app.pdf import pdf_to_images, process_multipage_pdf
@@ -62,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--doc-type",
         dest="doc_type",
         default=None,
-        help="Karakteristik dokumen (plain, markdown_hierarchy, bilingual_journal, presentation_slides, atau komposit misal 'journal,hierarchy').",
+        help="Karakteristik dokumen (plain, markdown_hierarchy, bilingual_journal, presentation_slides, chat_transcript, signature_form, atau komposit misal 'journal,hierarchy').",
     )
     parser.add_argument(
         "-o",
@@ -106,11 +107,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ukuran overlap karakter antar chunk (default: 150).",
     )
     parser.add_argument(
-        "--agent",
-        action="store_true",
-        help="Jalankan ekstraksi menggunakan Deep Reasoning Multi-Agent Harness (LangGraph StateGraph).",
-    )
-    parser.add_argument(
         "--ppt-native",
         action="store_true",
         help="Ekstrak slide PPTX/PPT secara native murni teks/tabel tanpa rendering gambar kanvas.",
@@ -151,9 +147,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Tampilkan daftar spesifikasi/tipe dokumen yang didukung.",
     )
     parser.add_argument(
+        "--thorough",
+        action="store_true",
+        help="Pipeline penuh: judge & diagram specialist selalu aktif di tiap halaman (lebih lambat, lebih teliti). Default: mode adaptif cepat.",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Aktifkan pesan log level DEBUG.",
+    )
+    parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Selain disimpan ke file, tampilkan juga hasil Markdown di terminal.",
     )
     parser.add_argument(
         "--log-file",
@@ -168,9 +174,15 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    # Konfigurasi level logging
+    # Konfigurasi level logging (tanpa --log-file, CLI menulis real-time ke
+    # output/logs/{nama_dokumen}_latest.log)
     log_level = "DEBUG" if args.debug else "INFO"
-    setup_logging(level=log_level, log_file=args.log_file)
+    setup_logging(
+        level=log_level,
+        log_file=args.log_file,
+        auto_log_stem=Path(args.document).stem if args.document else None,
+    )
+    logger.info("CLI start: %s", " ".join(sys.argv))
 
     settings = get_settings()
 
@@ -227,7 +239,6 @@ def main() -> int:
             forced_specs=args.doc_type,
             dpi=args.dpi,
             preview_chunks=args.preview_chunks,
-            use_agent=args.agent,
             settings=settings,
         )
         return 0
@@ -239,16 +250,32 @@ def main() -> int:
 
     input_path = Path(args.document).resolve()
     if not input_path.exists():
+        logger.error("File tidak ditemukan: %s", input_path)
         print(f"ERROR: File tidak ditemukan: {input_path}", file=sys.stderr)
         return 1
 
     ext = input_path.suffix.lower()
 
+    # Tentukan path output Markdown default: simpan ke file, bukan ke terminal
+    if args.out == "-":
+        markdown_out_file: Path | None = None
+    elif args.out:
+        out_candidate = Path(args.out)
+        if out_candidate.is_dir() or str(args.out).endswith(("/", "\\")):
+            out_candidate.mkdir(parents=True, exist_ok=True)
+            markdown_out_file = (out_candidate / f"{input_path.stem}.md").resolve()
+        else:
+            markdown_out_file = out_candidate.resolve()
+            markdown_out_file.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        markdown_out_file = (Path("output") / f"{input_path.stem}.md").resolve()
+        markdown_out_file.parent.mkdir(parents=True, exist_ok=True)
+
     # Tentukan path target database SQLite
     if args.db_path:
         db_target_file: Path | None = Path(args.db_path).resolve()
-    elif args.out:
-        db_dir = Path(args.out).parent / "databases"
+    elif markdown_out_file:
+        db_dir = markdown_out_file.parent / "databases"
         db_target_file = db_dir / f"{input_path.stem}.sqlite"
     else:
         db_dir = Path("output/databases").resolve()
@@ -270,26 +297,30 @@ def main() -> int:
             return 0
 
         # 5. File Presentasi (PPTX/PPT)
-        if ext in (".pptx", ".ppt") and not args.agent:
+        if ext in (".pptx", ".ppt"):
             if args.ppt_native and not args.vision and not args.direct_graph:
-                markdown_content = process_presentation(input_path)
+                markdown_content = process_presentation(
+                    input_path,
+                    output_markdown_path=markdown_out_file,
+                )
             else:
                 logger.info(
                     "Mengekstrak presentasi via rendering gambar kanvas per slide -> Dual-Track VLM & Sub-Agent SQL..."
                 )
-                pipeline = DocumentExtractionPipeline(settings)
+                pipeline = DocumentExtractionPipeline(settings, thorough=args.thorough)
                 markdown_content = process_presentation_vision(
                     pptx_path=input_path,
                     pipeline=pipeline,
                     forced_specs=args.doc_type or "presentation_slides",
                     db_path=db_target_file,
                     force_all_tables=args.force_all_tables,
+                    output_markdown_path=markdown_out_file,
                 )
 
         # 6. File PDF Multi-Halaman
-        elif ext == ".pdf" and not args.agent:
+        elif ext == ".pdf":
             logger.info("Mengekstrak PDF multi-halaman via Dual-Track Vision & Sub-Agent SQL...")
-            pipeline = DocumentExtractionPipeline(settings)
+            pipeline = DocumentExtractionPipeline(settings, thorough=args.thorough)
             doc_result = process_multipage_pdf(
                 pdf_path=input_path,
                 pipeline=pipeline,
@@ -297,13 +328,14 @@ def main() -> int:
                 dpi=args.dpi,
                 db_path=db_target_file,
                 force_all_tables=args.force_all_tables,
+                output_markdown_path=markdown_out_file,
             )
             markdown_content = doc_result.full_markdown
 
         # 7. File Gambar Tunggal
-        elif ext in (".png", ".jpg", ".jpeg", ".webp") and not args.agent:
+        elif ext in (".png", ".jpg", ".jpeg", ".webp"):
             logger.info("Mengekstrak gambar via Dual-Track Vision & Sub-Agent SQL...")
-            pipeline = DocumentExtractionPipeline(settings)
+            pipeline = DocumentExtractionPipeline(settings, thorough=args.thorough)
             result = pipeline.run(str(input_path), forced_specs=args.doc_type)
             markdown_content = result["markdown_content"]
 
@@ -324,38 +356,17 @@ def main() -> int:
                     total_pages=1,
                 )
 
-        # 8. Deep Agent Mode
-        elif args.agent:
-            logger.info("Mengekstrak via Master Deep Reasoning Agent & 7 Sub-Agent Spesialis...")
-            deep_agent = build_deep_agent(settings)
-            res = deep_agent.invoke({
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Ekstrak dokumen berikut ke Markdown bersih, evaluasi diagram visual jika ada, "
-                            f"dan ingest tabel transaksional ke database SQLite '{db_target_file}':\n{input_path}"
-                        ),
-                    }
-                ]
-            })
-            markdown_content = (
-                res.get("messages", [])[-1].content
-                if res.get("messages")
-                else ""
-            )
-
         else:
             print(f"ERROR: Format file tidak didukung: {ext}", file=sys.stderr)
             return 1
 
-        # Output Markdown hasil ekstraksi
-        if args.out:
-            out_file = Path(args.out).resolve()
-            out_file.parent.mkdir(parents=True, exist_ok=True)
-            out_file.write_text(markdown_content, encoding="utf-8")
-            logger.info("Hasil Markdown berhasil disimpan ke: %s", out_file)
-        else:
+        # Output Markdown hasil ekstraksi: default ke file, bukan ke terminal
+        if markdown_out_file:
+            markdown_out_file.parent.mkdir(parents=True, exist_ok=True)
+            markdown_out_file.write_text(markdown_content, encoding="utf-8")
+            logger.info("Hasil Markdown berhasil disimpan ke: %s", markdown_out_file)
+
+        if args.stdout or markdown_out_file is None:
             print(markdown_content)
 
         # Simulasi Chunking jika diminta

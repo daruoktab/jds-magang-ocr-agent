@@ -1,12 +1,16 @@
 """
 Template prompt modular untuk Ekstraksi Dokumen VLM -> Markdown Siap Chunking.
 
-Mendukung penyusunan prompt modular (Composable Prompting) untuk dokumen yang
-memiliki lebih dari 1 spesifikasi layout secara bersamaan:
-  1. `plain`                : Dokumen biasa / standar
-  2. `markdown_hierarchy`   : Kontinuitas hierarki heading (#, ##, ###)
-  3. `bilingual_journal`    : Jurnal ilmiah 2-kolom & 2-bahasa (column-aware reading order)
-  4. `presentation_slides`  : Slide presentasi (bullet points, deskripsi diagram/visual)
+Fokus use case: dokumen internal perusahaan (surat, SOP, artikel internal,
+slide, chat, form persetujuan/paraf, dokumen multi-kolom, diagram/topologi).
+
+Spesifikasi layout yang didukung:
+  1. `plain`                : dokumen bisnis umum / teks standar
+  2. `markdown_hierarchy`   : dokumen terstruktur (SOP, SK, kebijakan, laporan)
+  3. `bilingual_journal`    : artikel internal / dokumen multi-kolom (alias enterprise article)
+  4. `presentation_slides`  : slide presentasi
+  5. `chat_transcript`      : screenshot percakapan/chat
+  6. `signature_form`       : form tanda tangan/paraf/approval
 """
 
 from __future__ import annotations
@@ -14,113 +18,360 @@ from __future__ import annotations
 import re
 
 # --- System Prompt Utama -----------------------------------------------------
-SYSTEM_DOCUMENT_EXTRACTOR: str = (
-    "Kamu adalah AI ahli ekstraksi dokumen multimodal berpresisi tinggi. "
-    "Tugasmu adalah menganalisis gambar dokumen dan mengubah seluruh isinya "
-    "menjadi format MARKDOWN BERSIH yang terstruktur dan siap langsung di-chunking "
-    "oleh text splitter.\n\n"
-    "Aturan Standar:\n"
-    "1. Pertahankan ejaan, angka, istilah teknis, rumus, dan bahasa asli persis seperti di dokumen.\n"
-    "2. Gunakan sintaks Markdown standar (heading #, ##, ###; bullet list -, 1.; tabel GFM | Col |; bold **text**).\n"
-    "3. Jangan menambahkan penjelasan pengantar ('Berikut adalah hasil ekstraksi...') atau penutup. Outputkan HANYA konten dokumen dalam Markdown.\n"
-    "4. Jika ada tabel, konversi ke format Markdown Table (GFM) yang valid."
-)
+SYSTEM_DOCUMENT_EXTRACTOR: str = """
+Kamu adalah sistem ekstraksi dokumen internal perusahaan. Tugasmu mengubah isi gambar dokumen menjadi Markdown bersih yang siap dipakai untuk arsip, pencarian dokumen, RAG, dan audit internal.
+
+Aturan wajib:
+1. Output HANYA Markdown.
+2. Jangan menulis kalimat pembuka, penutup, komentar, reasoning, analisis, atau penjelasan proses.
+3. Jangan membungkus output dengan code fence seperti ```markdown atau ```md.
+4. Jangan menambahkan marker halaman/slide seperti <!-- PAGE: 1 --> atau <!-- SLIDE: 1 -->.
+5. Jangan mengulang blok konten yang sama lebih dari satu kali.
+6. Jangan mengarang informasi yang tidak terlihat di gambar.
+7. Jika teks tidak terbaca, tulis [tidak terbaca].
+8. Jika area kosong, tulis [kosong].
+9. Pertahankan bahasa asli, ejaan, angka, nama orang, jabatan, tanggal, nomor dokumen, dan istilah teknis sedekat mungkin dengan sumber.
+10. Untuk tabel, buat tabel Markdown GFM yang lengkap dan konsisten.
+11. Untuk chat, ekstrak sebagai transkrip percakapan yang urut.
+12. Untuk tanda tangan/paraf, ekstrak hanya informasi yang benar-benar terlihat; jangan menebak status approval jika tidak tertulis.
+13. Jika ada diagram, topologi, flowchart, atau bagan, deskripsikan komponen dan relasi yang terlihat dalam blockquote: > **[Diagram/Visual]:** ... Jangan membuat kode Mermaid kecuali diminta secara eksplisit.
+""".strip()
 
 # --- Modul Aturan Komposisional (Composable Rule Modules) --------------------
 
-_RULE_BASE: str = """Ekstrak seluruh teks dan isi dari gambar dokumen ini menjadi Markdown yang bersih, rapi, dan terstruktur."""
+_RULE_BASE: str = """
+Ekstrak seluruh teks dan isi dari gambar dokumen ini menjadi Markdown yang bersih, rapi, dan terstruktur.
+""".strip()
 
-_RULE_COLUMN_AWARE: str = """### PANDUAN TATA LETAK 2-KOLOM & BILINGUAL (Column-Aware Reading Order):
-- URUTAN BACA KOLOM: Baca dan tuntaskan seluruh teks di KOLOM KIRI dari atas sampai bawah terlebih dahulu. Setelah kolom kiri selesai, baru lanjutkan membaca KOLOM KANAN dari atas sampai bawah. JANGAN membaca melintang horizontal memotong antar kolom!
-- STRUKTUR BILINGUAL: Judul, abstrak (Bahasa Indonesia & English), dan teks dwibahasa harus dipisahkan dengan heading yang jelas (mis. `### Abstrak`, `### Abstract`).
-- Rumus matematika dan sitasi dalam kolom ditulis dengan jelas dan rapi."""
+_RULE_BUSINESS_DOCUMENT: str = """
+### Aturan Dokumen Bisnis Umum
+- Ekstrak seluruh teks yang terlihat.
+- Susun secara logis sesuai urutan visual dokumen.
+- Jika ada kop surat, ekstrak nama perusahaan, alamat, nomor surat, tanggal, perihal, dan lampiran bila ada.
+- Jika ada pasangan kunci-nilai (contoh: Nama, Jabatan, Nomor Dokumen, Tanggal), gunakan format:
+  - **Nama:** ...
+  - **Jabatan:** ...
+- Jika ada tabel, ubah menjadi tabel Markdown GFM.
+- Jangan menambahkan interpretasi, opini, atau kesimpulan yang tidak tertulis.
+""".strip()
 
-_RULE_MARKDOWN_HIERARCHY: str = """### PANDUAN HIERARKI HEADING MARKDOWN (#, ##, ###):
-- Identifikasi judul utama sebagai `# Judul Dokumen`.
-- Identifikasi bab/bagian utama sebagai `## Bagian Utama`.
-- Identifikasi sub-bab sebagai `### Sub-bagian` dan `#### Rincian`.
-- Pastikan urutan dan kedalaman heading runtut dan tidak melompat sembarangan (mis. jangan langsung ### tanpa ada ##).
-- Pertahankan daftar berpoin bertingkat dengan indentasi spasi yang konsisten.
-- Jika dokumen ini merupakan kelanjutan dari bagian sebelumnya (tanpa judul baru), lanjutkan isi kontennya langsung dengan paragraf/poin yang sesuai."""
+_RULE_MARKDOWN_HIERARCHY: str = """
+### Aturan Dokumen Terstruktur / Hierarki
+- Gunakan heading Markdown sesuai struktur dokumen.
+- Judul utama dokumen gunakan `#`.
+- BAB/Bagian gunakan `##`.
+- Sub-bagian gunakan `###`.
+- Pasal, ayat, poin, atau nomor urut harus dipertahankan.
+- Jika dokumen adalah lanjutan dari halaman sebelumnya, jangan mengulang judul dokumen.
+- Jika ada daftar bertingkat, gunakan list dengan indentasi yang konsisten.
+- Jika ada definisi istilah, buat sebagai list key-value atau tabel bila memungkinkan.
+""".strip()
 
-_RULE_PRESENTATION_SLIDES: str = """### PANDUAN SLIDE PRESENTASI & ELEMEN VISUAL:
-- Untuk setiap slide, awali dengan penanda slide standar sistem: `<!-- SLIDE: <nomor_slide> -->` diikuti judul slide: `## [Judul Slide]`.
-- Sajikan poin-poin presentasi menggunakan bullet points berjenjang (`- Poin utama`, `  - Sub-poin penjelasan`).
-- Jika terdapat visual, diagram alur, grafik angka, atau bagan: Deskripsikan informasi atau relasi bagan tersebut dalam blockquote: `> **[Diagram/Visual]:** [Penjelasan isi bagan, relasi panah, dan angka utama]`.
-- Konversi tabel ringkas atau perbandingan metrik ke tabel Markdown."""
+_RULE_COLUMN_AWARE: str = """
+### Aturan Dokumen Multi-Kolom / Artikel Internal
+- Jika dokumen jelas memiliki lebih dari satu kolom, baca per kolom secara vertikal.
+- Tuntaskan kolom pertama dari atas ke bawah sebelum pindah ke kolom berikutnya.
+- Jangan menggabungkan teks lintas kolom secara horizontal jika itu merusak urutan baca.
+- Jika layout hanya satu kolom, gunakan urutan baca normal dari atas ke bawah.
+- Jika ada judul artikel, heading, subjudul, caption gambar, atau kutipan, ekstrak sesuai struktur.
+- Jika ada dua bahasa atau versi teks berdampingan, pertahankan keduanya tanpa menerjemahkan.
+- Jika ada gambar, grafik, atau ilustrasi, tambahkan deskripsi singkat:
+  > **[Gambar/Visual]:** deskripsi isi gambar.
+""".strip()
 
-_RULE_PLAIN_DOCUMENT: str = """### PANDUAN DOKUMEN STANDAR:
-- Susun teks dalam paragraf yang rapi dan logis.
-- Jika ada formulir atau data atribut, gunakan format key-value tebal (mis. `**Nama:** Budi`).
-- Jika ada tabel data, ubah menjadi format tabel Markdown."""
+_RULE_PRESENTATION_SLIDES: str = """
+### Aturan Slide Presentasi
+- Jika ada judul slide yang terlihat, tulis sebagai heading level dua: `## Judul Slide`.
+- Jika judul slide tidak ada, mulai langsung dari isi utama slide.
+- Jangan menulis penanda komentar seperti <!-- SLIDE: 1 --> atau <!-- PAGE: 1 -->.
+- Jangan menebak nomor slide.
+- Tulis bullet points sesuai hierarki visual.
+- Jika ada diagram, bagan, topologi, atau visual penting, tulis deskripsi:
+  > **[Diagram/Visual]:** deskripsi komponen dan relasi utama.
+- Jika ada tabel, ubah menjadi tabel Markdown.
+- Jangan mengulang konten slide yang sama.
+""".strip()
+
+_RULE_CHAT_TRANSCRIPT: str = """
+### Aturan Transkrip Percakapan
+- Ekstrak percakapan sebagai transkrip urut sesuai waktu jika terlihat.
+- Gunakan format list:
+  - **[Waktu] Nama Pengirim:** isi pesan
+- Jika waktu tidak terlihat, tulis:
+  - **[Waktu tidak terlihat] Nama Pengirim:** isi pesan
+- Jika nama pengirim tidak terlihat, gunakan label netral seperti:
+  - **Pengirim A:**
+  - **Pengirim B:**
+- Jika ada pesan balasan/quote, tulis sebagai blockquote:
+  > pesan yang dibalas
+- Jika ada gambar, dokumen, stiker, emoji, atau lampiran, tulis deskripsi singkat:
+  - **[Lampiran:** gambar/dokumen/stiker **]**
+- Jangan menambah isi pesan yang tidak terlihat.
+- Jangan menyimpulkan percakapan kecuali diminta.
+""".strip()
+
+_RULE_SIGNATURE_FORM: str = """
+### Aturan Form Tanda Tangan / Paraf / Approval
+- Ekstrak bagian persetujuan atau tanda tangan sebagai tabel jika memungkinkan.
+- Kolom yang biasanya perlu diekstrak:
+  - Pihak / Peran
+  - Nama
+  - Jabatan
+  - Tanggal
+  - Tanda tangan / paraf
+  - Keterangan
+- Jika nama atau tanggal tidak terbaca, tulis [tidak terbaca].
+- Jika kotak kosong, tulis [kosong].
+- Jika ada tanda tangan atau paraf visual, tulis [terdapat tanda tangan] atau [terdapat paraf].
+- Jangan menebak nama dari tanda tangan jika tidak tertulis jelas.
+- Jangan menyimpulkan status approval seperti "disetujui" jika tidak ada teks persetujuan eksplisit.
+""".strip()
+
+_OUTPUT_CONTRACT: str = """
+FORMAT OUTPUT:
+- HANYA Markdown.
+- Jangan mulai dengan kata seperti "Berikut", "Output", "Markdown", atau code fence.
+- Jangan menyertakan komentar analis, reasoning, atau catatan proses.
+- Jika tidak ada konten yang dapat dibaca, output: [tidak terbaca]
+""".strip()
+
+# Alias kompatibilitas untuk nama lama / istilah enterprise
+_RULE_PLAIN_DOCUMENT = _RULE_BUSINESS_DOCUMENT
+_RULE_STRUCTURED_DOCUMENT = _RULE_MARKDOWN_HIERARCHY
+_RULE_MULTI_COLUMN_DOCUMENT = _RULE_COLUMN_AWARE
+
+# --- Metadata Spesifikasi ----------------------------------------------------
+
+SPEC_METADATA: dict[str, dict[str, str]] = {
+    "plain": {
+        "description": "Dokumen bisnis umum: surat, memo, pengumuman, formulir sederhana, teks internal",
+        "rule": _RULE_BUSINESS_DOCUMENT,
+    },
+    "markdown_hierarchy": {
+        "description": "Dokumen terstruktur: SOP, SK, kebijakan, peraturan, perjanjian, laporan formal",
+        "rule": _RULE_MARKDOWN_HIERARCHY,
+    },
+    "bilingual_journal": {
+        "description": "Artikel internal / dokumen multi-kolom, termasuk dokumen dua bahasa bila ada",
+        "rule": _RULE_MULTI_COLUMN_DOCUMENT,
+    },
+    "presentation_slides": {
+        "description": "Slide presentasi PPT/PDF, materi sosialisasi, training, bullet points, visual",
+        "rule": _RULE_PRESENTATION_SLIDES,
+    },
+    "chat_transcript": {
+        "description": "Screenshot percakapan WhatsApp/Telegram/chat internal",
+        "rule": _RULE_CHAT_TRANSCRIPT,
+    },
+    "signature_form": {
+        "description": "Form persetujuan, tanda tangan, paraf, approval internal",
+        "rule": _RULE_SIGNATURE_FORM,
+    },
+}
+
+VALID_SPECS: tuple[str, ...] = tuple(SPEC_METADATA.keys())
 
 # --- Klasifikasi Karakteristik Dokumen --------------------------------------
 CLASSIFY_SYSTEM: str = (
-    "Kamu adalah pengklasifikasi layout dokumen tingkat lanjut. Tugasmu menganalisis "
+    "Kamu adalah pengklasifikasi layout dokumen internal perusahaan. Tugasmu menganalisis "
     "gambar dokumen dan mendeteksi SEMUA karakteristik spesifikasi tata letak yang relevan "
     "(bisa lebih dari satu / multi-label)."
 )
 
-CLASSIFY_PROMPT: str = """Analisis layout gambar dokumen berikut dan tentukan SEMUA karakteristik spesifikasi yang ada:
+CLASSIFY_PROMPT: str = """Analisis layout gambar dokumen berikut dan tentukan SEMUA karakteristik spesifikasi yang ada.
 
 Pilihan spesifikasi:
-- `plain`: Dokumen umum, surat, memo, formulir, atau teks standar biasa.
-- `markdown_hierarchy`: Dokumen berstruktur resmi, laporan, buku, atau SOP dengan penomoran bab (#, ##, ###) yang bertingkat.
-- `bilingual_journal`: Jurnal ilmiah, makalah akademik, format 2 kolom, atau dokumen hukum 2 bahasa berdampingan.
-- `presentation_slides`: Slide presentasi (PowerPoint/PDF landscape), sarat bullet points, atau memiliki diagram/visual bagan.
+- `plain`: dokumen bisnis umum seperti surat, memo, pengumuman, formulir sederhana, atau teks standar.
+- `markdown_hierarchy`: dokumen terstruktur seperti SOP, SK, kebijakan, peraturan, perjanjian, atau laporan formal dengan heading/penomoran bertingkat.
+- `bilingual_journal`: artikel internal, buletin, dokumen multi-kolom, atau dokumen dua bahasa berdampingan.
+- `presentation_slides`: slide presentasi (PowerPoint/PDF landscape), bullet points, materi sosialisasi/training, diagram/visual.
+- `chat_transcript`: screenshot percakapan chat seperti WhatsApp, Telegram, atau chat internal.
+- `signature_form`: dokumen dengan kotak tanda tangan, paraf, approval, atau persetujuan.
 
-Sebuah dokumen DAPAT memiliki lebih dari 1 spesifikasi (misal jurnal ilmiah multi-halaman memiliki `bilingual_journal` DAN `markdown_hierarchy`).
+Sebuah dokumen DAPAT memiliki lebih dari 1 spesifikasi.
 
-Outputkan HANYA format JSON list:
-{{"specs": ["<spec1>", "<spec2>"]}}
-"""
+Outputkan HANYA JSON object valid tanpa markdown fence dan tanpa teks tambahan:
+{"specs": ["plain"]}
+""".strip()
 
 
-def get_vision_system_prompt(specs: list[str] | str | None = None) -> str:
-    """Mengembalikan system prompt VLM terstandar untuk ekstraksi dokumen."""
-    return SYSTEM_DOCUMENT_EXTRACTOR
+# --- Normalisasi Spesifikasi -------------------------------------------------
+
+SPEC_ALIASES: dict[str, set[str]] = {
+    "plain": {
+        "plain",
+        "business_document",
+        "business",
+        "corporate",
+        "company_document",
+        "general",
+        "generic",
+        "standard",
+        "document",
+        "surat",
+        "memo",
+        "pengumuman",
+        "text",
+        "teks",
+    },
+    "markdown_hierarchy": {
+        "markdown_hierarchy",
+        "structured_document",
+        "structured",
+        "hierarchy",
+        "heading",
+        "sop",
+        "sk",
+        "policy",
+        "kebijakan",
+        "peraturan",
+        "perjanjian",
+        "legal",
+        "report",
+        "laporan",
+    },
+    "bilingual_journal": {
+        "bilingual_journal",
+        "multi_column_document",
+        "multi_column",
+        "multicolumn",
+        "two_column",
+        "2_column",
+        "two_col",
+        "2_col",
+        "column",
+        "kolom",
+        "dua_kolom",
+        "2_kolom",
+        "article",
+        "artikel",
+        "newsletter",
+        "bulletin",
+        "buletin",
+        "journal",
+        "academic",
+        "bilingual",
+    },
+    "presentation_slides": {
+        "presentation_slides",
+        "presentation",
+        "slide",
+        "slides",
+        "ppt",
+        "pptx",
+        "deck",
+        "sosialisasi",
+        "training",
+    },
+    "chat_transcript": {
+        "chat_transcript",
+        "chat",
+        "whatsapp",
+        "wa",
+        "telegram",
+        "line",
+        "conversation",
+        "percakapan",
+        "chat_screenshot",
+    },
+    "signature_form": {
+        "signature_form",
+        "signature",
+        "tanda_tangan",
+        "ttd",
+        "paraf",
+        "approval",
+        "approve",
+        "persetujuan",
+        "form",
+        "formulir",
+    },
+}
+
+_ALIAS_TO_SPEC: dict[str, str] = {}
+for _spec, _aliases in SPEC_ALIASES.items():
+    for _alias in _aliases:
+        _ALIAS_TO_SPEC[_alias] = _spec
+
+
+def _clean_token(token: str) -> str:
+    """Normalisasi token alias menjadi snake_case sederhana."""
+    return re.sub(r"[^a-z0-9_]+", "_", token.lower()).strip("_")
 
 
 def normalize_specs(specs: list[str] | str | None) -> list[str]:
     """
-    Normalisasi input spesifikasi menjadi list of valid spec keys.
-    Mendukung input berupa list, string tunggal, atau string koma ('journal,hierarchy').
+    Normalisasi input spesifikasi menjadi list spec canonical.
+
+    Mendukung:
+      - string tunggal: "plain"
+      - string komposit: "journal,hierarchy", "chat+signature", "slide chat"
+      - list: ["bilingual_journal", "markdown_hierarchy"]
+
+    Alias lama tetap didukung untuk kompatibilitas.
     """
     if not specs:
         return ["plain"]
 
-    raw_items: list[str] = []
+    items: list[str] = []
     if isinstance(specs, str):
-        # Pisahkan jika ada koma atau spasi
-        raw_items = [s.strip() for s in re.split(r"[,|+]", specs) if s.strip()]
+        items = [specs]
     elif isinstance(specs, (list, tuple, set)):
         for item in specs:
             if isinstance(item, str):
-                raw_items.extend(
-                    [s.strip() for s in re.split(r"[,|+]", item) if s.strip()]
-                )
+                items.append(item)
+    else:
+        return ["plain"]
 
-    matched_specs: list[str] = []
-    for item in raw_items:
-        key = item.lower()
-        if (
-            "bilingual" in key or "journal" in key or "academic" in key
-        ) and "bilingual_journal" not in matched_specs:
-            matched_specs.append("bilingual_journal")
-        elif (
-            "hierarchy" in key or "markdown" in key or "report" in key
-        ) and "markdown_hierarchy" not in matched_specs:
-            matched_specs.append("markdown_hierarchy")
-        elif (
-            "slide" in key or "ppt" in key or "presentation" in key
-        ) and "presentation_slides" not in matched_specs:
-            matched_specs.append("presentation_slides")
-        elif (
-            "plain" in key or "generic" in key or "standard" in key
-        ) and "plain" not in matched_specs:
-            matched_specs.append("plain")
+    candidate_tokens: list[str] = []
+    for item in items:
+        item = item.strip()
+        if not item:
+            continue
 
-    return matched_specs or ["plain"]
+        full_token = _clean_token(item)
+        if full_token:
+            candidate_tokens.append(full_token)
+
+        for part in re.split(r"[,;|+/\s]+", item.lower()):
+            token = _clean_token(part)
+            if token:
+                candidate_tokens.append(token)
+
+    normalized: list[str] = []
+    for token in candidate_tokens:
+        spec = _ALIAS_TO_SPEC.get(token)
+        if spec and spec not in normalized:
+            normalized.append(spec)
+
+    return normalized or ["plain"]
+
+
+def _select_rule_specs(active_specs: list[str]) -> list[str]:
+    """Pilih rule yang aktif; jika ada spec khusus, plain tidak perlu mendominasi."""
+    if not active_specs:
+        return ["plain"]
+    if active_specs == ["plain"]:
+        return ["plain"]
+    return [s for s in active_specs if s != "plain"] or ["plain"]
+
+
+def get_vision_system_prompt(specs: list[str] | str | None = None) -> str:
+    """
+    Mengembalikan system prompt VLM yang sadar spesifikasi.
+
+    Jika specs kosong, memakai prompt umum. Jika specs diberikan,
+    rule modul yang relevan digabungkan ke system prompt.
+    """
+    active_specs = normalize_specs(specs)
+    blocks: list[str] = [SYSTEM_DOCUMENT_EXTRACTOR]
+
+    for spec in _select_rule_specs(active_specs):
+        rule = SPEC_METADATA.get(spec, {}).get("rule")
+        if rule:
+            blocks.append(rule)
+
+    return "\n\n".join(blocks)
 
 
 def build_extraction_prompt(
@@ -133,29 +384,20 @@ def build_extraction_prompt(
     active_specs = normalize_specs(specs)
     prompt_blocks: list[str] = [_RULE_BASE]
 
-    # Gabungkan modul-modul aturan yang aktif
-    if "bilingual_journal" in active_specs:
-        prompt_blocks.append(_RULE_COLUMN_AWARE)
+    for spec in _select_rule_specs(active_specs):
+        rule = SPEC_METADATA.get(spec, {}).get("rule")
+        if rule:
+            prompt_blocks.append(rule)
 
-    if "markdown_hierarchy" in active_specs:
-        prompt_blocks.append(_RULE_MARKDOWN_HIERARCHY)
-
-    if "presentation_slides" in active_specs:
-        prompt_blocks.append(_RULE_PRESENTATION_SLIDES)
-
-    if "plain" in active_specs and len(active_specs) == 1:
-        prompt_blocks.append(_RULE_PLAIN_DOCUMENT)
-
-    # Sisipkan konteks heading halaman sebelumnya jika ada
     if previous_page_context and previous_page_context.strip():
         prompt_blocks.append(
             "### KONTEKS HALAMAN SEBELUMNYA (KONTINUITAS HEADING):\n"
-            "Dokumen ini merupakan halaman lanjutan. Konteks akhir halaman sebelumnya adalah:\n"
+            "Dokumen ini merupakan halaman lanjutan. Gunakan konteks berikut HANYA untuk menjaga "
+            "kesinambungan heading dan kalimat yang terpotong. Jangan menyalin ulang isi konteks.\n\n"
             f"```markdown\n{previous_page_context.strip()[-500:]}\n```\n"
-            "Pastikan level heading (#, ##, ###) dan kelanjutan kalimat pada halaman ini menyambung secara selaras dengan konteks di atas."
+            "Pastikan level heading (#, ##, ###) dan kelanjutan kalimat pada halaman ini menyambung "
+            "secara selaras dengan konteks di atas."
         )
 
-    prompt_blocks.append(
-        "Outputkan HANYA konten dokumen dalam format Markdown yang bersih dan terstruktur."
-    )
+    prompt_blocks.append(_OUTPUT_CONTRACT)
     return "\n\n".join(prompt_blocks)

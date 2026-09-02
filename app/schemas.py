@@ -583,6 +583,14 @@ class ExtractedDocument(BaseModel):
         description="Laporan audit keselarasan jalur Teks Markdown vs Database SQLite dari Supervisor Agent",
     )
     total_pages: int = Field(default=1, description="Jumlah total halaman")
+    total_visuals: int = Field(
+        default=0,
+        description="Total elemen visual (diagram, topologi, gambar, ilustrasi) terdeteksi di seluruh dokumen",
+    )
+    total_tables: int = Field(
+        default=0,
+        description="Total tabel GFM terdeteksi di seluruh dokumen",
+    )
 
     @property
     def markdown_content(self) -> str:

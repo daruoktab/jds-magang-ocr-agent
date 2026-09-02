@@ -1,5 +1,22 @@
 """
-Registry agent spesialis ekstraksi dokumen ke Markdown siap chunking.
+Registry profil prompt ekstraksi dokumen -> Markdown siap chunking.
+
+PENTING: File ini BUKAN autonomous agent (tidak ada tool-calling,
+tidak ada orkestrasi, tidak ada LLM yang memutuskan apa pun).
+`DocumentExtractionAgent` hanyalah profil prompt deterministik:
+
+    1 spec (mis. 'chat_transcript')
+        -> 1 system prompt spesifik
+        -> 1 panggilan VisionExtractor.extract_markdown()
+        -> selesai
+
+Dipakai oleh:
+  - `app/graph.py` (pipeline LangGraph default) pada node extract_markdown
+  - `app/deep_agent.py` sebagai tool 'extract_to_markdown' untuk sub-agent
+
+Untuk autonomous orchestrator (Master + 7 Sub-Agent yang memilih tool sendiri),
+lihat `app/deep_agent.py`.
+
 Mendukung multi-spesifikasi komposit layout dokumen.
 """
 
@@ -10,7 +27,12 @@ from dataclasses import dataclass, field
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .extractor import VisionExtractor
-from .prompts import SYSTEM_DOCUMENT_EXTRACTOR, normalize_specs
+from .prompts import (
+    SPEC_METADATA,
+    SYSTEM_DOCUMENT_EXTRACTOR,
+    get_vision_system_prompt,
+    normalize_specs,
+)
 
 
 @dataclass
@@ -20,7 +42,12 @@ class DocumentExtractionAgent:
     name: str
     description: str
     specs: list[str] = field(default_factory=lambda: ["plain"])
-    system_prompt: str = SYSTEM_DOCUMENT_EXTRACTOR
+    system_prompt: str | None = None
+
+    def __post_init__(self) -> None:
+        self.specs = normalize_specs(self.specs)
+        if self.system_prompt is None:
+            self.system_prompt = get_vision_system_prompt(self.specs)
 
     @property
     def doc_type(self) -> str:
@@ -31,7 +58,7 @@ class DocumentExtractionAgent:
         """Bangun instance VisionExtractor yang dikonfigurasi dengan system prompt agent."""
         return VisionExtractor(
             llm=llm,
-            system_prompt=self.system_prompt,
+            system_prompt=self.system_prompt or SYSTEM_DOCUMENT_EXTRACTOR,
         )
 
     def run(
@@ -51,26 +78,12 @@ class DocumentExtractionAgent:
 
 
 AGENT_REGISTRY: dict[str, DocumentExtractionAgent] = {
-    "plain": DocumentExtractionAgent(
-        name="plain",
-        description="Dokumen standar / biasa (surat, formulir, memo, teks umum)",
-        specs=["plain"],
-    ),
-    "markdown_hierarchy": DocumentExtractionAgent(
-        name="markdown_hierarchy",
-        description="Dokumen hierarki Markdown (#, ##, ### yang runtut dan tidak putus)",
-        specs=["markdown_hierarchy"],
-    ),
-    "bilingual_journal": DocumentExtractionAgent(
-        name="bilingual_journal",
-        description="Jurnal ilmiah / dokumen 2-kolom & 2-bahasa (column-aware reading order)",
-        specs=["bilingual_journal"],
-    ),
-    "presentation_slides": DocumentExtractionAgent(
-        name="presentation_slides",
-        description="Dokumen slide presentasi PPT / PDF (bullet points, diagram & visual)",
-        specs=["presentation_slides"],
-    ),
+    name: DocumentExtractionAgent(
+        name=name,
+        description=meta["description"],
+        specs=[name],
+    )
+    for name, meta in SPEC_METADATA.items()
 }
 
 
@@ -88,7 +101,7 @@ def get_agent(specs: list[str] | str | None = None) -> DocumentExtractionAgent:
     # Jika kombinasi multi-spesifikasi
     combo_name = "+".join(normalized)
     desc = " + ".join(
-        AGENT_REGISTRY[s].description if s in AGENT_REGISTRY else s for s in normalized
+        SPEC_METADATA[s]["description"] if s in SPEC_METADATA else s for s in normalized
     )
     return DocumentExtractionAgent(
         name=combo_name,
