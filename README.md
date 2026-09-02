@@ -1,22 +1,59 @@
 # jds-magang-document-extractor — Vision VLM Document Extractor (Ready for Chunking, Tabular SQLite Database, & Mermaid Diagrams)
 
-Sistem ekstraksi dokumen multimodal (PDF, PPT/PPTX, Scan Gambar) menjadi **Markdown bersih dan terstruktur yang siap langsung di-chunking** untuk pipeline RAG downstream, **Engine Data Tabular Transaksional ke SQLite** untuk data log mutasi/rekening koran/faktur yang memerlukan kalkulasi agregat berpresisi 100% (SUM, AVG, COUNT, filter tanggal), serta **Sub-Agent Spesialis Diagram** untuk mengevaluasi secara selektif dan mengekstrak diagram visual menjadi kode **Mermaid.js** yang valid.
+Sistem ekstraksi **dokumen internal perusahaan** (PDF, PPT/PPTX, Scan Gambar, Screenshot Chat, Form Persetujuan) menjadi **Markdown bersih dan terstruktur yang siap langsung di-chunking** untuk pipeline RAG downstream, **Engine Data Tabular Transaksional ke SQLite** untuk data log mutasi/rekening koran/faktur yang memerlukan kalkulasi agregat berpresisi 100% (SUM, AVG, COUNT, filter tanggal), serta **Sub-Agent Spesialis Diagram** untuk mengevaluasi secara selektif dan mengekstrak diagram visual/topologi menjadi kode **Mermaid.js** yang valid.
 
 > ℹ️ **Catatan Branch:** 
 > Fitur lengkap pipeline RAG end-to-end (Embedding `Qwen3-VL-Embedding`, Reranker `Qwen3-VL-Reranker`, dan Vector Store) tersimpan di branch `end-to-end`. Branch `main` difokuskan pada pipeline ekstraksi dokumen ke format Markdown siap chunking, Tabular SQLite Database, dan Diagram Mermaid berbasis Vision Language Model murni (VLM).
 
 ---
 
-## 🎯 4 Spesifikasi Karakteristik Dokumen (Mendukung Multi-Spesifikasi Komposit)
+## 🎯 6 Spesifikasi Karakteristik Dokumen (Mendukung Multi-Spesifikasi Komposit)
 
-Sistem mendukung ekstraksi dengan satu atau **beberapa spesifikasi sekaligus secara komposit** (*Composable Prompts*), misalnya jurnal ilmiah multi-halaman yang membutuhkan aturan 2-kolom sekaligus kontinuitas heading antar-halaman (`bilingual_journal` + `markdown_hierarchy`):
+Sistem mendukung ekstraksi dengan satu atau **beberapa spesifikasi sekaligus secara komposit** (*Composable Prompts*), misalnya slide presentasi yang juga memuat form tanda tangan (`presentation_slides` + `signature_form`):
 
 | No | Spesifikasi Layout | Karakteristik & Perilaku Ekstraksi | Target Output |
 |:---:|:---|:---|:---|
-| **1** | `plain` | **Dokumen Biasa / Standar**<br>Dokumen umum (memo, formulir, surat, nota) yang tidak memerlukan perlakuan hierarki khusus. Diekstrak via VLM menjadi teks/markdown bersih. | Paragraf rapi, tabel standar GFM |
-| **2** | `markdown_hierarchy` | **Hierarki Markdown Berkelanjutan**<br>Dokumen bertingkat (`#`, `##`, `###`). Menjaga konsistensi judul ketika berpindah halaman (multi-page) dan menyambungkan kalimat terpotong tanpa merusak struktur. | Hierarki heading utuh, eliminasi page header/footer berulang |
-| **3** | `bilingual_journal` | **Jurnal Ilmiah / Dokumen 2-Kolom & 2-Bahasa**<br>Membaca kolom kiri dari atas ke bawah sampai selesai, lalu melanjutkan ke kolom kanan. Menjaga koherensi teks bilingual berdampingan. | Urutan baca logis berurutan (tidak melompat antar-kolom) |
-| **4** | `presentation_slides` | **Slide Presentasi (PPT / PPTX / Slide PDF)**<br>Slide yang sarat poin-poin/bullet list, tabel ringkas, speaker notes, serta penanda visual/diagram `[Diagram: ...]`. | Markdown per-slide yang siap dipartisi per topik |
+| **1** | `plain` | **Dokumen Bisnis Umum**<br>Surat, memo, pengumuman, formulir sederhana, teks internal. Diekstrak via VLM menjadi markdown bersih dengan kop surat, key-value, dan tabel GFM. | Paragraf rapi, key-value format, tabel standar GFM |
+| **2** | `markdown_hierarchy` | **Dokumen Terstruktur**<br>SOP, SK, kebijakan, peraturan, perjanjian, laporan formal bertingkat (`#`, `##`, `###`). Menjaga konsistensi judul ketika berpindah halaman (multi-page) dan menyambungkan kalimat terpotong tanpa merusak struktur. | Hierarki heading utuh, pasal/ayat dipertahankan |
+| **3** | `bilingual_journal` | **Artikel Internal / Dokumen Multi-Kolom**<br>Artikel internal, buletin, dokumen 2-kolom, atau dokumen dua bahasa berdampingan. Membaca kolom kiri dari atas ke bawah sampai selesai, lalu melanjutkan ke kolom kanan. | Urutan baca logis berurutan (tidak melompat antar-kolom) |
+| **4** | `presentation_slides` | **Slide Presentasi (PPT / PPTX / Slide PDF)**<br>Slide yang sarat poin-poin/bullet list, tabel ringkas, speaker notes, serta penanda visual/diagram `[Diagram/Visual]: ...`. | Markdown per-slide yang siap dipartisi per topik |
+| **5** | `chat_transcript` | **Screenshot Percakapan Chat**<br>WhatsApp, Telegram, chat internal. Diekstrak sebagai transkrip urut: `- **[Waktu] Pengirim:** isi pesan`, termasuk quote/lampiran. | Transkrip percakapan terstruktur siap RAG |
+| **6** | `signature_form` | **Form Tanda Tangan / Paraf / Approval**<br>Surat persetujuan dengan kotak tanda tangan. Diekstrak sebagai tabel (Pihak, Nama, Jabatan, Tanda Tangan, Tanggal) tanpa menebak nama dari tanda tangan atau status approval. | Tabel persetujuan GFM dengan konvensi `[tidak terbaca]` / `[kosong]` |
+
+Spesifikasi komposit didukung via alias, misalnya:
+
+```bash
+python main.py laporan.pdf -t "journal,hierarchy"
+python main.py dokumen.png -t "chat_transcript,signature_form"
+```
+
+---
+
+## ⚡ Mode Adaptif Cepat (Adaptive Fast-Path)
+
+Pipeline default berjalan dalam **mode adaptif**: setiap halaman dinilai tingkat kesulitannya, dan langkah yang tidak perlu di-skip untuk menghemat waktu (tiap VLM call lokal 30–100 detik):
+
+| Deteksi | Cara | Biaya |
+|:---|:---|:---|
+| Ada diagram/visual? | Cek output ekstraksi untuk `[Diagram/Visual]`, `[Topologi]`, ` ```mermaid ` | 0 VLM call |
+| Difficulty (simple/standard/complex) | Heuristic post-extraction + penilaian `inspect_page` | 0 VLM call tambahan |
+| Skip judge | Hanya untuk halaman *simple* yang bersih: tidak ada diagram, tidak ada tabel, tidak ada `[tidak terbaca]`, output ≥ 20 karakter | Hemat ~45 detik/halaman |
+| Skip diagram specialist | Hanya untuk halaman tanpa indikator visual | Hemat ~50 detik/halaman |
+
+**Guard safety** — judge tetap dijalankan jika ada: diagram, tabel, `[tidak terbaca]`, output mencurigakan (hampir kosong), atau difficulty bukan `simple`.
+
+Untuk pipeline penuh tanpa fast-path (dokumen sensitif / hasil audit):
+
+```bash
+python main.py dokumen.pdf --thorough
+```
+
+Pipeline juga menghasilkan **metadata visual & tabel** per halaman/dokumen:
+
+```text
+[Vision PPT] [Slide 3/13] Metadata: 2 visual/diagram, 1 tabel
+[Vision PPT] Selesai: 13 slide | 5 elemen visual/diagram | 3 tabel terdeteksi
+```
 
 ---
 
@@ -66,7 +103,7 @@ Tidak semua gambar visual pada dokumen cocok diubah menjadi diagram Mermaid. Mod
 
 Dokumen seperti **rekening koran, mutasi bank (Doc 8), ledger kas, slip transaksi, dan tabel keuangan** tidak cocok di-chunking ke Vector DB karena Vector Search tidak dapat melakukan kalkulasi agregat (SUM, AVG, filter tanggal).
 
-Sistem kini dilengkapi modul cerdas ([`app/tabular_db.py`](file:///c:/Users/HYPE%20AMD/Documents/Coding/jds-magang/app/tabular_db.py)):
+Sistem kini dilengkapi modul cerdas ([`app/tabular_db.py`](app/tabular_db.py)):
 1. **Deteksi & Klasifikasi Heuristik + LLM**:
    - Membedakan tabel transaksional (`transactional_log`, `financial_statement`) vs tabel naratif (`narrative_matrix`).
    - Menganalisis rasio numerik, format tanggal ISO, keyword perbankan/akuntansi, dan kepadatan teks sel.
@@ -82,9 +119,11 @@ Sistem kini dilengkapi modul cerdas ([`app/tabular_db.py`](file:///c:/Users/HYPE
 
 ---
 
-## 🤖 Arsitektur Sub-Agent (Deep Agents Harness)
+## 🤖 Arsitektur Sub-Agent (Deep Agents Harness — via MCP)
 
-Proyek ini dilengkapi dengan **Master Agent dan 7 Sub-Agent Spesialis** ([app/deep_agent.py](file:///c:/Users/HYPE%20AMD/Documents/Coding/jds-magang/app/deep_agent.py)) berbasis Vision Language Model murni:
+Proyek ini dilengkapi dengan **Master Agent dan 7 Sub-Agent Spesialis** ([app/deep_agent.py](app/deep_agent.py)) berbasis Vision Language Model murni. Deep Agent tersedia via **MCP Server** untuk use case conversational (instruksi bebas, query SQLite interaktif) — bukan via CLI, karena pipeline default CLI sudah mencakup seluruh kemampuan ekstraksi secara lebih cepat dan deterministik.
+
+Semua tool Deep Agent terintegrasi dengan konfigurasi caller: `db_path` dan `output_markdown_path` di-bake ke dalam tool, sehingga hasil ekstraksi menulis ke path yang ditentukan.
 
 | Nama Sub-Agent | Peran & Spesialisasi | Tool Utama |
 |:---|:---|:---|
@@ -100,7 +139,7 @@ Proyek ini dilengkapi dengan **Master Agent dan 7 Sub-Agent Spesialis** ([app/de
 
 ## 🔌 Model Context Protocol (MCP) Server & Batch Document Discovery
 
-Server MCP berstandar resmi **MCP Python SDK v2.0** ([app/mcp_server.py](file:///c:/Users/HYPE%20AMD/Documents/Coding/jds-magang/app/mcp_server.py)) menyediakan MCP Tools lengkap untuk AI Assistant:
+Server MCP berstandar resmi **MCP Python SDK v2.0** ([app/mcp_server.py](app/mcp_server.py)) menyediakan MCP Tools lengkap untuk AI Assistant:
 
 ### Daftar MCP Tools:
 1. **`scan_document_folders`**: Pindai direktori (mis. `dataset`, `input`, `output`) dan seluruh subfolder untuk mendeteksi folder dokumen.
@@ -123,49 +162,103 @@ Server MCP berstandar resmi **MCP Python SDK v2.0** ([app/mcp_server.py](file://
       "command": "python",
       "args": ["-m", "app.mcp_server"],
       "env": {
-        "OPENAI_API_KEY": "your_api_key_here",
-        "VLM_MODEL": "google/gemini-2.5-flash"
+        "VLM_BASE_URL": "http://localhost:1234/v1",
+        "VLM_MODEL": "qwen-35b-vision",
+        "VLM_API_KEY": "lm-studio"
       }
     }
   }
 }
 ```
 
+> Endpoint OpenAI-compatible apa pun didukung (LM Studio, llama-server, remote) — cukup ubah env `VLM_BASE_URL` / `VLM_MODEL` / `VLM_API_KEY`.
+
 ---
 
 ## 🚀 Penggunaan CLI
 
+### Perilaku Default
+- **Output otomatis disimpan ke file** `output/{nama_file}.md` (bukan dump ke terminal) — pakai `-o` untuk override
+- **Streaming per-halaman**: Markdown ditulis ke file output sambil dokumen diproses, bukan di akhir
+- **Log real-time otomatis** ke `output/logs/{nama_file}_latest.log` — monitor dengan `Get-Content -Wait` (PowerShell) atau `tail -f` (Linux)
+- **Database SQLite otomatis** di `output/databases/{nama_file}.sqlite`
+
 ### 1. Ekstraksi Dokumen Tunggal (PDF / Gambar / Scan)
 ```bash
-# Ekstraksi PDF dengan layout terdeteksi otomatis
+# Ekstraksi otomatis — output ke output/sample.md, SQLite ke output/databases/
+python main.py dataset/sample.pdf
+
+# Dengan path output eksplisit
 python main.py dataset/sample.pdf -o output/sample.md
 
-# Ekstraksi dengan spesifikasi komposit jurnal ilmiah 2-kolom & hierarki bab
-python main.py dataset/journal.pdf -t "bilingual_journal,markdown_hierarchy" -o output/journal.md
+# Screenshot chat WhatsApp + form tanda tangan dalam satu dokumen
+python main.py laporan.png -t "chat_transcript,signature_form"
 
-# Ekstraksi disertai preview chunking untuk validasi RAG
-python main.py dataset/document.pdf --preview-chunks --chunk-size 800 --chunk-overlap 100
+# Spesifikasi komposit artikel multi-kolom + hierarki bab
+python main.py dataset/artikel.pdf -t "bilingual_journal,markdown_hierarchy"
+
+# Tampilkan juga hasil di terminal (selain file)
+python main.py dataset/sample.pdf --stdout
+
+# Pratinjau statistik chunking untuk validasi RAG
+python main.py dataset/sample.pdf --preview-chunks --chunk-size 800 --chunk-overlap 100
+
+# Klasifikasi layout saja (tanpa ekstraksi)
+python main.py dataset/sample.pdf --classify-only
 ```
 
 ### 2. Ekstraksi Presentasi PowerPoint (.pptx / .ppt)
 ```bash
-# Pipeline VLM (default) - me-render slide ke gambar via LibreOffice headless
-python main.py dataset/presentation.pptx -o output/presentation.md
+# Pipeline VLM (default) — slide dirender ke gambar via LibreOffice headless
+python main.py dataset/presentation.pptx
 
-# Mode native teks (hanya membaca shape & text frame)
-python main.py dataset/presentation.pptx --ppt-native -o output/presentation.md
+# Mode native teks (hanya membaca shape & text frame, cepat, tanpa VLM)
+python main.py dataset/presentation.pptx --ppt-native
+
+# Pipeline penuh: judge & diagram specialist selalu aktif di tiap slide
+python main.py dataset/presentation.pptx --thorough
 ```
 
-### 3. Pemindaian Dataset & Ekstraksi Massal (Batch Mode)
+### 3. Database Tabular & Verifikasi
+```bash
+# Path SQLite kustom
+python main.py rekening.pdf --db-path output/db/rekening.sqlite
+
+# Paksa seluruh tabel (termasuk naratif) di-ingest ke SQLite
+python main.py dokumen.pdf --force-all-tables
+```
+
+### 4. Pemindaian Dataset & Ekstraksi Massal (Batch Mode)
 ```bash
 # Pindai struktur folder dataset
 python main.py --scan-folders dataset
 
 # Ekstraksi batch seluruh dokumen di dalam subfolder terpilih
 python main.py --batch "dataset/01_Kamus,dataset/02_Jurnal" -o output/batch_results
+
+# Daftar seluruh spesifikasi yang didukung
+python main.py --list-types
 ```
 
-### 4. Eksekusi Deep Reasoning Agent
+### 5. Mode Adaptif vs Thorough
 ```bash
-python main.py dataset/sample.pdf --agent --preview-chunks
+# Default: mode adaptif — halaman simple di-skip judge & diagram specialist
+python main.py dokumen.pdf
+
+# Thorough: selalu full pipeline (judge + diagram di setiap halaman)
+python main.py dokumen.pdf --thorough
 ```
+
+### 6. Logging
+```bash
+# Log otomatis real-time ke output/logs/{nama}_latest.log (default)
+python main.py dokumen.pdf
+
+# Path log kustom
+python main.py dokumen.pdf --log-file logs/run.txt
+
+# Level DEBUG
+python main.py dokumen.pdf --debug
+```
+
+> ℹ️ **Deep Agent (`--agent`) telah dihapus dari CLI** karena redundan — pipeline default sudah melakukan semua hal yang sama (auto-klasifikasi, diagram, SQLite, judge) lebih cepat dan deterministik. Deep Agent tetap tersedia via **MCP Server** untuk use case conversational (instruksi bebas, query SQLite interaktif).
