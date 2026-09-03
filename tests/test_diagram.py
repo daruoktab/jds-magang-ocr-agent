@@ -5,8 +5,11 @@ Unit tests untuk Diagram Mermaid & Visual Artifacts Specialist Module.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PIL import Image
 
@@ -67,6 +70,42 @@ def test_sanitize_mermaid_code():
     assert '"]]' not in cleaned_legacy
     assert 'RP1_RP0["RP1<br/>RP0"] --> D_Mem' in cleaned_legacy
 
+    # Kasus Figure 2-1: Subgraph cycle (UserMem -.-> LowerMem di dalam subgraph UserMem)
+    raw_subgraph_cycle = """flowchart TD
+    subgraph UserMem ["User Memory Space"]
+        UpperMem["3FFh"]
+        LowerMem["1FFFh"]
+        UserMem -.->|Indirect Address Pointer| LowerMem
+    end
+    Input1["('Input 1')"] --> UpperMem
+    """
+    cleaned_sub_cycle = sanitize_mermaid_code(raw_subgraph_cycle)
+    assert cleaned_sub_cycle is not None
+    assert "UserMem_node -.->|Indirect Address Pointer| LowerMem" in cleaned_sub_cycle
+    assert 'Input1["Input 1"]' in cleaned_sub_cycle
+    is_valid_sc, sc_err = validate_mermaid_syntax(cleaned_sub_cycle)
+    assert is_valid_sc is True
+    assert sc_err is None
+
+    # Kasus Figure 2-2: Duplicate conflicting node ID across subgraphs & duplicate edges & redundant labels
+    raw_subgraph_conflict = """flowchart TD
+    subgraph Bank0 [Bank 0]
+        Block_Low["4Fh - 7Fh"] --> Block_High["CFh - FFh"]
+        Row8_Reg["EEDATA"]
+    end
+    subgraph Bank1 [Bank 1]
+        Block_Low["4Fh"] --> Block_High["CFh"]
+    end
+    note1["Note"] -.-> Row8_Reg["EEDATA"]
+    """
+    cleaned_conflict = sanitize_mermaid_code(raw_subgraph_conflict)
+    assert cleaned_conflict is not None
+    assert 'Bank1_Block_Low["4Fh"]' in cleaned_conflict
+    assert 'note1["Note"] -.-> Row8_Reg' in cleaned_conflict
+    is_valid_cf, cf_err = validate_mermaid_syntax(cleaned_conflict)
+    assert is_valid_cf is True
+    assert cf_err is None
+
 
 def test_validate_mermaid_syntax():
     valid_code = """flowchart TD
@@ -92,6 +131,25 @@ def test_validate_mermaid_syntax():
     is_valid_db, err_db = validate_mermaid_syntax(bad_double)
     assert is_valid_db is False
     assert "penutup kurung siku ganda" in str(err_db)
+
+    # Deteksi Subgraph Self-Cycle oleh linter
+    raw_raw_cycle = """flowchart TD
+    subgraph UserMem [Memory]
+        UserMem --> LowerMem
+    end
+    """
+    is_valid_cy, err_cy = validate_mermaid_syntax(raw_raw_cycle)
+    assert is_valid_cy is False
+    assert "Setting UserMem as parent of UserMem would create a cycle" in str(err_cy)
+
+    # Deteksi Conflicting Duplicate Node ID oleh linter
+    raw_raw_conf = """flowchart TD
+    A["Label Satu"]
+    A["Label Dua"]
+    """
+    is_valid_cnf, err_cnf = validate_mermaid_syntax(raw_raw_conf)
+    assert is_valid_cnf is False
+    assert "dideklarasikan dengan dua label berbeda" in str(err_cnf)
 
 
 def test_get_diagram_recommendation():
@@ -251,4 +309,14 @@ def test_extract_diagram_self_correction_retry(tmp_path):
     assert res.is_mermaid is True
     assert res.mermaid_code is not None
     assert 'A["Start"] --> B["Process"]' in res.mermaid_code
+
+
+if __name__ == "__main__":
+    test_sanitize_mermaid_code()
+    print("✓ test_sanitize_mermaid_code passed")
+    test_validate_mermaid_syntax()
+    print("✓ test_validate_mermaid_syntax passed")
+    test_get_diagram_recommendation()
+    print("✓ test_get_diagram_recommendation passed")
+    print("All tests in test_diagram.py passed successfully!")
 

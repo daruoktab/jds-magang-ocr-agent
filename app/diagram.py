@@ -76,6 +76,11 @@ def _sanitize_mermaid_line(line: str) -> str:
     line = re.sub(r'(?<=\w)\[([^\]\n]*)\]\](?!\s*\])', r'[\1]', line)
     line = re.sub(r'(?<=\w)\{"([^"\n]*)"\}\}', r'{"\1"}', line)
 
+    # Bersihkan pembungkus (' ... ') atau (" ... ") di dalam label simpul bertanda kutip
+    line = re.sub(r'\["\(\'([^\'\n]+)\'\)"\]', r'["\1"]', line)
+    line = re.sub(r'\["\(\"([^\"\n]+)\"\)"\]', r'["\1"]', line)
+    line = re.sub(r'\[\(\'([^\'\n]+)\'\)\]', r'["\1"]', line)
+
     def _quote_content(content: str) -> str:
         c = content.strip()
         c = re.sub(r"<br\s*/?>", "<br/>", c, flags=re.IGNORECASE)
@@ -84,6 +89,9 @@ def _sanitize_mermaid_line(line: str) -> str:
         # Jika ada tanda kurung siku ganda di akhir
         if c.endswith("]"):
             c = c[:-1].strip()
+        # Bersihkan pembungkus (' ... ') atau (" ... ")
+        if (c.startswith("('") and c.endswith("')")) or (c.startswith('("') and c.endswith('")')):
+            c = c[2:-2].strip()
         # Jika sudah dibungkus tanda kutip ganda atau tunggal
         if c.startswith('"') and c.endswith('"'):
             inner = c[1:-1].replace('"', "'")
@@ -176,10 +184,78 @@ def sanitize_mermaid_code(raw_text: str) -> str | None:
     # Sanitasi karakter yang sering merusak parsing Mermaid di web UI
     cleaned = cleaned.replace("\r\n", "\n")
 
-    # Sanitasi per baris (auto-quoting node labels & cleaning illegal classDef properties)
+    # 1. Sanitasi per baris (auto-quoting node labels & cleaning illegal classDef properties)
     sanitized_lines = [_sanitize_mermaid_line(l) for l in cleaned.splitlines()]
-    cleaned = "\n".join(sanitized_lines)
 
+    # 2. Pemrosesan struktural multi-baris: Subgraph Cycles, Node Conflicts, Redundant Declarations, Duplicate Edges
+    subgraph_stack: list[str] = []
+    declared_nodes: dict[str, str] = {}  # node_id -> label
+    seen_edges: set[str] = set()
+    final_lines: list[str] = []
+
+    arrow_regex = re.compile(r"(-->|---|-.->|==>|<--|<---|<-.-|<==)")
+
+    for line in sanitized_lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("%%"):
+            final_lines.append(line)
+            continue
+
+        # Deteksi awal subgraph: subgraph ID [Title] atau subgraph ID ["Title"]
+        m_sub = re.match(r"^subgraph\s+([A-Za-z0-9_]+)\b", stripped, re.IGNORECASE)
+        if m_sub:
+            sub_id = m_sub.group(1)
+            subgraph_stack.append(sub_id)
+            final_lines.append(line)
+            continue
+
+        if stripped.lower() == "end":
+            if subgraph_stack:
+                subgraph_stack.pop()
+            final_lines.append(line)
+            continue
+
+        # A. Resolusi Subgraph Self-Cycle (mis. UserMem -.-> LowerMem di dalam subgraph UserMem)
+        arrow_tokens = r"(?:-->|---|-.->|==>|<--|<---|<-.-|<==)"
+        if subgraph_stack and arrow_regex.search(line):
+            curr_sub = subgraph_stack[-1]
+            esc_sub = re.escape(curr_sub)
+            pattern_src = r"\b" + esc_sub + r"\b(?=\s*(?:\[|\(|\{|\s*" + arrow_tokens + r"))"
+            line = re.sub(pattern_src, f"{curr_sub}_node", line)
+
+            pattern_dst = r"(" + arrow_tokens + r"\s*(?:\|[^|\n]*\|\s*)?)\b" + esc_sub + r"\b"
+            line = re.sub(pattern_dst, r"\g<1>" + f"{curr_sub}_node", line)
+
+        # B. Resolusi Konflik Deklarasi Node ID yang sama dengan label berbeda antar-subgraph
+        # Contoh: Block_Low["4Fh - 7Fh"] di Bank 0 vs Block_Low["4Fh"] di Bank 1
+        node_matches = list(re.finditer(r'\b([A-Za-z0-9_]+)\["([^"\n]+)"\]', line))
+        for nm in node_matches:
+            nid = nm.group(1)
+            nlabel = nm.group(2).strip()
+            if nid in declared_nodes:
+                prev_label = declared_nodes[nid]
+                if prev_label != nlabel and subgraph_stack:
+                    curr_sub = subgraph_stack[-1]
+                    unique_nid = f"{curr_sub}_{nid}"
+                    line = re.sub(r"\b" + re.escape(nid) + r"\b", unique_nid, line)
+                    declared_nodes[unique_nid] = nlabel
+                elif prev_label == nlabel and arrow_regex.search(line):
+                    # C. Hapus deklarasi kurung label yang berulang pada relasi panah
+                    redecl_pattern = r"(" + arrow_tokens + r"\s*(?:\|[^|\n]*\|\s*)?)\b" + re.escape(nid) + r'\["[^"\n]+"\]'
+                    line = re.sub(redecl_pattern, r"\g<1>" + nid, line)
+            else:
+                declared_nodes[nid] = nlabel
+
+        # D. Pencegahan Edge Duplikat (Duplicate Edges)
+        if arrow_regex.search(line):
+            norm_edge = re.sub(r"\s+", " ", line.strip())
+            if norm_edge in seen_edges:
+                continue
+            seen_edges.add(norm_edge)
+
+        final_lines.append(line)
+
+    cleaned = "\n".join(final_lines)
     return cleaned
 
 
@@ -223,6 +299,47 @@ def validate_mermaid_syntax(mermaid_code: str) -> tuple[bool, str | None]:
                 "Gunakan tanda kutip dua, contoh: A[\"Teks (detail)\"]."
             ),
         )
+
+    # Deteksi Subgraph Self-Cycle (ID Subgraph digunakan sebagai simpul relasi di dalam dirinya sendiri)
+    subgraph_stack_val: list[str] = []
+    arrow_val_pat = re.compile(r"(-->|---|-.->|==>|<--|<---|<-.-|<==)")
+    for line_idx, line_str in enumerate(lines):
+        st = line_str.strip()
+        m_s = re.match(r"^subgraph\s+([A-Za-z0-9_]+)\b", st, re.IGNORECASE)
+        if m_s:
+            subgraph_stack_val.append(m_s.group(1))
+            continue
+        if st.lower() == "end" and subgraph_stack_val:
+            subgraph_stack_val.pop()
+            continue
+
+        if subgraph_stack_val and arrow_val_pat.search(st):
+            curr_s = subgraph_stack_val[-1]
+            if re.search(rf"\b{curr_s}\b", st):
+                return (
+                    False,
+                    (
+                        f"Subgraph '{curr_s}' digunakan sebagai simpul relasi di dalam dirinya sendiri pada baris {line_idx + 1} "
+                        f"('{st}'). Ini memicu error fatal: 'Setting {curr_s} as parent of {curr_s} would create a cycle'. "
+                        f"Gunakan simpul terpisah di dalam subgraph (contoh: {curr_s}_node) atau hubungkan antarsimpul secara langsung."
+                    ),
+                )
+
+    # Deteksi Node ID yang dideklarasikan ulang dengan label berbeda (Conflicting Redeclaration)
+    declared_nodes_val: dict[str, str] = {}
+    for m in re.finditer(r'\b([A-Za-z0-9_]+)\["([^"\n]+)"\]', mermaid_code):
+        nid = m.group(1)
+        nlabel = m.group(2).strip()
+        if nid in declared_nodes_val and declared_nodes_val[nid] != nlabel:
+            return (
+                False,
+                (
+                    f"Simpul '{nid}' dideklarasikan dengan dua label berbeda ('{declared_nodes_val[nid]}' vs '{nlabel}'). "
+                    f"ID simpul Mermaid bersifat global di seluruh diagram. Gunakan ID unik untuk setiap simpul "
+                    f"(contoh: {nid}_1 dan {nid}_2)."
+                ),
+            )
+        declared_nodes_val[nid] = nlabel
 
     # Cek keseimbangan kurung pada kode di luar string literal
     open_brackets = code_without_strings.count("[")
@@ -507,8 +624,18 @@ def extract_diagram_to_mermaid(
         "   - Properti yang diizinkan: fill, stroke, stroke-width, color, stroke-dasharray.\n"
         "   - DILARANG KERAS menggunakan atribut SVG seperti 'rx' atau 'ry' (contoh SALAH: rx:15, ry:15).\n"
         "8. Pertahankan semua label relasi/panah secara akurat (contoh: A -->|Label| B).\n"
-        "9. Berikan output di dalam blok markdown ```mermaid\\n...\\n```.\n"
-        "10. Tambahkan ringkasan 1-2 kalimat di bawah blok kode yang menjelaskan arti diagram tersebut."
+        "9. DILARANG KERAS menggunakan ID subgraph sebagai simpul di dalam dirinya sendiri:\n"
+        "   - CONTOH SALAH (di dalam 'subgraph UserMem'): UserMem -.-> LowerMem\n"
+        "     Hal ini menyebabkan crash fatal: 'Setting UserMem as parent of UserMem would create a cycle'.\n"
+        "     Hubungkan antarsimpul langsung (contoh: UpperMem -.-> LowerMem) atau buat simpul baru di dalamnya.\n"
+        "10. ID SIMPUL BERSIFAT GLOBAL (DILARANG MENGGUNAKAN ID YANG SAMA UNTUK DUA LABEL BERBEDA):\n"
+        "    - Jika ada dua kotak dengan teks berbeda di subgraph berbeda, WAJIB beri ID unik (contoh: B0_Block_Low dan B1_Block_Low, JANGAN keduanya dinamai Block_Low).\n"
+        "11. JANGAN MENGULANG DEFINISI KURUNG LABEL PADA RELASI BERIKUTNYA:\n"
+        "    - Jika Row8_Reg[\"EEDATA\"] sudah didefinisikan sebelumnya, relasi panah berikutnya cukup tulis: note1 -.-> Row8_Reg.\n"
+        "12. DILARANG MEMBUNGKUS TEKS LABEL DENGAN KURUNG-KUTIP GANDA SEPERTI [\"('...')\"]:\n"
+        "    - Gunakan format bersih: Node[\"Teks\"] (bukan Node[\"('Teks')\"]).\n"
+        "13. Berikan output di dalam blok markdown ```mermaid\\n...\\n```.\n"
+        "14. Tambahkan ringkasan 1-2 kalimat di bawah blok kode yang menjelaskan arti diagram tersebut."
     )
 
     messages = [
@@ -594,7 +721,10 @@ def extract_diagram_to_mermaid(
                     "2. Selalu gunakan tanda kutip ganda pada label simpul: Node[\"Teks Label\"].\n"
                     "3. DILARANG menggunakan penutup kurung ganda ']]' jika pembukanya hanya satu '['.\n"
                     "4. DILARANG meletakkan <br/> atau teks di luar tanda kurung simpul pada baris relasi.\n"
-                    "5. Outputkan HANYA blok kode ```mermaid\\n...\\n``` yang sudah diperbaiki tanpa teks tambahan."
+                    "5. DILARANG menggunakan ID subgraph sebagai simpul relasi panah di dalam subgraph itu sendiri.\n"
+                    "6. DILARANG menggunakan ID simpul yang sama untuk dua label teks berbeda (gunakan ID unik per simpul).\n"
+                    "7. JANGAN mengulang penulisan kurung label pada simpul yang sudah pernah dideklarasikan sebelumnya.\n"
+                    "8. Outputkan HANYA blok kode ```mermaid\\n...\\n``` yang sudah diperbaiki tanpa teks tambahan."
                 )
                 try:
                     fix_resp = llm.invoke([{"role": "user", "content": fix_prompt}])
