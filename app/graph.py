@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
@@ -23,6 +23,7 @@ from .extractor import VisionExtractor
 from .llm import build_vlm
 from .preprocess import preprocess_image
 from .prompts import normalize_specs
+from .schemas import PipelinePageResult
 
 logger = logging.getLogger("app.graph")
 
@@ -161,18 +162,12 @@ class DocumentExtractionPipeline:
         forced_specs: list[str] | str | None = None,
         forced_doc_type: str | None = None,
         previous_page_context: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> PipelinePageResult:
         """
         Jalankan pipeline ekstraksi lengkap pada satu gambar halaman dokumen.
 
         Returns:
-            Dict berisi:
-                - preprocessed_path: path gambar yang telah di-preprocess
-                - specs: list string spesifikasi yang terdeteksi
-                - doc_type: string spesifikasi gabungan terurut (kompatibilitas)
-                - markdown_content: string teks Markdown hasil ekstraksi & koreksi
-                - has_diagram: boolean keberadaan diagram
-                - diagram_mermaid_code: kode Mermaid jika diekstrak oleh sub-agent
+            PipelinePageResult terstruktur dan tervalidasi Pydantic.
         """
         initial_state: DocumentExtractionState = {
             "image_path": image_path,
@@ -185,17 +180,21 @@ class DocumentExtractionPipeline:
         final_state = cast(dict[str, Any], self.graph.invoke(initial_state))
 
         final_md = final_state.get("markdown_content", "")
-        return {
-            "preprocessed_path": final_state.get("preprocessed_path", image_path),
-            "specs": final_state.get("specs", ["plain"]),
-            "doc_type": final_state.get("doc_type", "plain"),
-            "markdown_content": final_md,
-            "has_diagram": final_state.get("has_diagram", False),
-            "diagram_mermaid_code": final_state.get("diagram_mermaid_code"),
-            "difficulty": final_state.get("difficulty", "standard"),
-            "visual_count": count_visuals(final_md),
-            "table_count": count_tables(final_md),
-        }
+        diff_val = str(final_state.get("difficulty", "standard")).lower()
+        clean_difficulty: Literal["simple", "standard", "complex"] = (
+            diff_val if diff_val in ("simple", "standard", "complex") else "standard"
+        )
+        return PipelinePageResult(
+            preprocessed_path=final_state.get("preprocessed_path", image_path),
+            specs=final_state.get("specs", ["plain"]),
+            doc_type=final_state.get("doc_type", "plain"),
+            markdown_content=final_md,
+            has_diagram=final_state.get("has_diagram", False),
+            diagram_mermaid_code=final_state.get("diagram_mermaid_code"),
+            difficulty=clean_difficulty,
+            visual_count=count_visuals(final_md),
+            table_count=count_tables(final_md),
+        )
 
     # =========================================================================
     # Node Implementations

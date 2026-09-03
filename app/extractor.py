@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -26,6 +26,7 @@ from .prompts import (
     build_extraction_prompt,
     normalize_specs,
 )
+from .schemas import PageInspectionResult
 
 logger = logging.getLogger("app.extractor")
 
@@ -113,10 +114,10 @@ class VisionExtractor:
         logger.info("[Extractor:Classify] Fallback regex layout: %s", final_specs)
         return final_specs
 
-    def inspect_page(self, image_path: str) -> dict[str, Any]:
+    def inspect_page(self, image_path: str) -> PageInspectionResult:
         """
         Inspeksi komprehensif layout dokumen & elemen visual (diagram, tabel, hierarki).
-        Mengembalikan dict berisi specs, has_diagram, diagram_type, dan has_table.
+        Mengembalikan PageInspectionResult berisi specs, has_diagram, diagram_type, dan has_table.
         """
         inspect_prompt = (
             "Analisis gambar dokumen ini secara menyeluruh untuk mendeteksi karakteristik tata letak dan elemen visual.\n\n"
@@ -162,33 +163,30 @@ class VisionExtractor:
                 data = json.loads(match.group(0))
                 raw_specs = data.get("specs") or [data.get("doc_type")]
                 norm_specs = normalize_specs(raw_specs)
-                has_diag = bool(data.get("has_diagram", False))
-                diag_type = data.get("diagram_type")
-                has_tbl = bool(data.get("has_table", False))
-                difficulty = str(data.get("difficulty", "standard")).lower()
-                if difficulty not in ("simple", "standard", "complex"):
-                    difficulty = "standard"
-                return {
-                    "specs": norm_specs,
-                    "has_diagram": has_diag,
-                    "diagram_type": diag_type,
-                    "has_table": has_tbl,
-                    "difficulty": difficulty,
-                }
+                diff_val = str(data.get("difficulty", "standard")).lower()
+                clean_difficulty: Literal["simple", "standard", "complex"] = (
+                    diff_val if diff_val in ("simple", "standard", "complex") else "standard"
+                )
+                return PageInspectionResult(
+                    specs=norm_specs,
+                    has_diagram=bool(data.get("has_diagram", False)),
+                    diagram_type=data.get("diagram_type"),
+                    has_table=bool(data.get("has_table", False)),
+                    difficulty=clean_difficulty,
+                    reasoning=data.get("reasoning"),
+                )
         except Exception as e:  # noqa: BLE001
             logger.warning("[Extractor:Inspect] Gagal inspect JSON (%s), fallback ke classify biasa.", e)
 
         # Fallback
         specs = self.classify(image_path)
-        return {
-            "specs": specs,
-            # Diagram dideteksi post-extraction via output indicators (fast-path),
-            # bukan diasumsikan ada hanya karena spec = presentation_slides.
-            "has_diagram": False,
-            "diagram_type": None,
-            "has_table": False,
-            "difficulty": "standard",
-        }
+        return PageInspectionResult(
+            specs=specs,
+            has_diagram=False,
+            diagram_type=None,
+            has_table=False,
+            difficulty="standard",
+        )
 
     def judge_and_refine(
         self,

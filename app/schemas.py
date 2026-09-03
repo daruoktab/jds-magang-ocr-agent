@@ -29,6 +29,113 @@ class ClassificationResult(BaseModel):
     )
 
 
+class PageInspectionResult(BaseModel):
+    """Hasil inspeksi awal satu halaman citra dokumen (specs, diagram, tabel, difficulty)."""
+
+    specs: list[str] = Field(
+        default_factory=lambda: ["plain"],
+        description="Daftar karakteristik layout yang terdeteksi",
+    )
+    has_diagram: bool = Field(
+        default=False, description="True jika terdapat diagram/visual pada halaman"
+    )
+    diagram_type: str | None = Field(
+        default=None, description="Tipe diagram visual jika terdeteksi"
+    )
+    has_table: bool = Field(
+        default=False, description="True jika terdapat tabel data/baris-kolom"
+    )
+    difficulty: Literal["simple", "standard", "complex"] = Field(
+        default="standard", description="Estimasi tingkat kesulitan pemrosesan halaman"
+    )
+    confidence: float = Field(
+        default=1.0, description="Tingkat keyakinan inspeksi (0.0 - 1.0)"
+    )
+    reasoning: str | None = Field(
+        default=None, description="Catatan atau penalaran inspeksi"
+    )
+
+    def __getitem__(self, key: str) -> Any:
+        """Kompatibilitas backward untuk akses dict: insp_res['specs']."""
+        return getattr(self, key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Kompatibilitas backward untuk get dict: insp_res.get('has_diagram')."""
+        return getattr(self, key, default)
+
+
+class JudgeAuditDecision(BaseModel):
+    """Hasil evaluasi dan keputusan koreksi tahap Judge & Refine."""
+
+    action: Literal[
+        "accepted",
+        "rejected_leak",
+        "rejected_bloat",
+        "rejected_truncation",
+        "fallback_error",
+    ] = Field(
+        default="accepted",
+        description="Status keputusan penerimaan atau penolakan hasil judge",
+    )
+    final_markdown: str = Field(
+        ..., description="Teks Markdown final (hasil koreksi atau fallback ke draf)"
+    )
+    char_count_draft: int = Field(
+        default=0, description="Jumlah karakter draf sebelum judge"
+    )
+    char_count_refined: int = Field(
+        default=0, description="Jumlah karakter teks hasil judge"
+    )
+    reason: str = Field(
+        default="Koreksi berhasil diverifikasi",
+        description="Alasan atau keterangan keputusan audit",
+    )
+    leak_indicator: str | None = Field(
+        default=None, description="Frasa bocoran penalaran yang terdeteksi jika ditolak"
+    )
+
+
+class PipelinePageResult(BaseModel):
+    """Hasil pemrosesan satu halaman dokumen melalui pipeline ekstraksi."""
+
+    preprocessed_path: str = Field(
+        ..., description="Path citra halaman hasil prapemrosesan"
+    )
+    specs: list[str] = Field(
+        default_factory=lambda: ["plain"],
+        description="Spesifikasi layout aktif pada halaman ini",
+    )
+    doc_type: str = Field(
+        default="plain", description="Tipe dokumen utama"
+    )
+    markdown_content: str = Field(
+        ..., description="Teks Markdown final yang bersih dan siap di-chunking"
+    )
+    has_diagram: bool = Field(
+        default=False, description="True jika terdapat elemen visual/diagram"
+    )
+    diagram_mermaid_code: str | None = Field(
+        default=None, description="Kode Mermaid.js yang berhasil dikompilasi jika ada"
+    )
+    difficulty: Literal["simple", "standard", "complex"] = Field(
+        default="standard", description="Tingkat kesulitan halaman"
+    )
+    visual_count: int = Field(
+        default=0, description="Jumlah elemen visual terdeteksi pada halaman"
+    )
+    table_count: int = Field(
+        default=0, description="Jumlah tabel terdeteksi pada halaman"
+    )
+
+    def __getitem__(self, key: str) -> Any:
+        """Kompatibilitas backward untuk akses berbasis dict: result['markdown_content']."""
+        return getattr(self, key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Kompatibilitas backward untuk get berbasis dict: result.get('specs')."""
+        return getattr(self, key, default)
+
+
 class DocumentPage(BaseModel):
     """Hasil ekstraksi satu halaman dokumen."""
 
