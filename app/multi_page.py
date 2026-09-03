@@ -271,6 +271,64 @@ def merge_and_stitch_markdown_pages(
     return merged_full_markdown, sorted_pages
 
 
+def extract_document_title(
+    markdown_content: str,
+    fallback_title: str | None = None,
+) -> str | None:
+    """
+    Ekstrak judul dokumen dari teks Markdown (biasanya halaman pertama) secara cerdas.
+
+    Strategi pencarian:
+    1. Mencari baris heading level 1 (# Judul) yang bukan label halaman/dokumen generic.
+    2. Mencari baris heading level 2 (## Judul) jika tidak ada #.
+    3. Mencari teks tebal (**Judul**) yang berdiri sendiri pada baris awal.
+    4. Fallback ke parameter `fallback_title` jika tidak ditemukan judul yang meyakinkan.
+    """
+    if not markdown_content or not markdown_content.strip():
+        return fallback_title
+
+    cleaned = strip_page_markers(strip_thinking_process(markdown_content)).strip()
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+
+    generic_titles = {
+        "document",
+        "dokumen",
+        "page 1",
+        "halaman 1",
+        "slide 1",
+        "overview",
+        "ringkasan",
+        "pendahuluan",
+        "untitled",
+        "table of contents",
+        "daftar isi",
+    }
+
+    # 1. Cari baris heading # (H1)
+    for line in lines:
+        if line.startswith("# ") and not line.startswith("##"):
+            title = line[2:].strip()
+            if title and title.lower() not in generic_titles:
+                return title
+
+    # 2. Cari baris heading ## (H2) jika H1 tidak ada
+    for line in lines:
+        if line.startswith("## ") and not line.startswith("###"):
+            title = line[3:].strip()
+            if title and title.lower() not in generic_titles:
+                return title
+
+    # 3. Cari baris tebal **Judul** pada 5 baris pertama
+    for line in lines[:5]:
+        m = re.match(r"^\*\*(.+?)\*\*$", line)
+        if m:
+            title = m.group(1).strip()
+            if len(title) > 3 and title.lower() not in generic_titles:
+                return title
+
+    return fallback_title
+
+
 def stitch_pages_to_markdown(
     pages_markdown: list[str] | list[Any],
     *,
@@ -284,8 +342,10 @@ def stitch_pages_to_markdown(
 
     Args:
         pages_markdown: List string markdown (atau objek DocumentPage) dari setiap halaman (berurutan).
-        document_title: Judul dokumen (opsional, akan menjadi heading # utama).
-        include_page_markers: Jika True, sisipkan komentar `<!-- PAGE: N -->` / `<!-- SLIDE: N -->`.\n        is_slide: Jika True, gunakan penanda `<!-- SLIDE: N -->`.\n
+        document_title: Judul dokumen (opsional, akan diselaraskan sebagai heading # utama di halaman 1).
+        include_page_markers: Jika True, sisipkan komentar `<!-- PAGE: N -->` / `<!-- SLIDE: N -->`.
+        is_slide: Jika True, gunakan penanda `<!-- SLIDE: N -->`.
+
     Returns:
         String Markdown utuh siap dichunking.
     """
@@ -303,15 +363,37 @@ def stitch_pages_to_markdown(
         else:
             raw_pages.append(str(item))
 
+    clean_title: str | None = None
+    if document_title and document_title.strip():
+        clean_title = document_title.strip()
+        if clean_title.startswith("#"):
+            clean_title = clean_title.lstrip("#").strip()
+
     stitched_blocks: list[str] = []
 
-    if document_title:
-        stitched_blocks.append(f"# {document_title.strip()}\n")
+    # Jika tanpa page markers dan ada document_title, letakkan di paling awal
+    if clean_title and not include_page_markers:
+        stitched_blocks.append(f"# {clean_title}\n")
 
     for idx, page_md in enumerate(raw_pages, start=1):
         cleaned_md = _clean_page_artifacts(page_md).strip()
         if not cleaned_md:
             continue
+
+        # Penanganan khusus judul dokumen:
+        if clean_title:
+            lines = cleaned_md.splitlines()
+            if idx == 1:
+                # Pada Halaman 1: pastikan diawali dengan '# <clean_title>'
+                first_line = lines[0].strip() if lines else ""
+                if first_line.startswith("# ") and not first_line.startswith("##"):
+                    pass
+                else:
+                    cleaned_md = f"# {clean_title}\n\n{cleaned_md}"
+            else:
+                # Pada Halaman 2+: HAPUS baris '# <clean_title>' jika model mengulanginya
+                if lines and lines[0].strip().lower() == f"# {clean_title.lower()}":
+                    cleaned_md = "\n".join(lines[1:]).strip()
 
         if include_page_markers:
             stitched_blocks.append(
@@ -408,6 +490,7 @@ def preview_markdown_chunks(
 __all__ = [
     "PAGE_DELIMITER_RE",
     "collapse_consecutive_duplicate_blocks",
+    "extract_document_title",
     "extract_preamble",
     "format_page_delimiter",
     "merge_and_stitch_markdown_pages",

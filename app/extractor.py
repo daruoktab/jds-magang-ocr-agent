@@ -114,11 +114,26 @@ class VisionExtractor:
         logger.info("[Extractor:Classify] Fallback regex layout: %s", final_specs)
         return final_specs
 
-    def inspect_page(self, image_path: str) -> PageInspectionResult:
+    def inspect_page(
+        self,
+        image_path: str,
+        *,
+        is_first_page: bool = False,
+    ) -> PageInspectionResult:
         """
         Inspeksi komprehensif layout dokumen & elemen visual (diagram, tabel, hierarki).
-        Mengembalikan PageInspectionResult berisi specs, has_diagram, diagram_type, dan has_table.
+        Jika is_first_page=True, juga mengekstrak judul utama dokumen secara eksplisit.
+        Mengembalikan PageInspectionResult berisi specs, has_diagram, diagram_type, has_table, dan document_title.
         """
+        title_instruction = (
+            "6. document_title: Judul utama dokumen jika ini adalah halaman 1 / sampul / halaman judul, atau null jika tidak terlihat jelas.\n"
+            if is_first_page
+            else ""
+        )
+        title_json_field = (
+            '  "document_title": "string" atau null,\n' if is_first_page else ""
+        )
+
         inspect_prompt = (
             "Analisis gambar dokumen ini secara menyeluruh untuk mendeteksi karakteristik tata letak dan elemen visual.\n\n"
             "Evaluasi hal berikut:\n"
@@ -135,14 +150,17 @@ class VisionExtractor:
             "5. difficulty: Tingkat kesulitan ekstraksi halaman.\n"
             "   - 'simple': teks polos, sedikit elemen, tanpa diagram/tabel/kompleksitas.\n"
             "   - 'standard': ada struktur (list, heading, tabel sederhana).\n"
-            "   - 'complex': ada diagram/topologi, multi-kolom, chat, form tanda tangan, atau teks padat.\n\n"
+            "   - 'complex': ada diagram/topologi, multi-kolom, chat, form tanda tangan, atau teks padat.\n"
+            f"{title_instruction}\n"
             "Outputkan HANYA format JSON valid tanpa pengantar:\n"
             "{\n"
             '  "specs": ["spec1", "spec2"],\n'
             '  "has_diagram": true/false,\n'
             '  "diagram_type": "string" atau null,\n'
             '  "has_table": true/false,\n'
-            '  "difficulty": "simple" atau "standard" atau "complex"\n'
+            '  "difficulty": "simple" atau "standard" atau "complex",\n'
+            f"{title_json_field}"
+            '  "reasoning": "penjelasan singkat"\n'
             "}"
         )
 
@@ -167,6 +185,9 @@ class VisionExtractor:
                 clean_difficulty: Literal["simple", "standard", "complex"] = (
                     diff_val if diff_val in ("simple", "standard", "complex") else "standard"
                 )
+                doc_title = data.get("document_title")
+                if isinstance(doc_title, str):
+                    doc_title = doc_title.strip() or None
                 return PageInspectionResult(
                     specs=norm_specs,
                     has_diagram=bool(data.get("has_diagram", False)),
@@ -174,6 +195,7 @@ class VisionExtractor:
                     has_table=bool(data.get("has_table", False)),
                     difficulty=clean_difficulty,
                     reasoning=data.get("reasoning"),
+                    document_title=doc_title,
                 )
         except Exception as e:  # noqa: BLE001
             logger.warning("[Extractor:Inspect] Gagal inspect JSON (%s), fallback ke classify biasa.", e)
@@ -186,6 +208,7 @@ class VisionExtractor:
             diagram_type=None,
             has_table=False,
             difficulty="standard",
+            document_title=None,
         )
 
     def judge_and_refine(

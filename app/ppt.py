@@ -25,6 +25,7 @@ from langchain_core.messages import HumanMessage
 from .config import DEFAULT_DPI
 from .llm import encode_image_to_base64
 from .multi_page import (
+    extract_document_title,
     format_page_delimiter,
     stitch_pages_to_markdown,
     strip_page_markers,
@@ -467,6 +468,7 @@ def process_presentation_vision(
     total_tables = 0
 
     stream_file: Path | None = None
+    presentation_title: str | None = None
     if output_markdown_path:
         stream_file = Path(output_markdown_path).resolve()
         stream_file.parent.mkdir(parents=True, exist_ok=True)
@@ -481,8 +483,13 @@ def process_presentation_vision(
             img_file.name,
         )
 
+        res = None
         if pipeline is not None and hasattr(pipeline, "run"):
-            res = pipeline.run(str(img_file), forced_specs=doc_spec)
+            res = pipeline.run(
+                str(img_file),
+                forced_specs=doc_spec,
+                is_first_page=(idx == 1),
+            )
             slide_md = res.get("markdown_content", "")
             total_visuals += int(res.get("visual_count", 0))
             total_tables += int(res.get("table_count", 0))
@@ -513,6 +520,16 @@ def process_presentation_vision(
         slide_md = strip_page_markers(slide_md).strip()
         slide_md = sanitize_markdown_tables(slide_md)
 
+        # Mekanisme Judul Dokumen (hanya diekstrak di slide 1)
+        if idx == 1:
+            detected_title = (
+                (getattr(res, "document_title", None) if res else None)
+                or extract_document_title(slide_md, fallback_title=path_obj.stem)
+            )
+            if detected_title:
+                presentation_title = detected_title
+                logger.info("[Vision PPT] Judul presentasi teridentifikasi: '%s'", presentation_title)
+
         # Jalankan Sub-Agent SQL mandiri per slide
         process_page_tabular_agent(
             page_markdown=slide_md,
@@ -532,7 +549,10 @@ def process_presentation_vision(
                 f.flush()
 
     stitched_md = stitch_pages_to_markdown(
-        pages_markdown, source_name=src, is_slide=True
+        pages_markdown,
+        document_title=presentation_title,
+        source_name=src,
+        is_slide=True,
     )
 
     # Jalankan Dual-track Guardrail Cross-Verification

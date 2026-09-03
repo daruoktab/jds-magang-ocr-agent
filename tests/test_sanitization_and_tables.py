@@ -12,7 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from unittest.mock import MagicMock
 
 from app.extractor import VisionExtractor
-from app.multi_page import strip_thinking_process
+from app.multi_page import (
+    extract_document_title,
+    stitch_pages_to_markdown,
+    strip_thinking_process,
+)
 from app.tabular_db import parse_markdown_tables, sanitize_markdown_tables
 
 
@@ -192,6 +196,67 @@ def test_judge_and_refine_guardrails_extreme_bloat(tmp_path: Path):
     assert refined == medium_draft
 
 
+def test_extract_document_title():
+    # Kasus 1: Judul H1 eksplisit
+    h1_md = """
+# PIC16F84A
+## 18-pin Enhanced FLASH/EEPROM 8-Bit Microcontroller
+Isi spesifikasi teknis.
+"""
+    assert extract_document_title(h1_md) == "PIC16F84A"
+
+    # Kasus 2: Dokumen dengan H2 (tanpa H1)
+    h2_md = """
+## LAPORAN KEUANGAN TAHUNAN
+Berikut rincian saldo.
+"""
+    assert extract_document_title(h2_md) == "LAPORAN KEUANGAN TAHUNAN"
+
+    # Kasus 3: Judul format bold berdiri sendiri
+    bold_md = """
+**PANDUAN OPERASIONAL STANDAR**
+Langkah-langkah pengerjaan:
+"""
+    assert extract_document_title(bold_md) == "PANDUAN OPERASIONAL STANDAR"
+
+    # Kasus 4: Abaikan heading generic ("# Document", "# Page 1") dan ambil judul riil
+    generic_md = """
+# Document
+## Arsitektur Mikrokontroler
+Deskripsi arsitektur.
+"""
+    assert extract_document_title(generic_md) == "Arsitektur Mikrokontroler"
+
+    # Kasus 5: Fallback jika tidak ada judul sama sekali
+    plain_md = "Hanya paragraf tanpa heading maupun bold."
+    assert extract_document_title(plain_md, fallback_title="PIC16F84A") == "PIC16F84A"
+
+
+def test_stitch_pages_to_markdown_with_document_title():
+    page1 = """# PIC16F84A
+## Fitur Utama
+- RISC CPU
+"""
+    # Halaman 2 mengulang judul # PIC16F84A karena halusinasi model
+    page2 = """# PIC16F84A
+## Memory Architecture
+Diagram memori.
+"""
+
+    # Saat dijahit dengan document_title="PIC16F84A":
+    stitched = stitch_pages_to_markdown([page1, page2], document_title="PIC16F84A", is_slide=False)
+
+    # 1. Halaman 1 memiliki # PIC16F84A di bawah marker
+    assert "<!-- PAGE: 1 -->" in stitched
+    assert "# PIC16F84A" in stitched
+
+    # 2. Halaman 2 TIDAK mengulang '# PIC16F84A'
+    assert "<!-- PAGE: 2 -->" in stitched
+    page2_content = stitched.split("<!-- PAGE: 2 -->")[1]
+    assert "# PIC16F84A" not in page2_content
+    assert "## Memory Architecture" in page2_content
+
+
 if __name__ == "__main__":
     import tempfile
     test_strip_thinking_process_complete()
@@ -204,6 +269,10 @@ if __name__ == "__main__":
     print("✓ test_strip_thinking_process_indonesian_reasoning passed")
     test_sanitize_markdown_tables_broken_subheaders_and_blank_lines()
     print("✓ test_sanitize_markdown_tables_broken_subheaders_and_blank_lines passed")
+    test_extract_document_title()
+    print("✓ test_extract_document_title passed")
+    test_stitch_pages_to_markdown_with_document_title()
+    print("✓ test_stitch_pages_to_markdown_with_document_title passed")
 
     with tempfile.TemporaryDirectory() as td:
         p_td = Path(td)

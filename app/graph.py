@@ -21,6 +21,7 @@ from .agents import get_agent
 from .config import Settings, get_settings
 from .extractor import VisionExtractor
 from .llm import build_vlm
+from .multi_page import extract_document_title
 from .preprocess import preprocess_image
 from .prompts import normalize_specs
 from .schemas import PipelinePageResult
@@ -45,6 +46,8 @@ class DocumentExtractionState(TypedDict, total=False):
     markdown_content: str
     diagram_mermaid_code: str | None
     diagram_summary: str | None
+    document_title: str | None
+    is_first_page: bool
     final_markdown: str
 
 
@@ -162,6 +165,7 @@ class DocumentExtractionPipeline:
         forced_specs: list[str] | str | None = None,
         forced_doc_type: str | None = None,
         previous_page_context: str | None = None,
+        is_first_page: bool = False,
     ) -> PipelinePageResult:
         """
         Jalankan pipeline ekstraksi lengkap pada satu gambar halaman dokumen.
@@ -174,9 +178,10 @@ class DocumentExtractionPipeline:
             "forced_specs": forced_specs,
             "forced_doc_type": forced_doc_type,
             "previous_page_context": previous_page_context,
+            "is_first_page": is_first_page,
         }
 
-        logger.info("[Pipeline] Memulai ekstraksi: %s", image_path)
+        logger.info("[Pipeline] Memulai ekstraksi: %s (is_first_page=%s)", image_path, is_first_page)
         final_state = cast(dict[str, Any], self.graph.invoke(initial_state))
 
         final_md = final_state.get("markdown_content", "")
@@ -194,6 +199,7 @@ class DocumentExtractionPipeline:
             difficulty=clean_difficulty,
             visual_count=count_visuals(final_md),
             table_count=count_tables(final_md),
+            document_title=final_state.get("document_title"),
         )
 
     # =========================================================================
@@ -262,7 +268,8 @@ class DocumentExtractionPipeline:
 
         # Inspeksi otomatis via VLM
         t0 = time.perf_counter()
-        insp_res = self.extractor.inspect_page(img)
+        is_first = bool(state.get("is_first_page", False))
+        insp_res = self.extractor.inspect_page(img, is_first_page=is_first)
         elapsed = (time.perf_counter() - t0) * 1000
 
         detected_specs = insp_res.get("specs", ["plain"])
@@ -270,14 +277,19 @@ class DocumentExtractionPipeline:
         diag_type = insp_res.get("diagram_type")
         has_tbl = bool(insp_res.get("has_table", False))
         difficulty = str(insp_res.get("difficulty", "standard"))
+        doc_title = getattr(insp_res, "document_title", None) or insp_res.get("document_title")
+
+        if doc_title:
+            logger.info("[Pipeline:Classify] Judul dokumen terdeteksi: '%s'", doc_title)
 
         logger.info(
-            "[Pipeline:Classify] Layout: %s | Diagram: %s (%s) | Tabel: %s | Difficulty: %s (%.1fms)",
+            "[Pipeline:Classify] Layout: %s | Diagram: %s (%s) | Tabel: %s | Difficulty: %s%s (%.1fms)",
             detected_specs,
             has_diag,
             diag_type,
             has_tbl,
             difficulty,
+            f" | Judul: '{doc_title}'" if doc_title else "",
             elapsed,
         )
 
@@ -289,6 +301,7 @@ class DocumentExtractionPipeline:
             "diagram_type": diag_type,
             "has_table": has_tbl,
             "difficulty": difficulty,
+            "document_title": doc_title or state.get("document_title"),
         }
 
     def _node_extract_markdown(
@@ -314,9 +327,18 @@ class DocumentExtractionPipeline:
             elapsed,
         )
 
+        # Jika halaman pertama dan judul belum didapat dari inspeksi, ekstrak dari hasil markdown
+        current_title = state.get("document_title")
+        if state.get("is_first_page") and not current_title:
+            extracted_title = extract_document_title(md_text)
+            if extracted_title:
+                current_title = extracted_title
+                logger.info("[Pipeline:ExtractMarkdown] Judul dokumen diekstrak dari Markdown Halaman 1: '%s'", current_title)
+
         return {
             **state,
             "markdown_content": md_text,
+            "document_title": current_title,
         }
 
     def _node_summon_diagram_specialist(

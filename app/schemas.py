@@ -54,6 +54,9 @@ class PageInspectionResult(BaseModel):
     reasoning: str | None = Field(
         default=None, description="Catatan atau penalaran inspeksi"
     )
+    document_title: str | None = Field(
+        default=None, description="Judul utama dokumen jika terdeteksi (terutama di halaman 1)"
+    )
 
     def __getitem__(self, key: str) -> Any:
         """Kompatibilitas backward untuk akses dict: insp_res['specs']."""
@@ -125,6 +128,9 @@ class PipelinePageResult(BaseModel):
     )
     table_count: int = Field(
         default=0, description="Jumlah tabel terdeteksi pada halaman"
+    )
+    document_title: str | None = Field(
+        default=None, description="Judul utama dokumen jika terdeteksi"
     )
 
     def __getitem__(self, key: str) -> Any:
@@ -733,6 +739,9 @@ class ExtractedDocument(BaseModel):
     """Hasil akhir dokumen lengkap dengan metadata hierarki, database tabular, & diagram Mermaid."""
 
     source_file: str = Field(..., description="Path file input")
+    title: str | None = Field(
+        default=None, description="Judul dokumen utama yang teridentifikasi (dari halaman 1/sampul)"
+    )
     doc_type: str = Field(
         default="plain",
         description="Spesifikasi tata letak utama: plain, markdown_hierarchy, bilingual_journal, presentation_slides",

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from .config import DEFAULT_DPI, PDF_PAGE_BATCH
 from .multi_page import (
+    extract_document_title,
     format_page_delimiter,
     stitch_pages_to_markdown,
     strip_page_markers,
@@ -256,6 +257,7 @@ def process_multipage_pdf(
     total_visuals = 0
     total_tables = 0
 
+    document_title: str | None = None
     active_forced = forced_specs or forced_doc_type
 
     # Tentukan path target database SQLite
@@ -303,12 +305,23 @@ def process_multipage_pdf(
                 str(img_path),
                 forced_specs=active_forced,
                 previous_page_context=previous_context,
+                is_first_page=(idx == 1),
             )
 
             from .tabular_db import sanitize_markdown_tables
 
             page_md: str = strip_page_markers(res["markdown_content"]).strip()
             page_md = sanitize_markdown_tables(page_md)
+
+            # Mekanisme Judul Dokumen (diekstraksi sekali, utamanya pada halaman 1)
+            if idx == 1:
+                detected_title = getattr(res, "document_title", None) or extract_document_title(
+                    page_md, fallback_title=pdf_path.stem
+                )
+                if detected_title:
+                    document_title = detected_title
+                    logger.info("[PDF] Judul dokumen utama teridentifikasi: '%s'", document_title)
+
             detected_specs: list[str] = res.get("specs") or ["plain"]
             total_visuals += int(res.get("visual_count", 0))
             total_tables += int(res.get("table_count", 0))
@@ -321,9 +334,15 @@ def process_multipage_pdf(
 
             pages_md.append(page_md)
             all_page_specs.append(detected_specs)
-            previous_context = (
-                page_md[-400:] if len(page_md) > 400 else page_md
+
+            # Susun konteks kesinambungan untuk halaman berikutnya dengan referensi judul dokumen
+            doc_prefix = (
+                f"Konteks Dokumen: Judul: '{document_title}'. Halaman saat ini: Halaman {idx + 1}/{total_pages} (halaman lanjutan, jangan mengulang judul dokumen sebagai heading #).\n\n"
+                if document_title
+                else ""
             )
+            tail_ctx = page_md[-400:] if len(page_md) > 400 else page_md
+            previous_context = doc_prefix + tail_ctx
 
             pages.append(
                 DocumentPage(
@@ -358,8 +377,12 @@ def process_multipage_pdf(
                     f.write(f"\n{delimiter}\n\n{page_md}\n\n---\n")
                     f.flush()
 
-    # Jahit teks seluruh halaman menjadi satu teks Markdown utuh
-    full_md = stitch_pages_to_markdown(pages_md, is_slide=False)
+    # Jahit teks seluruh halaman menjadi satu teks Markdown utuh dengan judul utama
+    full_md = stitch_pages_to_markdown(
+        pages_md,
+        document_title=document_title,
+        is_slide=False,
+    )
 
     # Jalur 3: Supervisor Guardrail Cross-Verification (Audit Markdown vs SQLite)
     guardrail_report = None
@@ -385,6 +408,7 @@ def process_multipage_pdf(
 
     return ExtractedDocument(
         source_file=str(pdf_path),
+        title=document_title,
         doc_type=primary_doc_type,
         pages=pages,
         full_markdown=full_md,
