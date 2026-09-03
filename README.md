@@ -7,6 +7,46 @@ Sistem ekstraksi **dokumen internal perusahaan** (PDF, PPT/PPTX, Scan Gambar, Sc
 
 ---
 
+## 🛠️ Instalasi & Persyaratan Sistem (Installation & Setup)
+
+### 1. Persyaratan Sistem (Prerequisites)
+- **Python**: `>= 3.12` (disarankan menggunakan Conda/venv dan manajer paket `uv`).
+- **Node.js & npm**: `>= 18` (diperlukan untuk engine compiler rendering Mermaid CLI lokal).
+- **LibreOffice**: Diperlukan jika memproses file presentasi PowerPoint (`.ppt`/`.pptx`) via mode headless.
+- **Local Vision LLM**: Endpoint OpenAI-compatible yang menjalankan Vision Language Model (mis. LM Studio, Ollama, atau vLLM dengan model seperti `Qwen2.5-VL` / `Qwen-VL-35B`).
+
+### 2. Langkah Instalasi (Step-by-Step)
+
+```bash
+# 1. Clone repositori
+git clone https://github.com/daruoktab/jds-magang-ocr-agent.git
+cd jds-magang-ocr-agent
+
+# 2. Buat & aktifkan environment (contoh menggunakan Conda)
+conda create -n magang-jds python=3.12 -y
+conda activate magang-jds
+
+# 3. Instal dependensi Python (preferensikan uv pip)
+uv pip install -e .
+
+# 4. Instal engine Mermaid CLI & Puppeteer secara global
+npm install -g @mermaid-js/mermaid-cli puppeteer
+
+# 5. Pasang browser headless Chromium untuk engine rendering diagram lokal
+npx puppeteer browsers install chrome-headless-shell
+```
+
+### 3. Konfigurasi Environment Variable (`.env`)
+Buat berkas `.env` di direktori utama repositori dengan konfigurasi endpoint model Vision Anda:
+
+```env
+VLM_BASE_URL="http://localhost:1234/v1"
+VLM_MODEL="qwen-35b-vision"
+VLM_API_KEY="lm-studio"
+```
+
+---
+
 ## 🎯 6 Spesifikasi Karakteristik Dokumen (Mendukung Multi-Spesifikasi Komposit)
 
 Sistem mendukung ekstraksi dengan satu atau **beberapa spesifikasi sekaligus secara komposit** (*Composable Prompts*), misalnya slide presentasi yang juga memuat form tanda tangan (`presentation_slides` + `signature_form`):
@@ -77,7 +117,7 @@ MCP tool: `render_presentation_slides` (lihat §MCP Tools di bawah).
 
 ---
 
-## 📊 Ekstraksi Selektif Diagram ke Mermaid.js (`app/diagram.py`)
+## 📊 Ekstraksi Selektif Diagram ke Mermaid.js & Visual Verification (`app/diagram.py`)
 
 Tidak semua gambar visual pada dokumen cocok diubah menjadi diagram Mermaid. Modul analisis diagram mengevaluasi kelayakan secara selektif sebelum melakukan konversi sintaks:
 
@@ -90,12 +130,27 @@ Tidak semua gambar visual pada dokumen cocok diubah menjadi diagram Mermaid. Mod
    - `mindmap`: Peta konsep hierarkis bertingkat (`mindmap`).
    - `gantt_chart`: Jadwal linimasa proyek & milestone (`gantt`).
    - `block_architecture`: Arsitektur blok/komponen sistem (`flowchart` dengan `subgraph`).
+
 2. **Kategori yang Tidak Cocok untuk Mermaid (`is_convertible = False`)**:
    - Grafik numerik kontinu padat (scatter plot, multi-series line chart, histogram, heatmap).
    - Peta geografis / denah spasial.
    - Foto realistis, gambar anatomi biologis, atau seni bebas.
    - Skematik sirkuit elektrik mikro atau CAD mekanik rumit.
    - *Penanganan:* Dikonversi ke format representasi yang lebih tepat (tabel Markdown atau ringkasan struktural), bukan dipaksakan ke kode Mermaid yang rusak.
+
+3. **Rendering Lokal ke Gambar PNG (`pymmdc` + Mermaid CLI)**:
+   - Setiap diagram yang dihasilkan diuji kompilasi secara lokal langsung ke biner gambar PNG menggunakan `pymmdc` dan `mmdc.cmd` dengan engine headless Chromium (`chrome-headless-shell`).
+   - Mencegah kode Mermaid yang rusak atau syntax error lolos ke hasil akhir. Data biner gambar PNG yang terverifikasi disimpan pada atribut `rendered_image_bytes` di objek `DiagramExtractionResult`.
+
+4. **Compiler Error Feedback Loop**:
+   - Jika kompilasi Mermaid CLI gagal (misal: siklus hierarki DAG `Setting UserMem as parent of UserMem would create a cycle` atau duplikasi edge/label konflik), pesan error presisi langsung diumpankan kembali ke Vision LLM bersama gambar asli dokumen sumber untuk diperbaiki secara mandiri (self-correction hingga 2x percobaan).
+
+5. **Multimodal Visual Verification Loop**:
+   - Saat render PNG sukses, sistem menyajikan perbandingan visual multimodal ke Vision LLM:
+     - **Gambar 1:** Potongan diagram asli dari dokumen sumber.
+     - **Gambar 2:** Gambar PNG hasil render kode Mermaid.
+     - **Teks Kode:** Kode Mermaid yang dihasilkan.
+   - Vision LLM membandingkan kedua gambar secara visual. Jika diagram hasil render sudah lengkap dan akurat, model mengonfirmasi `[CONFIRMED]`. Jika terdapat simpul atau teks yang terpotong/hilang, model merevisi kode Mermaid hingga sempurna.
 
 ---
 
