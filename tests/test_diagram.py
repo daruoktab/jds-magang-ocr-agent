@@ -159,6 +159,22 @@ def test_get_diagram_recommendation():
     assert rec_flow.recommended_format == "mermaid_code"
     assert rec_flow.suggested_syntax == "flowchart TD"
 
+    rec_pin = get_diagram_recommendation("pin_diagram")
+    assert rec_pin.is_mermaid_compatible is True
+    assert rec_pin.diagram_type == "pin_diagram"
+
+    # Verifikasi fleksibilitas Pydantic coercion terhadap variasi model (mis. 'pinout', 'memory map')
+    rec_coerced = get_diagram_recommendation("microcontroller_pinout")
+    assert rec_coerced.diagram_type == "pin_diagram"
+
+    # Verifikasi pembuatan DiagramExtractionResult dengan tipe pin_diagram tidak error
+    res_pin = DiagramExtractionResult(
+        is_mermaid=True,
+        diagram_type="pin_diagram",
+        mermaid_code="flowchart LR\n    RA0 --> RA1",
+    )
+    assert res_pin.diagram_type == "pin_diagram"
+
     rec_unsuitable = get_diagram_recommendation("unsuitable_statistical_chart")
     assert rec_unsuitable.is_mermaid_compatible is False
     assert rec_unsuitable.recommended_format == "text_description"

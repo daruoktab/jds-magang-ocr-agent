@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ==============================================================================
 # Model-Model Klasifikasi & Ekstraksi Dokumen Dasar
@@ -473,6 +473,10 @@ DiagramTypeLiteral = Literal[
     "mindmap",
     "gantt_chart",
     "block_architecture",
+    "pin_diagram",
+    "memory_map",
+    "circuit_diagram",
+    "timing_diagram",
     "git_graph",
     "unsuitable_statistical_chart",
     "unsuitable_map_or_spatial",
@@ -481,6 +485,52 @@ DiagramTypeLiteral = Literal[
     "non_diagram",
     "generic_diagram",
 ]
+
+_ALLOWED_DIAGRAM_TYPES = {
+    "flowchart",
+    "sequence_diagram",
+    "class_diagram",
+    "state_diagram",
+    "er_diagram",
+    "mindmap",
+    "gantt_chart",
+    "block_architecture",
+    "pin_diagram",
+    "memory_map",
+    "circuit_diagram",
+    "timing_diagram",
+    "git_graph",
+    "unsuitable_statistical_chart",
+    "unsuitable_map_or_spatial",
+    "unsuitable_photo_or_illustration",
+    "unsuitable_complex_schematic",
+    "non_diagram",
+    "generic_diagram",
+}
+
+
+def _coerce_diagram_type_value(v: Any) -> str:
+    """Normalisasi nilai diagram_type secara fleksibel agar tahan terhadap variasi VLM."""
+    if not v or not isinstance(v, str):
+        return "generic_diagram"
+    val = v.strip().lower()
+    if val in _ALLOWED_DIAGRAM_TYPES:
+        return val
+    if "pin" in val:
+        return "pin_diagram"
+    if "memory" in val or "register" in val or "map" in val:
+        return "memory_map"
+    if "flow" in val:
+        return "flowchart"
+    if "block" in val or "arch" in val:
+        return "block_architecture"
+    if "seq" in val:
+        return "sequence_diagram"
+    if "circuit" in val or "skema" in val:
+        return "circuit_diagram"
+    if "time" in val or "timing" in val:
+        return "timing_diagram"
+    return "generic_diagram"
 
 
 class DiagramFormatRecommendation(BaseModel):
@@ -502,6 +552,11 @@ class DiagramFormatRecommendation(BaseModel):
     rationale: str = Field(
         default="", description="Alasan logis pemilihan format ekstraksi"
     )
+
+    @field_validator("diagram_type", mode="before")
+    @classmethod
+    def _validate_diagram_type(cls, v: Any) -> str:
+        return _coerce_diagram_type_value(v)
 
 
 class DiagramConvertibilityResult(BaseModel):
@@ -532,6 +587,11 @@ class DiagramConvertibilityResult(BaseModel):
     nodes_or_entities: list[str] = Field(
         default_factory=list, description="Daftar node atau entitas utama yang terdeteksi"
     )
+
+    @field_validator("diagram_type", mode="before")
+    @classmethod
+    def _validate_diagram_type(cls, v: Any) -> str:
+        return _coerce_diagram_type_value(v)
 
 
 class DiagramExtractionResult(BaseModel):
@@ -582,6 +642,11 @@ class DiagramExtractionResult(BaseModel):
     raw_response: str | None = Field(
         default=None, description="Respon mentah dari VLM untuk keperluan audit"
     )
+
+    @field_validator("diagram_type", mode="before")
+    @classmethod
+    def _validate_diagram_type(cls, v: Any) -> str:
+        return _coerce_diagram_type_value(v)
 
 
 # ==============================================================================

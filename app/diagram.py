@@ -422,7 +422,7 @@ def render_mermaid_to_png(
         return False, None, err_msg
 
 
-def get_diagram_recommendation(diagram_type: DiagramTypeLiteral) -> DiagramFormatRecommendation:
+def get_diagram_recommendation(diagram_type: DiagramTypeLiteral | str) -> DiagramFormatRecommendation:
     """Berikan rekomendasi format ekstraksi berdasarkan kategori diagram."""
     mermaid_compatible = {
         "flowchart": ("flowchart TD", "mermaid_code", "Cocok untuk alur kerja terstruktur"),
@@ -433,6 +433,10 @@ def get_diagram_recommendation(diagram_type: DiagramTypeLiteral) -> DiagramForma
         "mindmap": ("mindmap", "mermaid_code", "Cocok untuk hierarki konsep & taksonomi"),
         "gantt_chart": ("gantt", "mermaid_code", "Cocok untuk jadwal & lini masa proyek"),
         "block_architecture": ("block-beta", "mermaid_code", "Cocok untuk diagram blok arsitektur"),
+        "pin_diagram": ("flowchart LR", "mermaid_code", "Diagram pinout/koneksi kaki IC"),
+        "memory_map": ("flowchart TD", "mermaid_code", "Peta alokasi memori atau register map"),
+        "circuit_diagram": ("flowchart LR", "mermaid_code", "Diagram sirkuit logika atau interkoneksi"),
+        "timing_diagram": ("sequenceDiagram", "mermaid_code", "Diagram waktu sinyal/timing diagram"),
         "git_graph": ("gitGraph", "mermaid_code", "Cocok untuk visualisasi alur branching git"),
         "generic_diagram": ("flowchart LR", "mermaid_code", "Diagram umum, gunakan representasi flowchart"),
     }
