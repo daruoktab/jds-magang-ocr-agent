@@ -458,6 +458,14 @@ class DiagramExtractionResult(BaseModel):
         default=None,
         description="Hasil evaluasi kelayakan diagram",
     )
+    rendered_image_bytes: bytes | None = Field(
+        default=None,
+        description="Data biner PNG dari hasil render Mermaid CLI / pymmdc",
+    )
+    rendered_image_path: str | None = Field(
+        default=None,
+        description="Path file gambar PNG hasil rendering Mermaid jika disimpan",
+    )
     confidence: float = Field(
         default=1.0, description="Tingkat keyakinan ekstraksi (0.0 - 1.0)"
     )

@@ -17,6 +17,7 @@ from app.diagram import (
     classify_diagram_convertibility,
     extract_diagram_to_mermaid,
     get_diagram_recommendation,
+    render_mermaid_to_png,
     sanitize_mermaid_code,
     validate_mermaid_syntax,
 )
@@ -311,12 +312,101 @@ def test_extract_diagram_self_correction_retry(tmp_path):
     assert 'A["Start"] --> B["Process"]' in res.mermaid_code
 
 
+def test_render_mermaid_to_png_success(tmp_path: Path):
+    """Memverifikasi render Mermaid valid ke PNG bytes dan penyimpanan file."""
+    valid_mermaid = """flowchart TD
+    A["Mulai"] --> B["Proses"]
+    B --> C["Selesai"]
+    """
+    out_file = tmp_path / "diagram_test.png"
+    ok, png_bytes, err = render_mermaid_to_png(valid_mermaid, output_path=out_file)
+    assert ok is True
+    assert err is None
+    assert png_bytes is not None
+    assert len(png_bytes) > 0
+    # Header PNG adalah \x89PNG
+    assert png_bytes[:4] == b"\x89PNG"
+    assert out_file.exists()
+
+
+def test_render_mermaid_to_png_failure():
+    """Memverifikasi kegagalan compile Mermaid menangkap pesan error presisi."""
+    cycle_mermaid = """flowchart TD
+    subgraph S [Sub]
+        S --> InsideNode
+    end
+    """
+    ok, png_bytes, err = render_mermaid_to_png(cycle_mermaid)
+    assert ok is False
+    assert png_bytes is None
+    assert err is not None
+    assert "would create a cycle" in err or "Error" in err
+
+
+def test_extract_diagram_visual_feedback_loop(tmp_path: Path):
+    """
+    Memverifikasi bahwa setelah ekstraksi awal dan rendering berhasil,
+    sistem memanggil LLM untuk inspeksi visual multimodal dan mengonfirmasi hasil diagram.
+    """
+    img_file = _create_dummy_image(tmp_path / "diag_vis.png")
+    mock_llm = MagicMock()
+
+    resp_classify = MagicMock()
+    resp_classify.content = json.dumps(
+        {
+            "is_convertible": True,
+            "diagram_type": "flowchart",
+            "recommended_format": "mermaid",
+            "mermaid_type": "flowchart",
+            "confidence": 0.95,
+            "reasoning": "Valid diagram",
+            "nodes_or_entities": ["Start", "End"],
+        }
+    )
+
+    resp_extract = MagicMock()
+    resp_extract.content = """
+    ```mermaid
+    flowchart TD
+        A["Mulai"] --> B["Selesai"]
+    ```
+    Diagram alur sederhana.
+    """
+
+    # Verifikasi visual mengonfirmasi kesesuaian gambar render dengan gambar dokumen
+    resp_verify = MagicMock()
+    resp_verify.content = "[CONFIRMED] Diagram hasil render sudah mencakup seluruh simpul dan relasi dengan akurat."
+
+    mock_llm.invoke.side_effect = [resp_classify, resp_extract, resp_verify]
+
+    res = extract_diagram_to_mermaid(img_file, mock_llm)
+    assert res.status == "success"
+    assert res.is_mermaid is True
+    assert res.mermaid_code is not None
+    assert 'A["Mulai"] --> B["Selesai"]' in res.mermaid_code
+    assert res.rendered_image_bytes is not None
+    assert res.rendered_image_bytes[:4] == b"\x89PNG"
+
+
 if __name__ == "__main__":
+    import tempfile
     test_sanitize_mermaid_code()
     print("✓ test_sanitize_mermaid_code passed")
     test_validate_mermaid_syntax()
     print("✓ test_validate_mermaid_syntax passed")
     test_get_diagram_recommendation()
     print("✓ test_get_diagram_recommendation passed")
+
+    with tempfile.TemporaryDirectory() as td:
+        p_td = Path(td)
+        test_render_mermaid_to_png_success(p_td)
+        print("✓ test_render_mermaid_to_png_success passed")
+        test_render_mermaid_to_png_failure()
+        print("✓ test_render_mermaid_to_png_failure passed")
+        test_extract_diagram_self_correction_retry(p_td)
+        print("✓ test_extract_diagram_self_correction_retry passed")
+        test_extract_diagram_visual_feedback_loop(p_td)
+        print("✓ test_extract_diagram_visual_feedback_loop passed")
+
     print("All tests in test_diagram.py passed successfully!")
 

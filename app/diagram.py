@@ -10,9 +10,12 @@ Fitur:
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import platform
 import re
+import shutil
 from pathlib import Path
 from typing import cast
 
@@ -360,6 +363,65 @@ def validate_mermaid_syntax(mermaid_code: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def render_mermaid_to_png(
+    mermaid_code: str,
+    output_path: str | Path | None = None,
+    width: int = 1200,
+    height: int = 800,
+    background_color: str = "transparent",
+    theme: str = "default",
+    timeout: int = 30,
+) -> tuple[bool, bytes | None, str | None]:
+    """
+    Render kode diagram Mermaid ke format gambar PNG menggunakan engine Mermaid CLI (pymmdc).
+    Mengembalikan tuple (is_success, png_bytes, error_message).
+    Jika rendering gagal, error_message berisi pesan error presisi dari compiler Mermaid CLI.
+    """
+    if not mermaid_code or not mermaid_code.strip():
+        return False, None, "Kode Mermaid kosong"
+
+    try:
+        from mmdc import LocalMermaidConverter
+    except ImportError:
+        logger.warning("[Diagram:Render] Modul 'mmdc' (pymmdc) tidak ditemukan. Render visual dilewati.")
+        return False, None, "Pustaka 'pymmdc' tidak terinstal"
+
+    is_windows = platform.system() == "Windows"
+    mmdc_cmd = "mmdc.cmd" if is_windows and shutil.which("mmdc.cmd") else "mmdc"
+
+    try:
+        conv = LocalMermaidConverter(
+            mmdc_path=mmdc_cmd,
+            timeout=timeout,
+            validate_system=False,  # Hindari hardcoded check yang mencari executable mmdc tanpa ekstensi di Windows
+        )
+        conv.set_config(
+            width=width,
+            height=height,
+            backgroundColor=background_color,
+            theme=theme,
+        )
+
+        if output_path:
+            out_file = Path(output_path)
+            res = conv.convert_and_save(mermaid_code, str(out_file))
+            if res.status.value == "success" and out_file.exists():
+                png_bytes = out_file.read_bytes()
+                return True, png_bytes, None
+            clean_err = res.error_message or "Konversi Mermaid ke PNG gagal"
+            return False, None, clean_err
+        else:
+            png_bytes = conv.convert_to_png(mermaid_code)
+            if png_bytes:
+                return True, png_bytes, None
+            return False, None, "Output PNG kosong dari compiler Mermaid"
+
+    except Exception as exc:  # noqa: BLE001
+        err_msg = str(exc)
+        logger.warning("[Diagram:Render] Gagal merender diagram Mermaid: %s", err_msg)
+        return False, None, err_msg
+
+
 def get_diagram_recommendation(diagram_type: DiagramTypeLiteral) -> DiagramFormatRecommendation:
     """Berikan rekomendasi format ekstraksi berdasarkan kategori diagram."""
     mermaid_compatible = {
@@ -684,8 +746,10 @@ def extract_diagram_to_mermaid(
             or (convertibility.diagram_type if convertibility else "flowchart"),
         )
 
-        # Linter Compiler & Self-Correction Retry Loop (Maksimal 2 kali percobaan perbaikan)
+        # Linter Compiler, CLI Rendering, & Multimodal Visual Self-Correction Loop
         MAX_MERMAID_RETRIES = 2
+        rendered_png_bytes: bytes | None = None
+
         for attempt in range(MAX_MERMAID_RETRIES + 1):
             if not mermaid_block:
                 break
@@ -695,67 +759,162 @@ def extract_diagram_to_mermaid(
             if not mermaid_block:
                 break
 
-            # 2. Validasi dengan compiler linter
+            # 2. Validasi dengan compiler linter statis
             is_valid, syntax_err = validate_mermaid_syntax(mermaid_block)
-            if is_valid:
-                logger.info(
-                    "[Diagram:Extract] Sintaks Mermaid tervalidasi sukses (percobaan ke-%d)",
+            if not is_valid:
+                logger.warning(
+                    "[Diagram:Extract] Sintaks Mermaid bermasalah pada validasi linter (percobaan %d): %s",
                     attempt + 1,
-                )
-                break
-
-            logger.warning(
-                "[Diagram:Extract] Sintaks Mermaid bermasalah pada percobaan ke-%d: %s",
-                attempt + 1,
-                syntax_err,
-            )
-
-            # Jika masih dalam jatah retry, panggil LLM untuk koreksi mandiri
-            if attempt < MAX_MERMAID_RETRIES:
-                fix_prompt = (
-                    f"Kode Mermaid yang Anda hasilkan memiliki KESALAHAN SINTAKS:\n"
-                    f"- Error Compiler/Linter: {syntax_err}\n\n"
-                    f"Kode yang bermasalah:\n```mermaid\n{mermaid_block}\n```\n\n"
-                    "PERBAIKI KODE DI ATAS DENGAN ATURAN KETAT BERIKUT:\n"
-                    "1. Gunakan 'flowchart TD' atau 'flowchart LR' (DILARANG menggunakan 'graph').\n"
-                    "2. Selalu gunakan tanda kutip ganda pada label simpul: Node[\"Teks Label\"].\n"
-                    "3. DILARANG menggunakan penutup kurung ganda ']]' jika pembukanya hanya satu '['.\n"
-                    "4. DILARANG meletakkan <br/> atau teks di luar tanda kurung simpul pada baris relasi.\n"
-                    "5. DILARANG menggunakan ID subgraph sebagai simpul relasi panah di dalam subgraph itu sendiri.\n"
-                    "6. DILARANG menggunakan ID simpul yang sama untuk dua label teks berbeda (gunakan ID unik per simpul).\n"
-                    "7. JANGAN mengulang penulisan kurung label pada simpul yang sudah pernah dideklarasikan sebelumnya.\n"
-                    "8. Outputkan HANYA blok kode ```mermaid\\n...\\n``` yang sudah diperbaiki tanpa teks tambahan."
-                )
-                try:
-                    fix_resp = llm.invoke([{"role": "user", "content": fix_prompt}])
-                    fix_text = strip_thinking_process(str(fix_resp.content).strip())
-                    m_fix = re.search(r"```(?:mermaid)?\s*([\s\S]*?)\s*```", fix_text, re.IGNORECASE)
-                    if m_fix:
-                        mermaid_block = m_fix.group(1).strip()
-                    else:
-                        mermaid_block = fix_text.strip()
-                except Exception as e_fix:  # noqa: BLE001
-                    logger.warning("[Diagram:Extract] Gagal melakukan retry self-correction Mermaid: %s", e_fix)
-                    break
-            else:
-                # Retry habis dan masih tidak valid -> Fallback ke deskripsi terstruktur demi keselamatan output
-                logger.error(
-                    "[Diagram:Extract] Kode Mermaid tetap tidak valid setelah %d percobaan (%s). Mengganti ke deskripsi visual.",
-                    MAX_MERMAID_RETRIES + 1,
                     syntax_err,
                 )
-                mermaid_block = None
-                if not summary_text or "Mermaid berhasil" in summary_text:
-                    summary_text = (
-                        "Diagram visual terdeteksi pada dokumen, namun struktur relasi tidak dapat "
-                        "direpresentasikan dengan kode Mermaid yang valid secara sintaksis."
+                if attempt < MAX_MERMAID_RETRIES:
+                    fix_prompt = (
+                        f"Kode Mermaid yang Anda hasilkan memiliki KESALAHAN SINTAKS:\n"
+                        f"- Error Compiler/Linter: {syntax_err}\n\n"
+                        f"Kode yang bermasalah:\n```mermaid\n{mermaid_block}\n```\n\n"
+                        "PERBAIKI KODE DI ATAS DENGAN ATURAN KETAT BERIKUT:\n"
+                        "1. Gunakan 'flowchart TD' atau 'flowchart LR' (DILARANG menggunakan 'graph').\n"
+                        "2. Selalu gunakan tanda kutip ganda pada label simpul: Node[\"Teks Label\"].\n"
+                        "3. DILARANG menggunakan penutup kurung ganda ']]' jika pembukanya hanya satu '['.\n"
+                        "4. DILARANG meletakkan <br/> atau teks di luar tanda kurung simpul pada baris relasi.\n"
+                        "5. DILARANG menggunakan ID subgraph sebagai simpul relasi panah di dalam subgraph itu sendiri.\n"
+                        "6. DILARANG menggunakan ID simpul yang sama untuk dua label teks berbeda (gunakan ID unik per simpul).\n"
+                        "7. JANGAN mengulang penulisan kurung label pada simpul yang sudah pernah dideklarasikan sebelumnya.\n"
+                        "8. Outputkan HANYA blok kode ```mermaid\\n...\\n``` yang sudah diperbaiki tanpa teks tambahan."
                     )
+                    try:
+                        fix_resp = llm.invoke(
+                            [
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": fix_prompt},
+                                        {"type": "image_url", "image_url": {"url": image_uri}},
+                                    ],
+                                }
+                            ]
+                        )
+                        fix_text = strip_thinking_process(str(fix_resp.content).strip())
+                        m_fix = re.search(r"```(?:mermaid)?\s*([\s\S]*?)\s*```", fix_text, re.IGNORECASE)
+                        mermaid_block = m_fix.group(1).strip() if m_fix else fix_text.strip()
+                        continue
+                    except Exception as e_fix:  # noqa: BLE001
+                        logger.warning("[Diagram:Extract] Gagal melakukan retry self-correction Mermaid: %s", e_fix)
+                        break
+                else:
+                    mermaid_block = None
+                    break
+
+            # 3. Uji kompilasi & rendering via pymmdc / Mermaid CLI
+            render_ok, png_data, render_err = render_mermaid_to_png(mermaid_block)
+            if not render_ok and render_err and "pymmdc tidak terinstal" not in render_err:
+                logger.warning(
+                    "[Diagram:Extract] Compiler Mermaid CLI gagal pada percobaan ke-%d: %s",
+                    attempt + 1,
+                    render_err,
+                )
+                if attempt < MAX_MERMAID_RETRIES:
+                    fix_cli_prompt = (
+                        f"Kode Mermaid Anda menyebabkan ERROR saat dikompilasi oleh engine Mermaid CLI:\n"
+                        f"- Pesan Error Compiler: {render_err}\n\n"
+                        f"Kode yang bermasalah:\n```mermaid\n{mermaid_block}\n```\n\n"
+                        "PERBAIKI KODE DI ATAS AGAR DAPAT DIKOMPILASI DENGAN SUKSES:\n"
+                        "1. Perbaiki relasi atau struktur yang memicu error di atas (misal jika cycle error, pastikan ID subgraph tidak menjadi simpul di dalam dirinya sendiri).\n"
+                        "2. Pastikan semua label simpul tetap menggunakan tanda kutip ganda yang valid.\n"
+                        "3. Berikan HANYA blok kode ```mermaid\\n...\\n``` yang sudah diperbaiki."
+                    )
+                    try:
+                        fix_resp = llm.invoke(
+                            [
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": fix_cli_prompt},
+                                        {"type": "image_url", "image_url": {"url": image_uri}},
+                                    ],
+                                }
+                            ]
+                        )
+                        fix_text = strip_thinking_process(str(fix_resp.content).strip())
+                        m_fix = re.search(r"```(?:mermaid)?\s*([\s\S]*?)\s*```", fix_text, re.IGNORECASE)
+                        mermaid_block = m_fix.group(1).strip() if m_fix else fix_text.strip()
+                        continue
+                    except Exception as e_cli_fix:  # noqa: BLE001
+                        logger.warning("[Diagram:Extract] Gagal melakukan retry compiler CLI: %s", e_cli_fix)
+                        break
+                else:
+                    logger.error(
+                        "[Diagram:Extract] Kode Mermaid tetap gagal kompilasi setelah %d percobaan (%s).",
+                        MAX_MERMAID_RETRIES + 1,
+                        render_err,
+                    )
+                    mermaid_block = None
+                    if not summary_text or "Mermaid berhasil" in summary_text:
+                        summary_text = (
+                            "Diagram visual terdeteksi pada dokumen, namun engine Mermaid CLI gagal "
+                            f"mengompilasi struktur relasi kode diagram: {render_err}"
+                        )
+                    break
+
+            # 4. Rendering Berhasil! Jalankan Multimodal Visual Verification Loop
+            if render_ok and png_data:
+                rendered_png_bytes = png_data
+                logger.info("[Diagram:Extract] Render Mermaid CLI sukses. Menjalankan verifikasi visual multimodal.")
+                try:
+                    rendered_b64 = base64.b64encode(png_data).decode("utf-8")
+                    rendered_uri = f"data:image/png;base64,{rendered_b64}"
+
+                    verify_prompt = (
+                        "Berikut adalah verifikasi visual diagram:\n"
+                        "- Gambar 1: Potongan diagram asli dari dokumen sumber.\n"
+                        "- Gambar 2: Gambar hasil rendering dari kode Mermaid yang baru Anda buat.\n\n"
+                        f"Kode Mermaid saat ini:\n```mermaid\n{mermaid_block}\n```\n\n"
+                        "TUGAS EVALUASI VISUAL:\n"
+                        "Bandingkan Gambar 2 (hasil render) dengan Gambar 1 (asli):\n"
+                        "1. Apakah semua simpul, teks, label, dan angka sudah lengkap?\n"
+                        "2. Apakah arah panah atau alur relasi sudah benar dan tidak ada yang terlewat?\n"
+                        "3. Apakah ada teks yang terpotong?\n\n"
+                        "Jika diagram hasil render SUDAH AKURAT dan LENGKAP mencakup semua elemen dari gambar asli, jawab HANYA:\n"
+                        "[CONFIRMED]\n\n"
+                        "Jika ada ketidaksesuaian atau bagian yang kurang, berikan KODE MERMAID LENGKAP YANG SUDAH DIREVISI "
+                        "di dalam blok ```mermaid ... ```."
+                    )
+
+                    verify_resp = llm.invoke(
+                        [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": verify_prompt},
+                                    {"type": "image_url", "image_url": {"url": image_uri}},
+                                    {"type": "image_url", "image_url": {"url": rendered_uri}},
+                                ],
+                            }
+                        ]
+                    )
+                    v_text = strip_thinking_process(str(verify_resp.content).strip())
+                    if "[CONFIRMED]" not in v_text.upper():
+                        m_revised = re.search(r"```(?:mermaid)?\s*([\s\S]*?)\s*```", v_text, re.IGNORECASE)
+                        if m_revised:
+                            revised_code = sanitize_mermaid_code(m_revised.group(1))
+                            if revised_code:
+                                rev_ok, rev_png, _ = render_mermaid_to_png(revised_code)
+                                if rev_ok and rev_png:
+                                    mermaid_block = revised_code
+                                    rendered_png_bytes = rev_png
+                                    logger.info("[Diagram:Extract] Kode Mermaid berhasil diselaraskan berdasarkan evaluasi visual multimodal.")
+                except Exception as e_vis:  # noqa: BLE001
+                    logger.warning("[Diagram:Extract] Verifikasi visual dilewati karena kendala teknis: %s", e_vis)
+
+            # Selesai dengan sukses
+            break
 
         return DiagramExtractionResult(
             status="success" if mermaid_block else "unsuitable",
             is_mermaid=bool(mermaid_block),
             diagram_type=diag_type,
             mermaid_code=mermaid_block,
+            rendered_image_bytes=rendered_png_bytes,
             text_summary=summary_text
             or f"Diagram tipe {diag_type} berhasil diekstrak.",
             reasoning=convertibility.reasoning
@@ -785,6 +944,7 @@ __all__ = [
     "classify_diagram_convertibility",
     "extract_diagram_to_mermaid",
     "get_diagram_recommendation",
+    "render_mermaid_to_png",
     "sanitize_mermaid_code",
     "validate_mermaid_syntax",
 ]
