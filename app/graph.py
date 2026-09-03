@@ -57,12 +57,15 @@ DIAGRAM_OUTPUT_INDICATORS: tuple[str, ...] = (
     "```mermaid",
 )
 
+_FIGURE_LABEL_RE = re.compile(r"\b(FIGURE|Figure|Bagan|Skema)\s+\d+", re.IGNORECASE)
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?[\s:|-]*-{3,}[\s:|-]*\|?\s*$")
 
 
 def _has_diagram_indicators(markdown: str) -> bool:
     """Deteksi indikator diagram/visual dari output ekstraksi (tanpa VLM call tambahan)."""
-    return any(ind in markdown for ind in DIAGRAM_OUTPUT_INDICATORS)
+    if any(ind in markdown for ind in DIAGRAM_OUTPUT_INDICATORS):
+        return True
+    return bool(_FIGURE_LABEL_RE.search(markdown))
 
 
 def count_visuals(markdown: str) -> int:
@@ -440,7 +443,7 @@ class DocumentExtractionPipeline:
             return "> **[Diagram/Visual]:** Diagram visual terdeteksi pada dokumen."
 
         final_md = re.sub(
-            r"```(?:mermaid)?\s*([\s\S]*?)\s*```",
+            r"```mermaid\s*([\s\S]*?)\s*```",
             _clean_mermaid_in_md,
             final_md,
             flags=re.IGNORECASE,

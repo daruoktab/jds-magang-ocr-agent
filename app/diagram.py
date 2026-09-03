@@ -370,7 +370,7 @@ def render_mermaid_to_png(
     height: int = 800,
     background_color: str = "transparent",
     theme: str = "default",
-    timeout: int = 30,
+    timeout: int = 60,
 ) -> tuple[bool, bytes | None, str | None]:
     """
     Render kode diagram Mermaid ke format gambar PNG menggunakan engine Mermaid CLI (pymmdc).

@@ -35,8 +35,8 @@ Aturan wajib:
     - Setiap baris tabel WAJIB diawali dan diakhiri dengan tanda pipa '|'.
     - Seluruh baris data WAJIB memiliki JUMLAH KOLOM YANG SAMA PERSIS dengan baris header.
     - DILARANG menaruh baris kosong di tengah-tengah tabel (baris kosong memutus tabel).
-    - Jika ada baris sub-header di dalam tabel (contoh: "Bank 0", "Bank 1"):
-      Tuliskan sebagai baris tabel utuh dengan kolom lengkap, contoh: | **Bank 1** | | | | | | | | | | | | (DILARANG menghilangkan tanda pipa '|').
+    - Jika ada baris sub-header atau pemisah bagian di dalam tabel:
+      Tuliskan sebagai baris tabel utuh dengan kolom lengkap, contoh: | **Kategori A** | | | ... | (DILARANG menghilangkan tanda pipa '|' atau memutus tabel dengan baris kosong).
     - DILARANG menuliskan delimiter tabel `|---|` di dalam sel data baris. Gunakan '-' atau '—' untuk sel bernilai strip.
 11. Untuk chat, ekstrak sebagai transkrip percakapan yang urut.
 12. Untuk tanda tangan/paraf, ekstrak hanya informasi yang benar-benar terlihat; jangan menebak status approval jika tidak tertulis.
@@ -61,7 +61,7 @@ _RULE_BUSINESS_DOCUMENT: str = """
   - Setiap baris harus diawali dan diakhiri '|'.
   - Jumlah kolom baris data harus sama persis dengan header.
   - Jangan menyisipkan baris kosong di tengah tabel.
-  - Sub-header tabel harus ditulis dengan kolom penuh, contoh: | **Bank 1** | | | ... |.
+  - Sub-header tabel harus ditulis dengan kolom penuh, contoh: | **Kategori A** | | | ... |.
 - Jangan menambahkan interpretasi, opini, atau kesimpulan yang tidak tertulis.
 """.strip()
 

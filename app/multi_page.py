@@ -93,6 +93,16 @@ def strip_thinking_process(markdown: str) -> str:
         "draft table",
         "thinking process:",
         "i will output",
+        "mari kita",
+        "mari saya",
+        "ini melanggar aturan",
+        "aturan ",
+        "perbaikan teks",
+        "koreksi draft",
+        "draft markdown",
+        "langkah demi langkah",
+        "evaluasi draf",
+        "catatan koreksi",
     )
     found_real_content = False
     for idx, line in enumerate(lines):

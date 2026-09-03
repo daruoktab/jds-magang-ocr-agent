@@ -128,8 +128,8 @@ class VisionExtractor:
             "   - 'presentation_slides': slide presentasi (PowerPoint/PDF landscape, bullet points).\n"
             "   - 'chat_transcript': screenshot percakapan chat (WhatsApp, Telegram, chat internal).\n"
             "   - 'signature_form': dokumen dengan kotak tanda tangan, paraf, approval, atau persetujuan.\n"
-            "2. has_diagram: true jika terdapat diagram visual (flowchart, alur proses, sequence diagram, ERD, arsitektur blok, mindmap, state diagram, org chart), false jika hanya teks biasa atau foto polos.\n"
-            "3. diagram_type: Tipe diagram jika has_diagram=true (contoh: 'flowchart', 'sequence_diagram', 'er_diagram', 'block_architecture', 'mindmap', dll., atau null jika tidak ada).\n"
+            "2. has_diagram: true jika terdapat diagram visual (flowchart, alur proses, sequence diagram, ERD, arsitektur blok, peta memori/register map, mindmap, state diagram, org chart, bagan teknis, figure/skema), false jika hanya teks biasa atau foto polos.\n"
+            "3. diagram_type: Tipe diagram jika has_diagram=true (contoh: 'flowchart', 'sequence_diagram', 'er_diagram', 'block_architecture', 'memory_map', 'mindmap', dll., atau null jika tidak ada).\n"
             "4. has_table: true jika terdapat tabel data/baris kolom.\n"
             "5. difficulty: Tingkat kesulitan ekstraksi halaman.\n"
             "   - 'simple': teks polos, sedikit elemen, tanpa diagram/tabel/kompleksitas.\n"
@@ -206,16 +206,18 @@ class VisionExtractor:
             return draft_markdown
 
         judge_prompt = (
-            "Anda adalah AI Chief Quality Auditor & Document Aggregator Verifier.\n\n"
-            "Tugas Anda: Bandingkan DRAFT MARKDOWN di bawah ini dengan GAMBAR ASLI DOKUMEN.\n\n"
-            "Evaluasi dan lakukan koreksi ulang dengan panduan:\n"
-            "1. KELENGKAPAN: Pastikan seluruh teks, judul, poin-poin, dan data angka pada gambar telah tercakup dalam Markdown.\n"
-            "2. DIAGRAM VISUAL (MERMAID): Jika pada gambar terdapat diagram alur/relasi/arsitektur/proses, pastikan sudah direpresentasikan dengan blok kode ```mermaid yang valid dan lengkap atau deskripsi terstruktur.\n"
-            "3. INTEGRITAS TABEL: Pastikan tabel diformat sebagai tabel Markdown (GFM) utuh tanpa baris kosong di tengah, setiap baris diawali dan diakhiri '|', dan sub-header diformat sebagai baris tabel berkolom lengkap (contoh: | **Bank 1** | | | ... |).\n"
-            "4. KEBERSIHAN: Hapus duplikasi atau ketidakkonsistenan antarseksi.\n"
-            "5. JIKA DRAFT SUDAH BENAR DAN LENGKAP: Kembalikan teks Markdown tersebut secara presisi tanpa merusak format.\n\n"
-            f"[DRAFT MARKDOWN SEBELUM KOREKSI]:\n'''markdown\n{draft_markdown}\n'''\n\n"
-            "Outputkan HANYA teks Markdown hasil perbaikan akhir tanpa basa-basi pengantar atau penutup."
+            "Periksa DRAFT MARKDOWN berikut terhadap GAMBAR ASLI DOKUMEN.\n\n"
+            "Panduan verifikasi:\n"
+            "1. KELENGKAPAN: Pastikan seluruh teks, judul, dan data pada gambar tercakup akurat.\n"
+            "2. DIAGRAM VISUAL: Jika terdapat diagram, pertahankan representasi diagram atau deskripsinya.\n"
+            "3. INTEGRITAS TABEL: Pastikan tabel Markdown (GFM) utuh tanpa baris kosong di tengah.\n"
+            "4. KEBERSIHAN: Hapus teks duplikat berulang jika ada.\n"
+            "5. JIKA DRAFT SUDAH LENGKAP & BENAR: Kembalikan teks DRAFT MARKDOWN secara persis tanpa perubahan.\n\n"
+            "ATURAN KETAT:\n"
+            "- DILARANG menuliskan kata pengantar, analisis, komentar proses, evaluasi, atau catatan.\n"
+            "- DILARANG menuliskan frasa seperti 'Mari kita...', 'Koreksi:', 'Perbaikan teks:', 'Aturan...', 'Draft:...'.\n"
+            "- Outputkan HANYA teks Markdown dokumen final tanpa embel-embel apapun.\n\n"
+            f"[DRAFT MARKDOWN]:\n'''markdown\n{draft_markdown}\n'''"
         )
 
         content: list[dict[str, Any]] = [
@@ -229,7 +231,28 @@ class VisionExtractor:
 
         try:
             resp = self.llm.invoke(messages)
-            refined_md = strip_thinking_process(str(resp.content).strip())
+            raw_resp = str(resp.content).strip()
+
+            # Guardrail 1: Deteksi kebocoran meta-evaluasi / reasoning CoT
+            meta_leak_indicators = (
+                "mari kita",
+                "ini melanggar aturan",
+                "aturan 10",
+                "koreksi draft",
+                "perbaikan teks:",
+                "draft markdown yang diberikan",
+                "langkah demi langkah",
+            )
+            lower_raw = raw_resp.lower()
+            for ind in meta_leak_indicators:
+                if ind in lower_raw:
+                    logger.warning(
+                        "[Extractor:Judge] Respon judge mengandung teks penalaran / meta-evaluasi ('%s'). Mempertahankan draft awal.",
+                        ind,
+                    )
+                    return draft_markdown
+
+            refined_md = strip_thinking_process(raw_resp)
             # Bersihkan wrapper code fence jika ada
             if refined_md.startswith("```markdown") and refined_md.endswith("```"):
                 refined_md = refined_md[len("```markdown") : -3].strip()
@@ -244,7 +267,32 @@ class VisionExtractor:
 
             refined_md = strip_page_markers(refined_md)
             refined_md = collapse_consecutive_duplicate_blocks(refined_md)
-            return refined_md if refined_md else draft_markdown
+
+            if not refined_md:
+                logger.warning("[Extractor:Judge] Hasil judge kosong. Menggunakan draft awal.")
+                return draft_markdown
+
+            # Guardrail 2: Cegah pembengkakan liar akibat halusinasi / perulangan
+            len_draft = len(draft_markdown)
+            len_refined = len(refined_md)
+            if len_draft > 500 and len_refined > 1.8 * len_draft:
+                logger.warning(
+                    "[Extractor:Judge] Hasil judge membengkak secara tidak wajar (%d -> %d karakter). Menggunakan draft awal demi keselamatan data.",
+                    len_draft,
+                    len_refined,
+                )
+                return draft_markdown
+
+            # Guardrail 3: Cegah pemangkasan drastis yang memotong dokumen (mis. kepotong token limit)
+            if len_draft > 800 and len_refined < 0.45 * len_draft:
+                logger.warning(
+                    "[Extractor:Judge] Hasil judge terpotong drastis (%d -> %d karakter). Menggunakan draft awal.",
+                    len_draft,
+                    len_refined,
+                )
+                return draft_markdown
+
+            return refined_md
         except Exception as e:  # noqa: BLE001
             logger.warning("[Extractor:Judge] Terjadi kesalahan pada tahap judge & refine (%s). Menggunakan draft awal.", e)
             return draft_markdown
