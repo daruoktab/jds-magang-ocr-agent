@@ -508,7 +508,10 @@ def process_presentation_vision(
             response = active_vlm.invoke([msg])
             slide_md = str(response.content)
 
+        from .tabular_db import sanitize_markdown_tables
+
         slide_md = strip_page_markers(slide_md).strip()
+        slide_md = sanitize_markdown_tables(slide_md)
 
         # Jalankan Sub-Agent SQL mandiri per slide
         process_page_tabular_agent(

@@ -201,12 +201,119 @@ def parse_date_value(val_str: str) -> str | None:
     return None
 
 
+def sanitize_markdown_tables(markdown_text: str) -> str:
+    """
+    Normalisasi dan perbaiki tabel Markdown (GFM) yang rusak atau anomali:
+    1. Perbaiki baris sub-header yang lupa diawali tanda pipa `|` (contoh: `**Bank 1** | | ...` -> `| **Bank 1** | | ...`).
+    2. Hapus baris kosong yang tidak disengaja di tengah-tengah tabel sebelum baris data berikutnya.
+    3. Normalisasi baris data yang mengandung pemisah pipa palsu (contoh: `|-----| |-----|`) agar jumlah kolom konsisten dengan header.
+    4. Pastikan baris tabel diawali dan diakhiri dengan pipa `|`.
+    """
+    if not markdown_text or "|" not in markdown_text:
+        return markdown_text
+
+    lines = markdown_text.splitlines()
+    result_lines: list[str] = []
+    i = 0
+    in_table = False
+    expected_cols = 0
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Deteksi awal tabel Markdown: header + separator |---|
+        if (
+            not in_table
+            and stripped.startswith("|")
+            and stripped.endswith("|")
+            and i + 1 < len(lines)
+        ):
+            next_line = lines[i + 1].strip()
+            if next_line.startswith("|") and re.match(r"^\|(\s*:?-+:?\s*\|)+$", next_line):
+                in_table = True
+                headers = [c.strip() for c in stripped.strip("|").split("|")]
+                expected_cols = len(headers)
+                result_lines.append(line)
+                result_lines.append(lines[i + 1])
+                i += 2
+                continue
+
+        if in_table:
+            # Kasus 1: Baris kosong di dalam tabel
+            if not stripped:
+                # Intip baris berikutnya: apakah baris data tabel atau sub-header?
+                peek_idx = i + 1
+                while peek_idx < len(lines) and not lines[peek_idx].strip():
+                    peek_idx += 1
+                if peek_idx < len(lines):
+                    peek_line = lines[peek_idx].strip()
+                    # Jika baris berikutnya adalah baris tabel '| ... |' atau sub-header '... | ... |'
+                    if (peek_line.startswith("|") and peek_line.endswith("|")) or (
+                        "|" in peek_line and peek_line.endswith("|")
+                    ):
+                        # Lewati baris kosong ini agar tabel tidak terputus
+                        i += 1
+                        continue
+                # Jika baris berikutnya bukan tabel, maka tabel berakhir
+                in_table = False
+                expected_cols = 0
+                result_lines.append(line)
+                i += 1
+                continue
+
+            # Kasus 2: Baris sub-header yang lupa pipa di awal, misal: `**Bank 1** | | | | | | | | | | | |`
+            if not stripped.startswith("|") and "|" in stripped and stripped.endswith("|"):
+                stripped = "| " + stripped
+                line = stripped
+
+            # Kasus 3: Baris tabel aktif
+            if stripped.startswith("|") and stripped.endswith("|"):
+                # Cek apakah ini separator berulang di tengah tabel
+                if re.match(r"^\|(\s*:?-+:?\s*\|)+$", stripped):
+                    i += 1
+                    continue
+
+                cells = [c.strip() for c in stripped.strip("|").split("|")]
+
+                # Normalisasi jika sel berlebih karena delimiter palsu '-----'
+                if expected_cols > 0 and len(cells) > expected_cols:
+                    cleaned_cells: list[str] = []
+                    k = 0
+                    while k < len(cells) and len(cleaned_cells) < expected_cols:
+                        cleaned_cells.append(cells[k])
+                        k += 1
+                    if len(cells) > expected_cols and cells[-1]:
+                        cleaned_cells[-1] = cells[-1]
+                    cells = cleaned_cells
+                elif expected_cols > 0 and len(cells) < expected_cols:
+                    cells.extend([""] * (expected_cols - len(cells)))
+
+                reconstructed = "| " + " | ".join(cells) + " |"
+                result_lines.append(reconstructed)
+                i += 1
+                continue
+
+            # Bukan baris tabel, maka tabel berakhir
+            in_table = False
+            expected_cols = 0
+            result_lines.append(line)
+            i += 1
+            continue
+
+        result_lines.append(line)
+        i += 1
+
+    return "\n".join(result_lines)
+
+
 def parse_markdown_tables(markdown_text: str) -> list[dict[str, Any]]:
     """
     Ekstrak dan parse seluruh tabel format GFM Markdown dari teks dokumen.
     Mengembalikan daftar objek berisi header asli, baris terurai, teks konteks, dan metadata tag SQLite jika ada.
     """
-    lines = markdown_text.splitlines()
+    sanitized_text = sanitize_markdown_tables(markdown_text)
+    lines = sanitized_text.splitlines()
     tables: list[dict[str, Any]] = []
 
     i = 0
@@ -1494,4 +1601,5 @@ __all__ = [
     "process_page_tabular_agent",
     "query_sqlite",
     "sanitize_identifier",
+    "sanitize_markdown_tables",
 ]

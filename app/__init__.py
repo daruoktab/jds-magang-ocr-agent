@@ -38,6 +38,8 @@ from .multi_page import (
     preview_markdown_chunks,
     split_markdown_by_pages,
     stitch_pages_to_markdown,
+    strip_page_markers,
+    strip_thinking_process,
 )
 from .pdf import (
     extract_pdf_with_pymupdf4llm,
@@ -84,6 +86,7 @@ from .tabular_db import (
     parse_markdown_tables,
     process_page_tabular_agent,
     query_sqlite,
+    sanitize_markdown_tables,
 )
 
 __all__ = [
@@ -142,8 +145,11 @@ __all__ = [
     "query_sqlite",
     "render_presentation_slides_to_images",
     "run_deep_reasoning_agent",
+    "sanitize_markdown_tables",
     "sanitize_mermaid_code",
     "scan_document_directories",
     "split_markdown_by_pages",
     "stitch_pages_to_markdown",
+    "strip_page_markers",
+    "strip_thinking_process",
 ]

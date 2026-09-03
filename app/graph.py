@@ -422,6 +422,30 @@ class DocumentExtractionPipeline:
             draft_markdown=combined_md,
             specs=specs,
         )
+
+        # 4. Guardrail Pasca-Judge: Sanitasi tabel & validasi ulang blok Mermaid
+        from .diagram import sanitize_mermaid_code, validate_mermaid_syntax
+        from .tabular_db import sanitize_markdown_tables
+
+        final_md = sanitize_markdown_tables(final_md)
+
+        def _clean_mermaid_in_md(m: re.Match) -> str:
+            raw_code = m.group(1)
+            sanitized = sanitize_mermaid_code(raw_code)
+            if sanitized:
+                is_valid, _ = validate_mermaid_syntax(sanitized)
+                if is_valid:
+                    return f"```mermaid\n{sanitized}\n```"
+            # Jika tidak valid setelah dicoba sanitasi, fallback ke deskripsi visual terstruktur
+            return "> **[Diagram/Visual]:** Diagram visual terdeteksi pada dokumen."
+
+        final_md = re.sub(
+            r"```(?:mermaid)?\s*([\s\S]*?)\s*```",
+            _clean_mermaid_in_md,
+            final_md,
+            flags=re.IGNORECASE,
+        )
+
         elapsed = (time.perf_counter() - t0) * 1000
 
         logger.info(

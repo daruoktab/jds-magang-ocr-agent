@@ -42,13 +42,30 @@ def test_sanitize_mermaid_code():
     assert cleaned.startswith("flowchart TD")
     assert "--> C[End]" in cleaned
 
-    # Raw string tanpa code fence
-    raw_plain = """flowchart LR
-    A --> B
+    # Kasus label unquoted dengan tanda kurung & HTML (penyebab crash 'got PS')
+    raw_unquoted_paren = """flowchart TD
+    A[<b>Hidup Saleh</b><br>(Tit 1:8)]:::blueNode
+    Center{4<br>Syarat<br>Kepemimpinan}
+    classDef blueCircle fill:#008CBA,stroke:#fff,stroke-width:2px,rx:15,ry:15;
     """
-    cleaned_plain = sanitize_mermaid_code(raw_plain)
-    assert cleaned_plain is not None
-    assert cleaned_plain.startswith("flowchart LR")
+    cleaned_unquoted = sanitize_mermaid_code(raw_unquoted_paren)
+    assert cleaned_unquoted is not None
+    assert 'A["<b>Hidup Saleh</b><br/>(Tit 1:8)"]:::blueNode' in cleaned_unquoted
+    assert 'Center{"4<br/>Syarat<br/>Kepemimpinan"}' in cleaned_unquoted
+    assert "rx:15" not in cleaned_unquoted
+    assert "ry:15" not in cleaned_unquoted
+
+    # Kasus legacy 'graph TD' dan double brackets '"]]'
+    raw_graph_legacy = """graph TD
+    DLatch1["DLatch 1<br/>Q: Top Output<br/>Q_bar: Bottom Output"]]
+    RP1_RP0["RP1<br/>RP0"]<br/>(2)<br/>["Bank Select"] --> D_Mem
+    """
+    cleaned_legacy = sanitize_mermaid_code(raw_graph_legacy)
+    assert cleaned_legacy is not None
+    assert cleaned_legacy.startswith("flowchart TD")
+    assert 'DLatch1["DLatch 1<br/>Q: Top Output<br/>Q_bar: Bottom Output"]' in cleaned_legacy
+    assert '"]]' not in cleaned_legacy
+    assert 'RP1_RP0["RP1<br/>RP0"] --> D_Mem' in cleaned_legacy
 
 
 def test_validate_mermaid_syntax():
@@ -67,6 +84,14 @@ def test_validate_mermaid_syntax():
     is_valid_bad, err_bad = validate_mermaid_syntax(invalid_header)
     assert is_valid_bad is False
     assert "Header Mermaid tidak dikenali" in str(err_bad)
+
+    # Deteksi penutup kurung ganda
+    bad_double = """flowchart TD
+    A["Text"]] --> B["Next"]
+    """
+    is_valid_db, err_db = validate_mermaid_syntax(bad_double)
+    assert is_valid_db is False
+    assert "penutup kurung siku ganda" in str(err_db)
 
 
 def test_get_diagram_recommendation():
@@ -179,3 +204,51 @@ def test_extract_diagram_unsuitable_fallback(tmp_path):
     assert res.is_mermaid is False
     assert res.mermaid_code is None
     assert res.text_summary is not None and "Peta topografi wilayah" in res.text_summary
+
+
+def test_extract_diagram_self_correction_retry(tmp_path):
+    img_file = tmp_path / "retry_diag.png"
+    _create_dummy_image(img_file)
+
+    mock_llm = MagicMock()
+    # Step 1: Classify
+    resp_classify = MagicMock()
+    resp_classify.content = json.dumps(
+        {
+            "is_convertible": True,
+            "diagram_type": "flowchart",
+            "recommended_format": "mermaid",
+            "mermaid_type": "flowchart",
+            "confidence": 0.95,
+            "reasoning": "Flowchart logic",
+            "nodes_or_entities": ["A", "B"],
+        }
+    )
+
+    # Step 2: Percobaan pertama menghasilkan Mermaid dengan kurung ganda dan tag dangling
+    resp_extract_broken = MagicMock()
+    resp_extract_broken.content = """
+    ```mermaid
+    flowchart TD
+        A["Start"]] --> B["Process"]
+    ```
+    """
+
+    # Step 3: Percobaan koreksi mandiri menghasilkan Mermaid yang bersih dan valid
+    resp_extract_fixed = MagicMock()
+    resp_extract_fixed.content = """
+    ```mermaid
+    flowchart TD
+        A["Start"] --> B["Process"]
+    ```
+    Diagram berhasil diperbaiki.
+    """
+
+    mock_llm.invoke.side_effect = [resp_classify, resp_extract_broken, resp_extract_fixed]
+
+    res = extract_diagram_to_mermaid(img_file, mock_llm)
+    assert res.status == "success"
+    assert res.is_mermaid is True
+    assert res.mermaid_code is not None
+    assert 'A["Start"] --> B["Process"]' in res.mermaid_code
+

@@ -14,7 +14,11 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .llm import image_data_uri
-from .multi_page import collapse_consecutive_duplicate_blocks, strip_page_markers
+from .multi_page import (
+    collapse_consecutive_duplicate_blocks,
+    strip_page_markers,
+    strip_thinking_process,
+)
 from .prompts import (
     CLASSIFY_PROMPT,
     CLASSIFY_SYSTEM,
@@ -55,7 +59,7 @@ class VisionExtractor:
         ]
 
         resp = self.llm.invoke(messages)
-        text_resp = str(resp.content).strip()
+        text_resp = strip_thinking_process(str(resp.content).strip())
         logger.debug("[Extractor:Classify] Respon mentah VLM: %s", text_resp)
 
         # Parse JSON output jika ada
@@ -152,7 +156,7 @@ class VisionExtractor:
 
         try:
             resp = self.llm.invoke(messages)
-            text_resp = str(resp.content).strip()
+            text_resp = strip_thinking_process(str(resp.content).strip())
             match = re.search(r"\{.*?\}", text_resp, re.DOTALL)
             if match:
                 data = json.loads(match.group(0))
@@ -207,7 +211,7 @@ class VisionExtractor:
             "Evaluasi dan lakukan koreksi ulang dengan panduan:\n"
             "1. KELENGKAPAN: Pastikan seluruh teks, judul, poin-poin, dan data angka pada gambar telah tercakup dalam Markdown.\n"
             "2. DIAGRAM VISUAL (MERMAID): Jika pada gambar terdapat diagram alur/relasi/arsitektur/proses, pastikan sudah direpresentasikan dengan blok kode ```mermaid yang valid dan lengkap atau deskripsi terstruktur.\n"
-            "3. INTEGRITAS TABEL: Pastikan tabel diformat sebagai tabel Markdown (GFM) yang rapi.\n"
+            "3. INTEGRITAS TABEL: Pastikan tabel diformat sebagai tabel Markdown (GFM) utuh tanpa baris kosong di tengah, setiap baris diawali dan diakhiri '|', dan sub-header diformat sebagai baris tabel berkolom lengkap (contoh: | **Bank 1** | | | ... |).\n"
             "4. KEBERSIHAN: Hapus duplikasi atau ketidakkonsistenan antarseksi.\n"
             "5. JIKA DRAFT SUDAH BENAR DAN LENGKAP: Kembalikan teks Markdown tersebut secara presisi tanpa merusak format.\n\n"
             f"[DRAFT MARKDOWN SEBELUM KOREKSI]:\n'''markdown\n{draft_markdown}\n'''\n\n"
@@ -225,7 +229,7 @@ class VisionExtractor:
 
         try:
             resp = self.llm.invoke(messages)
-            refined_md = str(resp.content).strip()
+            refined_md = strip_thinking_process(str(resp.content).strip())
             # Bersihkan wrapper code fence jika ada
             if refined_md.startswith("```markdown") and refined_md.endswith("```"):
                 refined_md = refined_md[len("```markdown") : -3].strip()
@@ -253,15 +257,12 @@ class VisionExtractor:
         previous_page_context: str | None = None,
     ) -> str:
         """
-        Ekstrak gambar dokumen menjadi teks Markdown bersih sesuai spesifikasi layout komposit.
+        Ekstraksi Markdown visual sadar spesifikasi komposit.
 
         Args:
-            image_path: Path ke file gambar dokumen.
-            specs: Satu atau daftar karakteristik dokumen ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides', 'chat_transcript', 'signature_form').
-            previous_page_context: Konteks halaman sebelumnya untuk menjaga kontinuitas header.
-
-        Returns:
-            Teks Markdown terstruktur siap chunking.
+            image_path: Path absolut ke gambar halaman dokumen.
+            specs: Spesifikasi layout aktif (mis. ['plain'], ['presentation_slides'], dll.).
+            previous_page_context: Potongan teks dari halaman sebelumnya untuk kesinambungan heading/kalimat.
         """
         user_prompt = build_extraction_prompt(
             specs=specs,
@@ -285,7 +286,7 @@ class VisionExtractor:
         ]
 
         response = self.llm.invoke(messages)
-        md_text = str(response.content).strip()
+        md_text = strip_thinking_process(str(response.content).strip())
 
         # Bersihkan pembungkus markdown block ```markdown ... ``` jika VLM membungkusnya
         if md_text.startswith("```markdown") and md_text.endswith("```"):

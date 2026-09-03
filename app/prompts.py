@@ -31,7 +31,13 @@ Aturan wajib:
 7. Jika teks tidak terbaca, tulis [tidak terbaca].
 8. Jika area kosong, tulis [kosong].
 9. Pertahankan bahasa asli, ejaan, angka, nama orang, jabatan, tanggal, nomor dokumen, dan istilah teknis sedekat mungkin dengan sumber.
-10. Untuk tabel, buat tabel Markdown GFM yang lengkap dan konsisten.
+10. Untuk tabel, buat tabel Markdown GFM yang lengkap, valid, dan konsisten:
+    - Setiap baris tabel WAJIB diawali dan diakhiri dengan tanda pipa '|'.
+    - Seluruh baris data WAJIB memiliki JUMLAH KOLOM YANG SAMA PERSIS dengan baris header.
+    - DILARANG menaruh baris kosong di tengah-tengah tabel (baris kosong memutus tabel).
+    - Jika ada baris sub-header di dalam tabel (contoh: "Bank 0", "Bank 1"):
+      Tuliskan sebagai baris tabel utuh dengan kolom lengkap, contoh: | **Bank 1** | | | | | | | | | | | | (DILARANG menghilangkan tanda pipa '|').
+    - DILARANG menuliskan delimiter tabel `|---|` di dalam sel data baris. Gunakan '-' atau '—' untuk sel bernilai strip.
 11. Untuk chat, ekstrak sebagai transkrip percakapan yang urut.
 12. Untuk tanda tangan/paraf, ekstrak hanya informasi yang benar-benar terlihat; jangan menebak status approval jika tidak tertulis.
 13. Jika ada diagram, topologi, flowchart, atau bagan, deskripsikan komponen dan relasi yang terlihat dalam blockquote: > **[Diagram/Visual]:** ... Jangan membuat kode Mermaid kecuali diminta secara eksplisit.
@@ -51,7 +57,11 @@ _RULE_BUSINESS_DOCUMENT: str = """
 - Jika ada pasangan kunci-nilai (contoh: Nama, Jabatan, Nomor Dokumen, Tanggal), gunakan format:
   - **Nama:** ...
   - **Jabatan:** ...
-- Jika ada tabel, ubah menjadi tabel Markdown GFM.
+- Jika ada tabel, ubah menjadi tabel Markdown GFM yang rapi dan konsisten:
+  - Setiap baris harus diawali dan diakhiri '|'.
+  - Jumlah kolom baris data harus sama persis dengan header.
+  - Jangan menyisipkan baris kosong di tengah tabel.
+  - Sub-header tabel harus ditulis dengan kolom penuh, contoh: | **Bank 1** | | | ... |.
 - Jangan menambahkan interpretasi, opini, atau kesimpulan yang tidak tertulis.
 """.strip()
 

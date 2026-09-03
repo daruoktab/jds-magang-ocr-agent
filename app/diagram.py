@@ -19,6 +19,7 @@ from typing import cast
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .llm import image_data_uri
+from .multi_page import strip_thinking_process
 from .schemas import (
     DiagramConvertibilityResult,
     DiagramExtractionResult,
@@ -44,10 +45,104 @@ MERMAID_KEYWORDS: tuple[str, ...] = (
 )
 
 
+def _sanitize_mermaid_line(line: str) -> str:
+    """Sanitasi baris kode Mermaid: auto-quote label berisiko dan bersihkan classDef ilegal."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith("%%"):
+        return line
+
+    # 0. Normalisasi keyword legacy 'graph' menjadi 'flowchart'
+    if re.match(r"^graph\s+(TD|TB|LR|RL|BT)\b", stripped, re.IGNORECASE):
+        line = re.sub(r"^(\s*)graph\b", r"\1flowchart", line, flags=re.IGNORECASE)
+        stripped = line.strip()
+
+    # 1. Bersihkan classDef dari atribut non-CSS (rx, ry, dsb yang sering merusak parser Mermaid)
+    if stripped.startswith("classDef"):
+        cleaned_class = re.sub(r",\s*r[xy]:\s*[^,;]+", "", line)
+        cleaned_class = re.sub(r"\br[xy]:\s*[^,;]+[;,]?", "", cleaned_class)
+        cleaned_class = re.sub(r",\s*;", ";", cleaned_class)
+        cleaned_class = re.sub(r",\s*,", ",", cleaned_class)
+        return cleaned_class
+
+    # 2. Lewati direktif styling atau struktur kontrol
+    if any(
+        stripped.startswith(prefix)
+        for prefix in ("style ", "class ", "subgraph", "end", "linkStyle", "click")
+    ):
+        return line
+
+    # 3. Perbaiki penutup kurung ganda umum: `"]]` -> `"]`, `"]}}` -> `"]}`
+    line = re.sub(r'(?<=\w)\["([^"\n]*)"\]\]', r'["\1"]', line)
+    line = re.sub(r'(?<=\w)\[([^\]\n]*)\]\](?!\s*\])', r'[\1]', line)
+    line = re.sub(r'(?<=\w)\{"([^"\n]*)"\}\}', r'{"\1"}', line)
+
+    def _quote_content(content: str) -> str:
+        c = content.strip()
+        c = re.sub(r"<br\s*/?>", "<br/>", c, flags=re.IGNORECASE)
+        # Ganti escaped quote yang membingungkan tokenizer
+        c = c.replace('\\"', "'")
+        # Jika ada tanda kurung siku ganda di akhir
+        if c.endswith("]"):
+            c = c[:-1].strip()
+        # Jika sudah dibungkus tanda kutip ganda atau tunggal
+        if c.startswith('"') and c.endswith('"'):
+            inner = c[1:-1].replace('"', "'")
+            return f'"{inner}"'
+        # Cek apakah mengandung karakter berisiko parse error: (), <>, :, /, ;, &, #, atau spasi
+        risky_chars = set("()<>:/;&#,")
+        if any(ch in c for ch in risky_chars) or " " in c:
+            c = c.replace('"', "'")
+            return f'"{c}"'
+        return c
+
+    # Ganti node bentuk circle (( ... ))
+    line = re.sub(
+        r'(?<=\w)\(\((?!\")([^\)\n]+)\)\)',
+        lambda m: f"(({_quote_content(m.group(1))}))",
+        line,
+    )
+    # Ganti node bentuk stadium ([ ... ])
+    line = re.sub(
+        r'(?<=\w)\(\[(?!\")([^\]\n]+)\]\)',
+        lambda m: f"([{_quote_content(m.group(1))}])",
+        line,
+    )
+    # Ganti node bentuk cylinder [( ... )]
+    line = re.sub(
+        r'(?<=\w)\[\((?!\")([^\)\n]+)\)\]',
+        lambda m: f"[({_quote_content(m.group(1))})]",
+        line,
+    )
+    # Ganti node bentuk square [ ... ]
+    line = re.sub(
+        r'(?<=\w)\[(?!\")([^\]\n]+)\]',
+        lambda m: f"[{_quote_content(m.group(1))}]",
+        line,
+    )
+    # Ganti node bentuk rhombus { ... }
+    line = re.sub(
+        r'(?<=\w)\{(?!\")([^\}\n]+)\}',
+        lambda m: f"{{{_quote_content(m.group(1))}}}",
+        line,
+    )
+
+    # 4. Bersihkan dangling <br/> dan teks di luar simpul sebelum panah
+    # Contoh: RP1_RP0["RP1<br/>RP0"]<br/>(2)<br/>["Bank Select"] --> D_Mem
+    line = re.sub(
+        r'(\b\w+\["[^"\n]+"\])\s*<br\s*/?>\s*(?:<br\s*/?>|\([^\)\n]*\)|\"[^\"]*\"|\[[^\]\n]*\]|[^\s\-]+)*\s*(-->|---|-\.->|==>)',
+        r"\1 \2",
+        line,
+        flags=re.IGNORECASE,
+    )
+
+    return line
+
+
 def sanitize_mermaid_code(raw_text: str) -> str | None:
     """
     Ekstrak dan bersihkan blok kode Mermaid dari output model AI.
     Menghilangkan wrapper Markdown (```mermaid ... ```) dan memperbaiki anomali formatting umum.
+    Termasuk auto-quoting label simpul dan pembersihan atribut ilegal classDef.
     """
     if not raw_text or not raw_text.strip():
         return None
@@ -80,12 +175,17 @@ def sanitize_mermaid_code(raw_text: str) -> str | None:
 
     # Sanitasi karakter yang sering merusak parsing Mermaid di web UI
     cleaned = cleaned.replace("\r\n", "\n")
+
+    # Sanitasi per baris (auto-quoting node labels & cleaning illegal classDef properties)
+    sanitized_lines = [_sanitize_mermaid_line(l) for l in cleaned.splitlines()]
+    cleaned = "\n".join(sanitized_lines)
+
     return cleaned
 
 
 def validate_mermaid_syntax(mermaid_code: str) -> tuple[bool, str | None]:
     """
-    Validasi dasar sintaks Mermaid secara statis / heuristik.
+    Validasi sintaks Mermaid komprehensif (Linter Compiler).
     Mengembalikan (is_valid, error_message).
     """
     if not mermaid_code or not mermaid_code.strip():
@@ -97,23 +197,47 @@ def validate_mermaid_syntax(mermaid_code: str) -> tuple[bool, str | None]:
 
     # Periksa header
     first_line = lines[0].lower().replace(" ", "").replace("-", "")
+    if first_line.startswith("graph"):
+        return False, "Keyword 'graph' tidak dianjurkan; gunakan 'flowchart' (contoh: flowchart TD)."
     if not any(first_line.startswith(kw.replace("-", "")) for kw in MERMAID_KEYWORDS):
         return False, f"Header Mermaid tidak dikenali: '{lines[0]}'"
 
-    # Cek keseimbangan kurung atau simbol relasi umum
-    open_brackets = mermaid_code.count("[")
-    close_brackets = mermaid_code.count("]")
-    open_braces = mermaid_code.count("{")
-    close_braces = mermaid_code.count("}")
-    open_parens = mermaid_code.count("(")
-    close_parens = mermaid_code.count(")")
+    # Hapus string literal dalam tanda kutip ganda untuk menghindari false positive pada teks label
+    code_without_strings = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', '""', mermaid_code)
+
+    # Deteksi kurung siku ganda pada simpul tunggal (contoh: Node["Teks"]] )
+    if re.search(r'(?<=\w)\[[^\]\n]*\]\]', code_without_strings):
+        return False, "Terdapat penutup kurung siku ganda ']]' pada simpul berawalan tunggal '['."
+
+    # Deteksi dangling <br/> di luar node pada baris relasi
+    if re.search(r'(?:\]|\)|\})\s*<br\s*/?>', code_without_strings, re.IGNORECASE):
+        return False, "Tag <br/> ditemukan di luar tanda kurung simpul. Semua pemisah baris harus berada di dalam label simpul bertanda kutip."
+
+    # Deteksi unquoted label yang mengandung tanda kurung di dalam simpul kotak (penyebab utama error 'got PS')
+    unquoted_paren_match = re.search(r'\b\w+\[[^"\]\n]*[\(\)][^"\]\n]*\]', code_without_strings)
+    if unquoted_paren_match:
+        return (
+            False,
+            (
+                f"Label simpul mengandung tanda kurung tanpa tanda kutip dua: '{unquoted_paren_match.group(0)}'. "
+                "Gunakan tanda kutip dua, contoh: A[\"Teks (detail)\"]."
+            ),
+        )
+
+    # Cek keseimbangan kurung pada kode di luar string literal
+    open_brackets = code_without_strings.count("[")
+    close_brackets = code_without_strings.count("]")
+    open_braces = code_without_strings.count("{")
+    close_braces = code_without_strings.count("}")
+    open_parens = code_without_strings.count("(")
+    close_parens = code_without_strings.count(")")
 
     # Toleransi kecil jika ada label khusus, namun beri warning jika selisih banyak
-    if abs(open_brackets - close_brackets) > 2:
+    if abs(open_brackets - close_brackets) > 1:
         return False, f"Ketidakseimbangan tanda kurung siku: [{open_brackets} vs ]{close_brackets}"
-    if abs(open_braces - close_braces) > 2:
+    if abs(open_braces - close_braces) > 1:
         return False, f"Ketidakseimbangan kurung kurawal: {{{open_braces}}} vs {{{close_braces}}}"
-    if abs(open_parens - close_parens) > 2:
+    if abs(open_parens - close_parens) > 1:
         return False, f"Ketidakseimbangan tanda kurung biasa: ({open_parens} vs ){close_parens}"
 
     return True, None
@@ -370,13 +494,21 @@ def extract_diagram_to_mermaid(
         "Tugas Anda adalah mengekstrak seluruh elemen diagram, simpul (nodes), label teks, dan relasi berarah "
         "dari gambar ini menjadi KODE MERMAID.JS YANG VALID dan LENGKAP.\n\n"
         f"{syntax_hint}\n\n"
-        "Panduan Pembuatan Kode Mermaid:\n"
-        "1. Mulai dengan deklarasi tipe diagram di baris pertama (contoh: 'flowchart TD', 'sequenceDiagram', 'erDiagram').\n"
-        "2. Gunakan ID simpul alfanumerik yang bersih (misal: A, B, node1, Step1) dan letakkan label teks asli di dalam kurung siku [Teks], lingkaran ((Teks)), atau belah ketupat {Teks}.\n"
-        "3. Pertahankan semua label relasi/panah secara akurat (contoh: A -->|Label| B).\n"
-        "4. Hindari karakter khusus yang merusak sintaks (gunakan tanda kutip dua untuk teks kompleks di dalam label).\n"
-        "5. Berikan output di dalam blok markdown ```mermaid\\n...\\n```.\n"
-        "6. Tambahkan ringkasan 1-2 kalimat di bawah blok kode yang menjelaskan arti diagram tersebut."
+        "PANDUAN KETAT SINTAKS MERMAID (WAJIB DIIKUTI AGAR TIDAK PARSE ERROR):\n"
+        "1. Baris pertama WAJIB deklarasi tipe diagram (gunakan 'flowchart TD' atau 'flowchart LR'; DILARANG menggunakan keyword 'graph').\n"
+        "2. SEMUA LABEL SIMPUL WAJIB DIAPIT TANDA KUTIP DUA (\") DI DALAM BENTUK SIMPUL:\n"
+        "   - CONTOH BENAR: A[\"<b>Hidup Saleh</b><br/>(Tit 1:8)\"] atau B((\"Lingkaran\")) atau Center{\"4 Syarat\"}\n"
+        "   - CONTOH SALAH: A[<b>Hidup Saleh</b><br>(Tit 1:8)]  <-- FATAL ERROR! Karakter '(' tanpa tanda kutip memicu crash 'got PS'!\n"
+        "3. DILARANG menggunakan tanda kurung siku ganda ']]' jika pembukanya hanya '[' (CONTOH SALAH: Node[\"Teks\"]] ).\n"
+        "4. DILARANG meletakkan tag <br/> atau teks di luar tanda kurung simpul pada baris relasi (CONTOH SALAH: Node[\"A\"]<br/>(2) --> B).\n"
+        "5. ID Simpul harus sederhana dan alfanumerik pendek (misal: A, B, node1, Step1).\n"
+        "6. Untuk baris baru (line break) di dalam label teks, gunakan tag <br/> di dalam tanda kutip dua.\n"
+        "7. PADA 'classDef', HANYA GUNAKAN PROPERTI CSS STANDAR:\n"
+        "   - Properti yang diizinkan: fill, stroke, stroke-width, color, stroke-dasharray.\n"
+        "   - DILARANG KERAS menggunakan atribut SVG seperti 'rx' atau 'ry' (contoh SALAH: rx:15, ry:15).\n"
+        "8. Pertahankan semua label relasi/panah secara akurat (contoh: A -->|Label| B).\n"
+        "9. Berikan output di dalam blok markdown ```mermaid\\n...\\n```.\n"
+        "10. Tambahkan ringkasan 1-2 kalimat di bawah blok kode yang menjelaskan arti diagram tersebut."
     )
 
     messages = [
@@ -394,7 +526,7 @@ def extract_diagram_to_mermaid(
 
     try:
         resp = llm.invoke(messages)
-        text_resp = str(resp.content).strip()
+        text_resp = strip_thinking_process(str(resp.content).strip())
 
         # Ekstrak blok mermaid
         mermaid_match = re.search(
@@ -424,6 +556,70 @@ def extract_diagram_to_mermaid(
             forced_diagram_type
             or (convertibility.diagram_type if convertibility else "flowchart"),
         )
+
+        # Linter Compiler & Self-Correction Retry Loop (Maksimal 2 kali percobaan perbaikan)
+        MAX_MERMAID_RETRIES = 2
+        for attempt in range(MAX_MERMAID_RETRIES + 1):
+            if not mermaid_block:
+                break
+
+            # 1. Jalankan auto-sanitizer
+            mermaid_block = sanitize_mermaid_code(mermaid_block)
+            if not mermaid_block:
+                break
+
+            # 2. Validasi dengan compiler linter
+            is_valid, syntax_err = validate_mermaid_syntax(mermaid_block)
+            if is_valid:
+                logger.info(
+                    "[Diagram:Extract] Sintaks Mermaid tervalidasi sukses (percobaan ke-%d)",
+                    attempt + 1,
+                )
+                break
+
+            logger.warning(
+                "[Diagram:Extract] Sintaks Mermaid bermasalah pada percobaan ke-%d: %s",
+                attempt + 1,
+                syntax_err,
+            )
+
+            # Jika masih dalam jatah retry, panggil LLM untuk koreksi mandiri
+            if attempt < MAX_MERMAID_RETRIES:
+                fix_prompt = (
+                    f"Kode Mermaid yang Anda hasilkan memiliki KESALAHAN SINTAKS:\n"
+                    f"- Error Compiler/Linter: {syntax_err}\n\n"
+                    f"Kode yang bermasalah:\n```mermaid\n{mermaid_block}\n```\n\n"
+                    "PERBAIKI KODE DI ATAS DENGAN ATURAN KETAT BERIKUT:\n"
+                    "1. Gunakan 'flowchart TD' atau 'flowchart LR' (DILARANG menggunakan 'graph').\n"
+                    "2. Selalu gunakan tanda kutip ganda pada label simpul: Node[\"Teks Label\"].\n"
+                    "3. DILARANG menggunakan penutup kurung ganda ']]' jika pembukanya hanya satu '['.\n"
+                    "4. DILARANG meletakkan <br/> atau teks di luar tanda kurung simpul pada baris relasi.\n"
+                    "5. Outputkan HANYA blok kode ```mermaid\\n...\\n``` yang sudah diperbaiki tanpa teks tambahan."
+                )
+                try:
+                    fix_resp = llm.invoke([{"role": "user", "content": fix_prompt}])
+                    fix_text = strip_thinking_process(str(fix_resp.content).strip())
+                    m_fix = re.search(r"```(?:mermaid)?\s*([\s\S]*?)\s*```", fix_text, re.IGNORECASE)
+                    if m_fix:
+                        mermaid_block = m_fix.group(1).strip()
+                    else:
+                        mermaid_block = fix_text.strip()
+                except Exception as e_fix:  # noqa: BLE001
+                    logger.warning("[Diagram:Extract] Gagal melakukan retry self-correction Mermaid: %s", e_fix)
+                    break
+            else:
+                # Retry habis dan masih tidak valid -> Fallback ke deskripsi terstruktur demi keselamatan output
+                logger.error(
+                    "[Diagram:Extract] Kode Mermaid tetap tidak valid setelah %d percobaan (%s). Mengganti ke deskripsi visual.",
+                    MAX_MERMAID_RETRIES + 1,
+                    syntax_err,
+                )
+                mermaid_block = None
+                if not summary_text or "Mermaid berhasil" in summary_text:
+                    summary_text = (
+                        "Diagram visual terdeteksi pada dokumen, namun struktur relasi tidak dapat "
+                        "direpresentasikan dengan kode Mermaid yang valid secara sintaksis."
+                    )
 
         return DiagramExtractionResult(
             status="success" if mermaid_block else "unsuitable",

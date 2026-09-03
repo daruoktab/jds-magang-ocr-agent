@@ -305,7 +305,10 @@ def process_multipage_pdf(
                 previous_page_context=previous_context,
             )
 
+            from .tabular_db import sanitize_markdown_tables
+
             page_md: str = strip_page_markers(res["markdown_content"]).strip()
+            page_md = sanitize_markdown_tables(page_md)
             detected_specs: list[str] = res.get("specs") or ["plain"]
             total_visuals += int(res.get("visual_count", 0))
             total_tables += int(res.get("table_count", 0))

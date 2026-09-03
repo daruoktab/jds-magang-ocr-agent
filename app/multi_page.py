@@ -51,13 +51,81 @@ def format_page_delimiter(page_number: int, is_slide: bool = False) -> str:
     return f"<!-- {tag}: {page_number} -->"
 
 
+def strip_thinking_process(markdown: str) -> str:
+    """
+    Hapus blok penalaran model / reasoning token (<think>...</think>)
+    yang dihasilkan oleh model reasoning (seperti DeepSeek-R1, Qwen-2.5-Coder-Reasoning, QwQ)
+    agar tidak bocor ke output dokumen Markdown.
+
+    Menangani kasus:
+    1. Blok <think>...</think> lengkap.
+    2. Tag </think> dangling tanpa pembuka.
+    3. Blok <think> unclosed di awal (terpotong oleh token limit).
+    4. Sisa-sisa preamble reasoning seperti 'Wait, I need to check...' sebelum konten dokumen.
+    """
+    if not markdown:
+        return ""
+
+    text = markdown
+
+    # 1. Hapus blok lengkap <think>...</think>
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
+
+    # 2. Jika ada </think> dangling di awal
+    if "</think>" in text.lower():
+        parts = re.split(r"</think>", text, flags=re.IGNORECASE, maxsplit=1)
+        if len(parts) > 1:
+            text = parts[1]
+
+    # 3. Jika ada <think> unclosed di awal sebelum konten
+    if "<think>" in text.lower():
+        parts = re.split(r"<think>", text, flags=re.IGNORECASE, maxsplit=1)
+        text = parts[0]
+
+    # 4. Bersihkan sisa rambling reasoning di awal jika ada
+    lines = text.splitlines()
+    start_idx = 0
+    reasoning_prefixes = (
+        "wait, i need to check",
+        "let me check",
+        "let me re-read",
+        "let me verify",
+        "draft table",
+        "thinking process:",
+        "i will output",
+    )
+    found_real_content = False
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lower_line = stripped.lower()
+        if any(lower_line.startswith(p) for p in reasoning_prefixes):
+            continue
+        if (
+            stripped.startswith(("#", "|", ">", "---", "```", "- ", "* ", "1. ", "<!--"))
+            or (stripped.startswith("**") and stripped.endswith("**"))
+        ):
+            start_idx = idx
+            found_real_content = True
+            break
+
+    if found_real_content and start_idx > 0:
+        preceding_text = "\n".join(lines[:start_idx]).lower()
+        if any(p in preceding_text for p in reasoning_prefixes):
+            text = "\n".join(lines[start_idx:])
+
+    return text.strip()
+
+
 def strip_page_markers(markdown: str) -> str:
     """
     Buang seluruh penanda `<!-- PAGE: N -->` / `<!-- SLIDE: N -->` yang mungkin
     ikut ditulis oleh VLM di dalam konten halaman, agar penomoran hanya berasal
     dari stitcher (sumber kebenaran tunggal).
     """
-    cleaned = PAGE_DELIMITER_RE.sub("", markdown)
+    cleaned = strip_thinking_process(markdown)
+    cleaned = PAGE_DELIMITER_RE.sub("", cleaned)
     return "\n".join(cleaned.splitlines()).strip()
 
 
@@ -325,3 +393,17 @@ def preview_markdown_chunks(
         avg_chunk_size=round(avg_size, 1),
         chunks=items,
     )
+
+
+__all__ = [
+    "PAGE_DELIMITER_RE",
+    "collapse_consecutive_duplicate_blocks",
+    "extract_preamble",
+    "format_page_delimiter",
+    "merge_and_stitch_markdown_pages",
+    "preview_markdown_chunks",
+    "split_markdown_by_pages",
+    "stitch_pages_to_markdown",
+    "strip_page_markers",
+    "strip_thinking_process",
+]
