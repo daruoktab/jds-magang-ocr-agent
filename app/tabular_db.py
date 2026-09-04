@@ -992,6 +992,76 @@ class TabularDatabaseManager:
             "active_tables_summary": self.get_active_tables_summary(),
         }
 
+    def export_to_csv(
+        self,
+        output_dir: str | Path | None = None,
+        include_internal_columns: bool = False,
+    ) -> list[Path]:
+        """
+        Ekspor seluruh tabel pengguna yang ada di basis data SQLite ke file CSV.
+
+        Args:
+            output_dir: Folder target untuk menyimpan file CSV (default: folder 'csv' per dokumen).
+            include_internal_columns: Apakah kolom metadata internal (_row_id, _source_doc, dll) ikut diekspor.
+
+        Returns:
+            Daftar Path file CSV yang berhasil dibuat.
+        """
+        import csv
+
+        if not self.db_path.exists():
+            return []
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
+            )
+            tables = [row["name"] for row in cursor.fetchall()]
+            if not tables:
+                return []
+
+            if output_dir:
+                target_dir = Path(output_dir).resolve()
+            elif self.db_path.parent.name == "databases":
+                target_dir = self.db_path.parent.parent / "csv"
+            else:
+                target_dir = self.db_path.parent / "csv"
+
+            target_dir.mkdir(parents=True, exist_ok=True)
+            exported_files: list[Path] = []
+
+            for t in tables:
+                col_cur = conn.execute(f'PRAGMA table_info("{t}");')
+                all_cols = [c["name"] for c in col_cur.fetchall()]
+                if not include_internal_columns:
+                    cols_to_export = [c for c in all_cols if not c.startswith("_")]
+                    if not cols_to_export:
+                        cols_to_export = all_cols
+                else:
+                    cols_to_export = all_cols
+
+                quoted_cols = ", ".join([f'"{c}"' for c in cols_to_export])
+                data_cur = conn.execute(f'SELECT {quoted_cols} FROM "{t}";')
+                rows = data_cur.fetchall()
+
+                csv_file = target_dir / f"{t}.csv"
+                with open(csv_file, "w", encoding="utf-8-sig", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(cols_to_export)
+                    for r in rows:
+                        writer.writerow([r[c] for c in cols_to_export])
+
+                exported_files.append(csv_file)
+                logger.info(
+                    "[Tabular:CSV] Tabel '%s' (%d baris) berhasil diekspor ke: %s",
+                    t,
+                    len(rows),
+                    csv_file,
+                )
+
+        return exported_files
+
+
 
 # ==============================================================================
 # Double-Verification Mechanism (Integritas, Agregasi, Refleksi)

@@ -9,6 +9,7 @@ Menyediakan:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,8 @@ from .graph import DocumentExtractionPipeline
 from .multi_page import preview_markdown_chunks
 from .pdf import process_multipage_pdf
 from .ppt import process_presentation_vision
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS: set[str] = {
     ".pdf",
@@ -253,6 +256,18 @@ def batch_extract_documents(
                 md_content = str(res["markdown_content"])
 
             out_file.write_text(md_content, encoding="utf-8")
+
+            # Ekspor tabel SQLite ke CSV jika basis data terbentuk
+            batch_db = doc_dir / "databases" / f"{rel_stem}.sqlite"
+            if batch_db.exists():
+                try:
+                    from .tabular_db import TabularDatabaseManager
+
+                    TabularDatabaseManager(batch_db).export_to_csv(
+                        output_dir=doc_dir / "csv"
+                    )
+                except Exception as e_csv:  # noqa: BLE001
+                    logger.warning("[Batch] Gagal mengekspor CSV: %s", e_csv)
 
             item_info: dict[str, Any] = {
                 "index": idx,

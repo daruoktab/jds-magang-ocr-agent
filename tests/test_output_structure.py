@@ -73,6 +73,54 @@ class TestOutputStructure(unittest.TestCase):
         self.assertTrue((self.test_dir / ".gitkeep").exists())
         self.assertFalse(docC_dir.exists())
 
+    def test_export_to_csv(self):
+        from app.tabular_db import (
+            TableColumnSchema,
+            TableSchema,
+            TabularDatabaseManager,
+        )
+
+        db_file = self.test_dir / "databases" / "test_doc.sqlite"
+        mgr = TabularDatabaseManager(db_file)
+        schema = TableSchema(
+            table_name="transaksi",
+            source_file="test_doc.pdf",
+            columns=[
+                TableColumnSchema(
+                    name="tanggal",
+                    original_name="Tanggal",
+                    sql_type="TEXT",
+                    is_nullable=False,
+                    description="",
+                    sample_values=[],
+                ),
+                TableColumnSchema(
+                    name="nominal",
+                    original_name="Nominal",
+                    sql_type="REAL",
+                    is_nullable=False,
+                    description="",
+                    sample_values=[],
+                ),
+            ],
+            primary_key=None,
+        )
+        mgr.ingest_records(
+            table_name="transaksi",
+            schema=schema,
+            headers=["tanggal", "nominal"],
+            rows=[["2026-01-01", "150000"], ["2026-01-02", "250000"]],
+        )
+
+        csv_dir = self.test_dir / "csv"
+        exported = mgr.export_to_csv(output_dir=csv_dir)
+        self.assertEqual(len(exported), 1)
+        self.assertTrue((csv_dir / "transaksi.csv").exists())
+        csv_content = (csv_dir / "transaksi.csv").read_text(encoding="utf-8-sig")
+        self.assertIn("tanggal", csv_content)
+        self.assertIn("150000", csv_content)
+
 
 if __name__ == "__main__":
     unittest.main()
+

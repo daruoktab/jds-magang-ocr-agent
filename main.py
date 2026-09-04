@@ -398,6 +398,24 @@ def main() -> int:
             markdown_out_file.write_text(markdown_content, encoding="utf-8")
             logger.info("Hasil Markdown berhasil disimpan ke: %s", markdown_out_file)
 
+        # Ekspor tabel SQLite ke format CSV jika basis data SQLite terbentuk
+        if db_target_file and db_target_file.exists():
+            try:
+                from app.tabular_db import TabularDatabaseManager
+
+                csv_dir = doc_output_dir / "csv"
+                exported_csvs = TabularDatabaseManager(db_target_file).export_to_csv(
+                    output_dir=csv_dir
+                )
+                if exported_csvs:
+                    logger.info(
+                        "Ekspor CSV berhasil: %d tabel diekspor ke %s",
+                        len(exported_csvs),
+                        csv_dir,
+                    )
+            except Exception as e_csv:  # noqa: BLE001
+                logger.warning("Gagal mengekspor tabel SQLite ke CSV: %s", e_csv)
+
         if args.stdout or markdown_out_file is None:
             print(markdown_content)
 

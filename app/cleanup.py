@@ -81,6 +81,19 @@ def migrate_legacy_output(output_dir: str | Path = "output") -> None:
                 else:
                     loose_db.unlink()
 
+        # Pastikan tabel SQLite memiliki ekspor CSV
+        doc_db = target_doc_dir / "databases" / f"{stem}.sqlite"
+        if doc_db.exists():
+            dest_csv_dir = target_doc_dir / "csv"
+            if not dest_csv_dir.exists() or not any(dest_csv_dir.glob("*.csv")):
+                try:
+                    from .tabular_db import TabularDatabaseManager
+
+                    TabularDatabaseManager(doc_db).export_to_csv(output_dir=dest_csv_dir)
+                except Exception as e_csv:  # noqa: BLE001
+                    logger.warning("[Migration] Gagal ekspor CSV untuk %s: %s", stem, e_csv)
+
+
         # Migrasi halaman PDF
         if legacy_pdf_pages_dir.exists():
             loose_pages = legacy_pdf_pages_dir / stem

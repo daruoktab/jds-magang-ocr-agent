@@ -405,6 +405,17 @@ def process_multipage_pdf(
             source_file=str(pdf_path),
             total_pages=total_pages,
         )
+        try:
+            from .tabular_db import TabularDatabaseManager
+
+            csv_dir = (
+                resolved_db_path.parent.parent / "csv"
+                if resolved_db_path.parent.name == "databases"
+                else resolved_db_path.parent / "csv"
+            )
+            TabularDatabaseManager(resolved_db_path).export_to_csv(output_dir=csv_dir)
+        except Exception as e_csv:  # noqa: BLE001
+            logger.warning("[PDF] Gagal mengekspor tabel SQLite ke CSV: %s", e_csv)
 
     # Hitung konsensus spesifikasi layout utama dokumen
     flat_specs = [

@@ -378,6 +378,18 @@ def process_presentation(
         source_file=src,
         total_pages=len(slides),
     )
+    if db_out_path and db_out_path.exists():
+        try:
+            from .tabular_db import TabularDatabaseManager
+
+            csv_dir = (
+                db_out_path.parent.parent / "csv"
+                if db_out_path.parent.name == "databases"
+                else db_out_path.parent / "csv"
+            )
+            TabularDatabaseManager(db_out_path).export_to_csv(output_dir=csv_dir)
+        except Exception as e_csv:  # noqa: BLE001
+            logger.warning("[PPT] Gagal mengekspor tabel SQLite ke CSV: %s", e_csv)
 
     if output_markdown_path:
         out_file = Path(output_markdown_path).resolve()
@@ -568,6 +580,18 @@ def process_presentation_vision(
         source_file=src,
         total_pages=len(slide_images),
     )
+    if db_out_path and db_out_path.exists():
+        try:
+            from .tabular_db import TabularDatabaseManager
+
+            csv_dir = (
+                db_out_path.parent.parent / "csv"
+                if db_out_path.parent.name == "databases"
+                else db_out_path.parent / "csv"
+            )
+            TabularDatabaseManager(db_out_path).export_to_csv(output_dir=csv_dir)
+        except Exception as e_csv:  # noqa: BLE001
+            logger.warning("[Vision PPT] Gagal mengekspor tabel SQLite ke CSV: %s", e_csv)
 
     logger.info(
         "[Vision PPT] Selesai: %d slide | %d elemen visual/diagram | %d tabel terdeteksi",
