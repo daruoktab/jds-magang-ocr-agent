@@ -202,8 +202,9 @@ class JobManager:
                 # Sudah berjalan, kembalikan job yang sedang aktif
                 return existing_job
 
-            output_dir.mkdir(parents=True, exist_ok=True)
-            log_dir = output_dir / "logs"
+            doc_output_dir = output_dir / stem
+            doc_output_dir.mkdir(parents=True, exist_ok=True)
+            log_dir = doc_output_dir / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
 
             timestamp = dt.datetime.now(dt.UTC).strftime("%Y%m%d_%H%M%S")
@@ -211,8 +212,10 @@ class JobManager:
             latest_log_path = log_dir / f"{stem}_latest.log"
             status_file = log_dir / f"{stem}_status.json"
             progress_file = log_dir / f"{stem}_progress.txt"
-            out_file = output_dir / f"{stem}.md"
-            db_file = output_dir / "databases" / f"{stem}.sqlite"
+            out_file = doc_output_dir / f"{stem}.md"
+            db_dir = doc_output_dir / "databases"
+            db_dir.mkdir(parents=True, exist_ok=True)
+            db_file = db_dir / f"{stem}.sqlite"
 
             # Tulis header awal ke file log agar langsung tersedia
             start_iso = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
@@ -472,7 +475,9 @@ class JobManager:
 
         # 2. Jika tidak ada di memori (misal server streamlit sempat restart), coba load dari disk
         target_dir = output_dir or (PROJECT_ROOT / "output")
-        status_file = target_dir / "logs" / f"{stem}_status.json"
+        status_file = target_dir / stem / "logs" / f"{stem}_status.json"
+        if not status_file.exists():
+            status_file = target_dir / "logs" / f"{stem}_status.json"
         if status_file.exists():
             try:
                 data = json.loads(status_file.read_text(encoding="utf-8"))
@@ -576,15 +581,18 @@ class JobManager:
             self._threads.pop(stem, None)
 
         target_dir = output_dir or (PROJECT_ROOT / "output")
-        status_file = target_dir / "logs" / f"{stem}_status.json"
-        progress_file = target_dir / "logs" / f"{stem}_progress.txt"
-        try:
-            if status_file.exists():
-                status_file.unlink()
-            if progress_file.exists():
-                progress_file.unlink()
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Gagal menghapus file status saat reset_job: %s", e)
+        candidate_files = [
+            target_dir / stem / "logs" / f"{stem}_status.json",
+            target_dir / "logs" / f"{stem}_status.json",
+            target_dir / stem / "logs" / f"{stem}_progress.txt",
+            target_dir / "logs" / f"{stem}_progress.txt",
+        ]
+        for f in candidate_files:
+            try:
+                if f.exists():
+                    f.unlink()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Gagal menghapus file status saat reset_job: %s", e)
 
     def get_latest_logs(self, stem: str, line_count: int = 40) -> str:
         """Ambil potongan baris log terakhir (dari memori atau langsung dari file)."""
@@ -593,7 +601,9 @@ class JobManager:
             return "\n".join(list(job.recent_logs)[-line_count:])
 
         # Fallback baca dari file disk
-        log_file = PROJECT_ROOT / "output" / "logs" / f"{stem}_latest.log"
+        log_file = PROJECT_ROOT / "output" / stem / "logs" / f"{stem}_latest.log"
+        if not log_file.exists():
+            log_file = PROJECT_ROOT / "output" / "logs" / f"{stem}_latest.log"
         if log_file.exists():
             try:
                 lines = log_file.read_text(

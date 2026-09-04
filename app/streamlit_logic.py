@@ -42,18 +42,26 @@ def _save_uploaded_file(uploaded_file: UploadedFile, output_dir: Path) -> Path:
 
 def _get_sqlite_db_for_file(file_stem: str, output_dir: Path) -> Path | None:
     """Cari file database SQLite yang terkait dengan file yang diproses."""
-    db_dir = output_dir / "databases"
     db_candidates = [
-        db_dir / f"{file_stem}.sqlite",
-        db_dir / f"{file_stem}_data.sqlite",
-        db_dir / "documents_data.sqlite",
+        output_dir / file_stem / "databases" / f"{file_stem}.sqlite",
+        output_dir / file_stem / f"{file_stem}.sqlite",
+        output_dir / "databases" / f"{file_stem}.sqlite",
+        output_dir / "databases" / f"{file_stem}_data.sqlite",
+        output_dir / "databases" / "documents_data.sqlite",
     ]
     for candidate in db_candidates:
         if candidate.exists():
             return candidate
 
-    if db_dir.exists():
-        stem_matches = sorted(db_dir.glob(f"{file_stem}*.sqlite"))
+    doc_db_dir = output_dir / file_stem / "databases"
+    if doc_db_dir.exists():
+        matches = sorted(doc_db_dir.glob(f"{file_stem}*.sqlite"))
+        if matches:
+            return matches[0]
+
+    legacy_db_dir = output_dir / "databases"
+    if legacy_db_dir.exists():
+        stem_matches = sorted(legacy_db_dir.glob(f"{file_stem}*.sqlite"))
         if stem_matches:
             return stem_matches[0]
     return None
@@ -102,18 +110,17 @@ with st.sidebar:
     )
 
     # Riwayat Ringkas File yang Pernah Diproses
-    log_dir = output_dir / "logs"
-    if log_dir.exists():
-        status_files = sorted(
-            log_dir.glob("*_status.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if status_files:
-            st.markdown("#### 🕒 Riwayat Pekerjaan Terakhir")
-            for sf in status_files[:5]:
-                stem_name = sf.stem.replace("_status", "")
-                st.caption(f"• **{stem_name}**")
+    status_files = sorted(
+        list(output_dir.glob("*/logs/*_status.json"))
+        + list((output_dir / "logs").glob("*_status.json")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if status_files:
+        st.markdown("#### 🕒 Riwayat Pekerjaan Terakhir")
+        for sf in status_files[:5]:
+            stem_name = sf.stem.replace("_status", "")
+            st.caption(f"• **{stem_name}**")
 
 
 # ==============================================================================
@@ -220,7 +227,9 @@ if uploaded_file is not None:
                 st.rerun()
 
         # Render Tab Hasil Lengkap
-        md_file = job.out_file if job.out_file.exists() else (output_dir / f"{file_stem}.md")
+        md_file = job.out_file if job.out_file.exists() else (output_dir / file_stem / f"{file_stem}.md")
+        if not md_file.exists():
+            md_file = output_dir / f"{file_stem}.md"
         db_file = _get_sqlite_db_for_file(file_stem, output_dir)
 
         tab_guardrail, tab_md, tab_sql, tab_log = st.tabs([

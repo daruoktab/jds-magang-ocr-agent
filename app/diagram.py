@@ -811,7 +811,11 @@ def extract_diagram_to_mermaid(
 
             # 3. Uji kompilasi & rendering via pymmdc / Mermaid CLI
             render_ok, png_data, render_err = render_mermaid_to_png(mermaid_block)
-            if not render_ok and render_err and "pymmdc tidak terinstal" not in render_err:
+            is_env_error = any(
+                marker in (render_err or "").lower()
+                for marker in ("tidak terinstal", "chrome-headless-shell", "could not find chrome")
+            )
+            if not render_ok and render_err and not is_env_error:
                 logger.warning(
                     "[Diagram:Extract] Compiler Mermaid CLI gagal pada percobaan ke-%d: %s",
                     attempt + 1,

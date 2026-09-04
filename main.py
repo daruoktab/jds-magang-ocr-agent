@@ -37,6 +37,7 @@ from app.batch import (
     find_document_files,
     scan_document_directories,
 )
+from app.cleanup import clean_all_outputs, clean_document_output, migrate_legacy_output
 from app.config import get_settings, setup_logging
 from app.graph import DocumentExtractionPipeline
 from app.multi_page import preview_markdown_chunks
@@ -162,6 +163,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Selain disimpan ke file, tampilkan juga hasil Markdown di terminal.",
     )
     parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Bersihkan folder output dokumen sebelum memproses ulang dokumen yang sama.",
+    )
+    parser.add_argument(
+        "--clean-all",
+        action="store_true",
+        help="Bersihkan seluruh sub-folder hasil di folder output (reset folder output).",
+    )
+    parser.add_argument(
         "--log-file",
         dest="log_file",
         default=None,
@@ -174,13 +185,24 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    # Konfigurasi level logging (tanpa --log-file, CLI menulis real-time ke
-    # output/logs/{nama_dokumen}_latest.log)
+    # Jalankan auto-migrasi artefak legacy di direktori output jika ada
+    migrate_legacy_output()
+
+    # Opsi utilitas: Bersihkan seluruh direktori output
+    if args.clean_all:
+        clean_all_outputs()
+        print("Seluruh isi folder output telah berhasil dibersihkan.")
+        return 0
+
+    # Konfigurasi level logging (ditulis ke output/<dokumen>/logs/<dokumen>_latest.log)
     log_level = "DEBUG" if args.debug else "INFO"
+    doc_stem = Path(args.document).stem if args.document else None
+    doc_log_dir = (Path("output") / doc_stem / "logs") if doc_stem else None
     setup_logging(
         level=log_level,
         log_file=args.log_file,
-        auto_log_stem=Path(args.document).stem if args.document else None,
+        auto_log_stem=doc_stem,
+        auto_log_dir=doc_log_dir,
     )
     logger.info("CLI start: %s", " ".join(sys.argv))
 
@@ -255,36 +277,44 @@ def main() -> int:
         return 1
 
     ext = input_path.suffix.lower()
+    doc_stem = input_path.stem
 
-    # Tentukan path output Markdown default: simpan ke file, bukan ke terminal
+    if args.clean:
+        clean_document_output(doc_stem)
+
+    # Tentukan root direktori output dokumen: output/{doc_stem}
     if args.out == "-":
+        doc_output_dir = (Path("output") / doc_stem).resolve()
         markdown_out_file: Path | None = None
     elif args.out:
         out_candidate = Path(args.out)
         if out_candidate.is_dir() or str(args.out).endswith(("/", "\\")):
-            out_candidate.mkdir(parents=True, exist_ok=True)
-            markdown_out_file = (out_candidate / f"{input_path.stem}.md").resolve()
+            doc_output_dir = out_candidate.resolve()
+            doc_output_dir.mkdir(parents=True, exist_ok=True)
+            markdown_out_file = (doc_output_dir / f"{doc_stem}.md").resolve()
         else:
             markdown_out_file = out_candidate.resolve()
-            markdown_out_file.parent.mkdir(parents=True, exist_ok=True)
+            doc_output_dir = markdown_out_file.parent
+            doc_output_dir.mkdir(parents=True, exist_ok=True)
     else:
-        markdown_out_file = (Path("output") / f"{input_path.stem}.md").resolve()
-        markdown_out_file.parent.mkdir(parents=True, exist_ok=True)
+        doc_output_dir = (Path("output") / doc_stem).resolve()
+        doc_output_dir.mkdir(parents=True, exist_ok=True)
+        markdown_out_file = doc_output_dir / f"{doc_stem}.md"
 
-    # Tentukan path target database SQLite
+    # Tentukan path target database SQLite: output/{doc_stem}/databases/{doc_stem}.sqlite
     if args.db_path:
         db_target_file: Path | None = Path(args.db_path).resolve()
-    elif markdown_out_file:
-        db_dir = markdown_out_file.parent / "databases"
-        db_target_file = db_dir / f"{input_path.stem}.sqlite"
     else:
-        db_dir = Path("output/databases").resolve()
-        db_target_file = db_dir / f"{input_path.stem}.sqlite"
+        db_dir = doc_output_dir / "databases"
+        db_dir.mkdir(parents=True, exist_ok=True)
+        db_target_file = db_dir / f"{doc_stem}.sqlite"
 
     try:
         # 3. Mode Render PDF Halaman saja
         if args.pdf_split_only and ext == ".pdf":
-            out_pages = pdf_to_images(input_path, dpi=args.dpi)
+            out_pages = pdf_to_images(
+                input_path, output_dir=doc_output_dir / "pages", dpi=args.dpi
+            )
             for p in out_pages:
                 print(str(p))
             return 0
@@ -315,6 +345,7 @@ def main() -> int:
                     db_path=db_target_file,
                     force_all_tables=args.force_all_tables,
                     output_markdown_path=markdown_out_file,
+                    output_dir=doc_output_dir / "slides",
                 )
 
         # 6. File PDF Multi-Halaman
@@ -329,6 +360,7 @@ def main() -> int:
                 db_path=db_target_file,
                 force_all_tables=args.force_all_tables,
                 output_markdown_path=markdown_out_file,
+                output_dir=doc_output_dir / "pages",
             )
             markdown_content = doc_result.full_markdown
 

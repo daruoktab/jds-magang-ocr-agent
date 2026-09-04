@@ -88,7 +88,7 @@ def pdf_to_images(
         raise FileNotFoundError(f"File PDF tidak ditemukan: {path_obj}")
 
     if output_dir is None:
-        out_path = Path("output/pdf_pages") / path_obj.stem
+        out_path = Path("output") / path_obj.stem / "pages"
     else:
         out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -263,13 +263,17 @@ def process_multipage_pdf(
     # Tentukan path target database SQLite
     if db_path:
         resolved_db_path: Path | None = Path(db_path).resolve()
+    elif output_markdown_path:
+        resolved_db_path = (
+            Path(output_markdown_path).resolve().parent / "databases" / f"{pdf_path.stem}.sqlite"
+        )
     elif output_dir:
         resolved_db_path = (
             Path(output_dir).resolve() / "databases" / f"{pdf_path.stem}.sqlite"
         )
     else:
         resolved_db_path = (
-            Path("output/databases").resolve() / f"{pdf_path.stem}.sqlite"
+            Path("output") / pdf_path.stem / "databases" / f"{pdf_path.stem}.sqlite"
         )
 
     if resolved_db_path:
@@ -282,12 +286,20 @@ def process_multipage_pdf(
         stream_file.write_text("", encoding="utf-8")
         logger.info("Streaming output Markdown ke: %s", stream_file)
 
+    # Tentukan folder output render gambar halaman PDF
+    if output_dir:
+        pages_render_dir: Path | None = Path(output_dir).resolve()
+    elif output_markdown_path:
+        pages_render_dir = Path(output_markdown_path).resolve().parent / "pages"
+    else:
+        pages_render_dir = Path("output") / pdf_path.stem / "pages"
+
     # Proses BERTAHAP per batch 10 halaman: render batch -> ekstrak batch -> lanjut.
     for b_start in range(0, total_pages, PDF_PAGE_BATCH):
         b_end = min(b_start + PDF_PAGE_BATCH, total_pages)
         page_images = pdf_to_images(
             pdf_path,
-            output_dir=output_dir,
+            output_dir=pages_render_dir,
             dpi=dpi,
             pages=list(range(b_start, b_end)),
         )

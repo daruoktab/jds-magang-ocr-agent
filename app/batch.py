@@ -221,7 +221,9 @@ def batch_extract_documents(
     for idx, doc_file in enumerate(files_to_process, start=1):
         ext = doc_file.suffix.lower()
         rel_stem = doc_file.stem
-        out_file = out_base / f"{rel_stem}.md"
+        doc_dir = out_base / rel_stem
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        out_file = doc_dir / f"{rel_stem}.md"
 
         try:
             # 1. PPTX
@@ -229,18 +231,20 @@ def batch_extract_documents(
                 md_content = process_presentation_vision(
                     pptx_path=doc_file,
                     pipeline=pipeline,
-                    output_dir=out_base / "slides" / rel_stem,
+                    output_dir=doc_dir / "slides",
                     dpi=dpi,
                     forced_specs=active_specs,
+                    output_markdown_path=out_file,
                 )
             # 2. PDF
             elif ext == ".pdf":
                 extracted = process_multipage_pdf(
                     pdf_path=doc_file,
                     pipeline=pipeline,
-                    output_dir=out_base / "pages" / rel_stem,
+                    output_dir=doc_dir / "pages",
                     dpi=dpi,
                     forced_specs=active_specs,
+                    output_markdown_path=out_file,
                 )
                 md_content = extracted.markdown_content
             # 3. Gambar

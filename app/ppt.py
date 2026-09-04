@@ -220,7 +220,7 @@ def render_presentation_slides_to_images(
         raise FileNotFoundError(f"File presentasi tidak ditemukan: {path_obj}")
 
     if output_dir is None:
-        out_path = Path("output/pptx_slides") / path_obj.stem
+        out_path = Path("output") / path_obj.stem / "slides"
     else:
         out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -357,7 +357,7 @@ def process_presentation(
         )
     else:
         db_out_path = (
-            Path("output/databases").resolve() / f"{path_obj.stem}.sqlite"
+            Path("output") / path_obj.stem / "databases" / f"{path_obj.stem}.sqlite"
         )
     db_out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -420,7 +420,9 @@ def process_presentation_vision(
     target_slides_dir = (
         Path(output_dir)
         if output_dir
-        else Path("output/pptx_slides") / path_obj.stem
+        else (Path(output_markdown_path).resolve().parent / "slides")
+        if output_markdown_path
+        else Path("output") / path_obj.stem / "slides"
     )
 
     logger.info("[Vision PPT] Memulai rendering slide menjadi gambar...")
@@ -442,9 +444,13 @@ def process_presentation_vision(
             / "databases"
             / f"{path_obj.stem}.sqlite"
         )
+    elif output_dir:
+        db_out_path = (
+            Path(output_dir).resolve() / "databases" / f"{path_obj.stem}.sqlite"
+        )
     else:
         db_out_path = (
-            Path("output/databases").resolve() / f"{path_obj.stem}.sqlite"
+            Path("output") / path_obj.stem / "databases" / f"{path_obj.stem}.sqlite"
         )
     db_out_path.parent.mkdir(parents=True, exist_ok=True)
 
