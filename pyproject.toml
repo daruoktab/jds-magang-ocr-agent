@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "jds-magang"
 version = "0.1.0"
-description = "Vision VLM & Document Text Extractor (Ready for Chunking, SQLite Tabular, & Mermaid Diagrams)"
+description = "Vision VLM & Document Text Extractor (Structured Markdown, SQLite Tabular, & Mermaid Diagrams)"
 requires-python = ">=3.12"
 dependencies = [
     "deepagents>=0.7.5",

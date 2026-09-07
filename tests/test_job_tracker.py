@@ -173,6 +173,43 @@ class TestJobTracker(unittest.TestCase):
         self.assertEqual(reconstructed.total_pages, 10)
         self.assertEqual(reconstructed.current_page, 10)
 
+    def test_reconstruct_fallback_without_status_file(self) -> None:
+        manager = JobManager.get_instance()
+        stem = "cli_doc_without_status"
+        doc_dir = self.temp_dir / stem
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        md_file = doc_dir / f"{stem}.md"
+        md_file.write_text("# Laporan CLI\nIsi laporan.", encoding="utf-8")
+
+        manager.reset_job(stem, output_dir=self.temp_dir)
+        job = manager.get_job(stem, output_dir=self.temp_dir)
+        self.assertIsNotNone(job)
+        assert job is not None
+        self.assertEqual(job.status, "completed")
+        self.assertTrue(job.out_file.exists())
+
+    def test_list_all_documents(self) -> None:
+        manager = JobManager.get_instance()
+        stem1 = "doc_alpha"
+        doc_dir1 = self.temp_dir / stem1
+        doc_dir1.mkdir(parents=True, exist_ok=True)
+        (doc_dir1 / f"{stem1}.md").write_text("# Alpha", encoding="utf-8")
+
+        stem2 = "doc_beta"
+        doc_dir2 = self.temp_dir / stem2
+        doc_dir2.mkdir(parents=True, exist_ok=True)
+        (doc_dir2 / f"{stem2}.md").write_text("# Beta", encoding="utf-8")
+        pages_dir = doc_dir2 / "pages"
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        (pages_dir / "page_0001.png").write_bytes(b"dummy")
+
+        docs = manager.list_all_documents(output_dir=self.temp_dir)
+        stems = [d["stem"] for d in docs]
+        self.assertIn(stem1, stems)
+        self.assertIn(stem2, stems)
+        beta_doc = next(d for d in docs if d["stem"] == stem2)
+        self.assertEqual(beta_doc["page_count"], 1)
+
     def test_is_pid_alive(self) -> None:
         current_pid = os.getpid()
         self.assertTrue(is_pid_alive(current_pid))

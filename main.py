@@ -40,9 +40,9 @@ from app.batch import (
 from app.cleanup import clean_all_outputs, clean_document_output, migrate_legacy_output
 from app.config import get_settings, setup_logging
 from app.graph import DocumentExtractionPipeline
-from app.multi_page import preview_markdown_chunks
 from app.pdf import pdf_to_images, process_multipage_pdf
 from app.ppt import process_presentation, process_presentation_vision
+from app.rag_staging import preview_markdown_chunks
 from app.tabular_db import cross_verify_dual_track, process_page_tabular_agent
 
 logger = logging.getLogger("app.cli")
@@ -51,7 +51,7 @@ logger = logging.getLogger("app.cli")
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="jds-magang",
-        description="Ekstraksi dokumen berbasis VLM -> Markdown siap chunking RAG, Tabular SQLite Database, & Mermaid Diagrams.",
+        description="Ekstraksi dokumen berbasis VLM -> Markdown Terstruktur, Tabular SQLite Database, & Mermaid Diagrams.",
     )
     parser.add_argument(
         "document",
@@ -93,19 +93,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--preview-chunks",
         action="store_true",
-        help="Tampilkan pratinjau statistik pemecahan chunking (char count, token estimate, sample preview).",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--chunk-size",
         type=int,
         default=1000,
-        help="Ukuran target karakter per chunk (default: 1000).",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--chunk-overlap",
         type=int,
         default=150,
-        help="Ukuran overlap karakter antar chunk (default: 150).",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--ppt-native",
@@ -428,7 +428,7 @@ def main() -> int:
                 chunk_overlap=args.chunk_overlap,
             )
             print("\n" + "=" * 60)
-            print("SIMULASI PEMBAGIAN CHUNKING (SIAP RAG):")
+            print("SIMULASI PEMBAGIAN CHUNKING (STAGING / BLUEPRINT):")
             print(f"Total Karakter : {chunks.total_characters}")
             print(f"Total Chunks    : {chunks.total_chunks}")
             print(f"Target Size     : {chunks.chunk_size} char (overlap: {chunks.chunk_overlap})")

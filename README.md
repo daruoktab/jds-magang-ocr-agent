@@ -1,9 +1,9 @@
-# jds-magang-document-extractor — Vision VLM Document Extractor (Ready for Chunking, Tabular SQLite Database, & Mermaid Diagrams)
+# jds-magang-document-extractor — Vision VLM Document Extractor (Structured Markdown, Tabular SQLite Database, & Mermaid Diagrams)
 
-Sistem ekstraksi **dokumen internal perusahaan** (PDF, PPT/PPTX, Scan Gambar, Screenshot Chat, Form Persetujuan) menjadi **Markdown bersih dan terstruktur yang siap langsung di-chunking** untuk pipeline RAG downstream, **Engine Data Tabular Transaksional ke SQLite** untuk data log mutasi/rekening koran/faktur yang memerlukan kalkulasi agregat berpresisi 100% (SUM, AVG, COUNT, filter tanggal), serta **Sub-Agent Spesialis Diagram** untuk mengevaluasi secara selektif dan mengekstrak diagram visual/topologi menjadi kode **Mermaid.js** yang valid.
+Sistem ekstraksi **dokumen internal perusahaan** (PDF, PPT/PPTX, Scan Gambar, Screenshot Chat, Form Persetujuan) menjadi **Markdown bersih dan terstruktur**, **Engine Data Tabular Transaksional ke SQLite** untuk data log mutasi/rekening koran/faktur yang memerlukan kalkulasi agregat berpresisi 100% (SUM, AVG, COUNT, filter tanggal), serta **Sub-Agent Spesialis Diagram** untuk mengevaluasi secara selektif dan mengekstrak diagram visual/topologi menjadi kode **Mermaid.js** yang valid.
 
 > ℹ️ **Catatan Branch:** 
-> Fitur lengkap pipeline RAG end-to-end (Embedding `Qwen3-VL-Embedding`, Reranker `Qwen3-VL-Reranker`, dan Vector Store) tersimpan di branch `end-to-end`. Branch `main` difokuskan pada pipeline ekstraksi dokumen ke format Markdown siap chunking, Tabular SQLite Database, dan Diagram Mermaid berbasis Vision Language Model murni (VLM).
+> Fitur pipeline ekstraksi difokuskan pada format Markdown terstruktur, Tabular SQLite Database, dan Diagram Mermaid berbasis Vision Language Model murni (VLM). Modul rancang bangun RAG (staging blueprint: chunking, embedding, vector store interface) disimpan rapi pada modul terpisah `app/rag_staging.py` untuk fase pengembangan berikutnya.
 
 ---
 
@@ -317,3 +317,31 @@ python main.py dokumen.pdf --debug
 ```
 
 > ℹ️ **Deep Agent (`--agent`) telah dihapus dari CLI** karena redundan — pipeline default sudah melakukan semua hal yang sama (auto-klasifikasi, diagram, SQLite, judge) lebih cepat dan deterministik. Deep Agent tetap tersedia via **MCP Server** untuk use case conversational (instruksi bebas, query SQLite interaktif).
+
+---
+
+## 🖥️ Antarmuka Interaktif Streamlit Workspace Studio
+
+Aplikasi web interaktif Streamlit untuk monitoring proses ekstraksi, inspeksi visual side-by-side, preview chunking RAG, dan analisis data tabular SQLite.
+
+### Menjalankan Streamlit Studio
+```bash
+uv run streamlit run app/streamlit_logic.py
+```
+
+### Fitur Utama Streamlit:
+1. **Workspace Document Explorer (Bebas Reset F5):**
+   - Mendeteksi secara otomatis semua dokumen yang pernah diproses atau sedang berjalan dari folder `output/`.
+   - Pengguna dapat beralih antar dokumen secara instan tanpa perlu mengunggah ulang file.
+2. **Side-by-Side Visual Document Inspector:**
+   - Menampilkan kanvas visual dokumen fisik (gambar render resolusi tinggi per halaman PDF / slide PPT) berdampingan langsung dengan hasil ekstraksi Markdown.
+   - Pilihan inspeksi teks per halaman atau seluruh dokumen dengan tombol unduh gambar halaman.
+3. **Interactive Mermaid.js SVG Diagram Renderer:**
+   - Mendeteksi blok sintaks diagram Mermaid secara otomatis dan merendernya menjadi visualisasi diagram interaktif berbasis SVG langsung di peramban.
+   - Dilengkapi penampil kode sumber Mermaid dan tombol unduh `.mmd`.
+4. **Dual-Track Guardrail Audit:**
+   - Laporan rekonsiliasi matematis antara tabel teks Markdown dan database SQLite dengan status `PASSED`, `WARNING`, atau `FAILED`.
+5. **SQL Tabular Studio & Quick Visual Chart:**
+   - Pratinjau tabel SQLite, ekspor CSV 1-klik, auto-chart (Bar Chart, Line Chart, Area Chart) untuk kolom numerik, dan konsol SQL query interaktif.
+6. **Background Job Supervision:**
+   - Ekstraksi dijalankan di background thread independen dari siklus tab/browser dengan streaming log real-time dan proteksi pembatalan proses.

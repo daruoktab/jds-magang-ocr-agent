@@ -15,7 +15,7 @@ Alur kerja yang direkomendasikan untuk agent:
      Tool memproses DENGAN BATCH per 10 slide/halaman untuk context window efisien:
      ulangi panggilan dengan start_slide/start_page = next_start_... hingga has_more=false.
   3. Agent menulis Markdown sesuai spesifikasi layout dari gambar yang dilihat
-  4. preview_markdown_chunks : validasi kesiapan chunking
+  4. preview_markdown_chunks : [STAGING / BLUEPRINT] validasi kesiapan chunking
   5. save_extraction_result : simpan Markdown + metadata sebagai gold data (otomatis mengidentifikasi
      dan mengekstrak tabel transaksional ke database SQLite dengan verifikasi ganda).
   6. query_tabular_database / inspect_tabular_database : jalankan query SQL untuk kalkulasi agregat (SUM, AVG, Filter).
@@ -1425,9 +1425,8 @@ def preprocess_image_tool(
 @server.tool(
     name="preview_markdown_chunks",
     description=(
-        "Simulasikan pemecahan dokumen Markdown dengan splitter berbasis header (#, ##, ###) "
-        "dan recursive character text splitter. Gunakan untuk memvalidasi kesiapan chunking "
-        "dari Markdown yang telah ditulis agent sebelum disimpan sebagai gold data."
+        "[STAGING / BLUEPRINT] Simulasikan pemecahan dokumen Markdown dengan splitter berbasis header (#, ##, ###) "
+        "dan recursive character text splitter untuk blueprint sistem RAG masa depan."
     ),
 )
 def preview_markdown_chunks(
@@ -1551,7 +1550,7 @@ def classify_and_ingest_tables_to_sqlite(
     name="query_tabular_database",
     description=(
         "Jalankan query SQL (misal 'SELECT SUM(debit_amount), COUNT(*) FROM ...') pada database SQLite dokumen "
-        "untuk melakukan kalkulasi agregat berpresisi 100% yang tidak dapat dilakukan oleh Vector RAG biasa."
+        "untuk melakukan kalkulasi agregat berpresisi 100% yang andal pada basis data relasional SQLite."
     ),
 )
 def query_tabular_database(

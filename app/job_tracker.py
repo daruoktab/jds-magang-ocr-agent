@@ -190,7 +190,7 @@ class JobManager:
         doc_type: str | None = None,
         dpi: int = 200,
         force_all_tables: bool = False,
-        preview_chunks: bool = True,
+        preview_chunks: bool = False,
         chunk_size: int = 1000,
         chunk_overlap: int = 150,
     ) -> JobInfo:
@@ -432,12 +432,6 @@ class JobManager:
             job.last_message = line
             updated = True
 
-        # 7. Tahap Simulasi Chunking
-        elif "SIMULASI PEMBAGIAN CHUNKING" in line:
-            job.stage = "Simulasi Chunking Siap RAG"
-            job.last_message = line
-            updated = True
-
         # 8. Markdown Berhasil Disimpan
         elif "Hasil Markdown berhasil disimpan ke:" in line:
             job.stage = "Penyimpanan Markdown Selesai"
@@ -540,6 +534,36 @@ class JobManager:
             except Exception as e:  # noqa: BLE001
                 logger.warning("Gagal membaca status job dari disk: %s", e)
 
+        # 3. Fallback jika status.json tidak ada namun file markdown ada di folder dokumen
+        md_candidate = target_dir / stem / f"{stem}.md"
+        if not md_candidate.exists():
+            md_candidate = target_dir / f"{stem}.md"
+        if md_candidate.exists():
+            log_dir = target_dir / stem / "logs"
+            latest_log = log_dir / f"{stem}_latest.log"
+            job = JobInfo(
+                job_id=stem,
+                file_name=stem,
+                input_path=target_dir / "uploads" / stem,
+                output_dir=target_dir,
+                out_file=md_candidate,
+                db_file=target_dir / stem / "databases" / f"{stem}.sqlite"
+                if (target_dir / stem / "databases" / f"{stem}.sqlite").exists()
+                else None,
+                log_path=latest_log,
+                latest_log_path=latest_log,
+                status_file=log_dir / f"{stem}_status.json",
+                progress_file=log_dir / f"{stem}_progress.txt",
+                status="completed",
+                current_page=1,
+                total_pages=1,
+                stage="Selesai (Dipulihkan dari Disk)",
+                last_message="Dokumen selesai diekstrak sebelumnya.",
+            )
+            with self._lock:
+                self._jobs[stem] = job
+            return job
+
         return None
 
     def cancel_job(self, stem: str) -> bool:
@@ -593,6 +617,62 @@ class JobManager:
                     f.unlink()
             except Exception as e:  # noqa: BLE001
                 logger.warning("Gagal menghapus file status saat reset_job: %s", e)
+
+    def list_all_documents(self, output_dir: Path) -> list[dict[str, Any]]:
+        """Daftar seluruh dokumen yang pernah diekstrak atau sedang berjalan."""
+        docs: list[dict[str, Any]] = []
+        seen_stems: set[str] = set()
+
+        # 1. Dari memori job aktif
+        with self._lock:
+            for stem, job in self._jobs.items():
+                seen_stems.add(stem)
+                docs.append({
+                    "stem": stem,
+                    "status": job.status,
+                    "stage": job.stage,
+                    "page_count": job.total_pages or job.current_page or 0,
+                    "mtime": 9999999999.0 if job.status == "running" else 0.0,
+                })
+
+        # 2. Dari direktori output di disk
+        if output_dir.exists():
+            for item in output_dir.iterdir():
+                if not item.is_dir() or item.name in ("logs", "databases", "csv", "uploads", "cache"):
+                    continue
+                stem = item.name
+                if stem in seen_stems:
+                    continue
+
+                md_file = item / f"{stem}.md"
+                db_file = item / "databases" / f"{stem}.sqlite"
+                if not md_file.exists() and not db_file.exists():
+                    continue
+
+                seen_stems.add(stem)
+                page_count = 0
+                pages_dir = item / "pages"
+                slides_dir = item / "slides"
+                if pages_dir.exists():
+                    page_count = len(list(pages_dir.glob("*.png")) + list(pages_dir.glob("*.jpg")))
+                elif slides_dir.exists():
+                    page_count = len(list(slides_dir.glob("*.png")) + list(slides_dir.glob("*.jpg")))
+
+                mtime = md_file.stat().st_mtime if md_file.exists() else item.stat().st_mtime
+                job = self.get_job(stem, output_dir=output_dir)
+                status = job.status if job else "completed"
+                stage = job.stage if job else "Selesai"
+
+                docs.append({
+                    "stem": stem,
+                    "status": status,
+                    "stage": stage,
+                    "page_count": page_count,
+                    "mtime": mtime,
+                })
+
+        docs.sort(key=lambda d: (d["status"] == "running", d["mtime"]), reverse=True)
+        return docs
 
     def get_latest_logs(self, stem: str, line_count: int = 40) -> str:
         """Ambil potongan baris log terakhir (dari memori atau langsung dari file)."""

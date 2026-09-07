@@ -6,18 +6,13 @@ Menyediakan logika cerdas untuk:
   - Menjaga kontinuitas hierarki heading Markdown (#, ##, ###) antar halaman.
   - Membersihkan header & footer berulang (mis. "Halaman 1 dari 10", running headers).
   - Menyambung paragraf yang terpotong di akhir halaman.
-  - Simulasi chunking (siap dimasukkan ke MarkdownHeaderTextSplitter / RecursiveTextSplitter).
+  - Modul RAG & Chunking telah dialihkan ke staging: app.rag_staging (blueprint masa depan).
 """
 
 from __future__ import annotations
 
 import re
 from typing import Any
-
-from langchain_text_splitters import (
-    MarkdownHeaderTextSplitter,
-    RecursiveCharacterTextSplitter,
-)
 
 
 def _clean_page_artifacts(markdown: str) -> str:
@@ -434,56 +429,16 @@ def preview_markdown_chunks(
     chunk_overlap: int = 150,
 ) -> Any:
     """
-    Simulasikan pemecahan dokumen Markdown menjadi chunk-chunk siap RAG
-    menggunakan kombinasi MarkdownHeaderTextSplitter dan RecursiveCharacterTextSplitter.
+    [STAGING / BLUEPRINT] Delegasi ke modul staging app.rag_staging.
+    Simulasikan pemecahan dokumen Markdown menjadi chunk-chunk hierarkis.
     """
-    from app.schemas import ChunkingPreview, ChunkItem
+    from app.rag_staging import preview_markdown_chunks as _preview
 
-    headers_to_split_on = [
-        ("#", "Header 1"),
-        ("##", "Header 2"),
-        ("###", "Header 3"),
-    ]
-
-    # Level 1: Split berdasarkan heading struktur
-    markdown_splitter = MarkdownHeaderTextSplitter(
-        headers_to_split_on=headers_to_split_on, strip_headers=False
-    )
-    header_splits = markdown_splitter.split_text(markdown_content)
-
-    # Level 2: Split rekursif berbasis karakter & overlap
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", " ", ""],
-    )
-    final_docs = text_splitter.split_documents(header_splits)
-
-    items: list[ChunkItem] = []
-    for idx, doc in enumerate(final_docs, start=1):
-        content = doc.page_content.strip()
-        preview = content[:120].replace("\n", " ")
-        items.append(
-            ChunkItem(
-                chunk_id=idx,
-                char_count=len(content),
-                token_estimate=max(1, len(content) // 4),
-                preview=preview,
-                content=content,
-            )
-        )
-
-    total_chars = sum(c.char_count for c in items)
-    avg_size = total_chars / len(items) if items else 0.0
-
-    return ChunkingPreview(
+    return _preview(
+        markdown_content,
         source_file=source_file,
-        total_characters=total_chars,
-        total_chunks=len(items),
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        avg_chunk_size=round(avg_size, 1),
-        chunks=items,
     )
 
 

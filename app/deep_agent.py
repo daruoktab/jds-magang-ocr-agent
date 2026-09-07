@@ -1,6 +1,6 @@
 """
 Harness Deep Reasoning Agent (Autonomous Orchestrator) untuk ekstraksi dokumen
-internal perusahaan: Vision VLM -> Markdown siap chunking, SQLite tabular,
+internal perusahaan: Vision VLM -> Markdown Terstruktur, SQLite tabular,
 transkrip chat, form tanda tangan, & diagram Mermaid.js.
 
 Berbeda dengan `app/agents.py` (profil prompt deterministik), file ini membangun
@@ -8,7 +8,7 @@ AI agent sungguhan via `deepagents.create_deep_agent`:
   - Master Orchestrator LLM yang MEMUTUSKAN sendiri tool/sub-agent mana yang
     dipanggil berdasarkan konteks dokumen.
   - 7 Sub-Agent terspesialisasi (klasifikasi, ekstraksi, diagram, PPT, PDF,
-    chunking, SQLite) yang dapat di-summon oleh master.
+    SQLite) yang dapat di-summon oleh master.
   - Semua tool terintegrasi dengan flag CLI: `db_path` & `output_markdown_path`
     di-bake ke dalam tool sehingga deep agent menghormati `-o` dan `--db-path`.
 """
@@ -53,14 +53,13 @@ def build_deep_agent(
     output_markdown_path: str | Path | None = None,
 ) -> Any:
     """
-    Bangun Deep Reasoning Agent utama dengan armada 7 Sub-Agent spesialis (Pure VLM):
+    Bangun Deep Reasoning Agent utama dengan armada 6 Sub-Agent spesialis (Pure VLM):
       1. `layout-classifier`          : Mengklasifikasikan multi-trait dokumen
       2. `markdown-extractor`         : Ekstraksi VLM multimodal ke Markdown
       3. `diagram-mermaid-specialist` : Evaluasi selektif & ekstraksi diagram ke sintaks Mermaid.js
       4. `presentation-specialist`    : Parsing file presentasi PowerPoint (.pptx / .ppt)
       5. `pdf-orchestrator`           : Orkestrasi multi-halaman PDF & heading continuity
-      6. `chunking-simulator`         : Simulasi partisi teks Markdown siap RAG
-      7. `tabular-db-specialist`      : Deteksi tabel transaksional, ingesti ke SQLite, double-verification, & eksekusi SQL
+      6. `tabular-db-specialist`      : Deteksi tabel transaksional, ingesti ke SQLite, double-verification, & eksekusi SQL
 
     Args:
         db_path: Path SQLite target (dari flag CLI --db-path). Semua tool tabular
@@ -159,7 +158,7 @@ def build_deep_agent(
 
     @tool
     def classify_table_storage(markdown_text: str) -> str:
-        """Analisis tabel-tabel pada teks Markdown untuk membedakan mana yang bertipe transaksional/finansial (layak SQLite) vs tabel naratif (layak Vector RAG)."""
+        """Analisis tabel-tabel pada teks Markdown untuk membedakan mana yang bertipe transaksional/finansial (layak SQLite) vs tabel naratif kualitatif."""
         tables = parse_markdown_tables(markdown_text)
         results = []
         for idx, t in enumerate(tables, start=1):
@@ -227,7 +226,6 @@ def build_deep_agent(
         extract_diagram_to_mermaid,
         extract_presentation_pptx,
         extract_pdf_document,
-        preview_chunks,
         classify_table_storage,
         ingest_tables_to_sqlite,
         inspect_sqlite_tables,
@@ -257,7 +255,7 @@ def build_deep_agent(
             description="Sub-agent untuk mengekstrak citra halaman dokumen menjadi teks Markdown bersih siap chunking.",
             system_prompt=(
                 "Anda adalah Sub-Agent Spesialis Ekstraksi Markdown untuk dokumen internal perusahaan. "
-                "Tugas Anda: Ubah citra dokumen menjadi teks Markdown bersih siap chunking RAG. "
+                "Tugas Anda: Ubah citra dokumen menjadi teks Markdown bersih dan terstruktur. "
                 "Pertahankan hierarki heading, list, transkrip percakapan chat, tabel form persetujuan, "
                 "dan konteks antar-halaman. "
                 "Spesifikasi yang mungkin aktif: plain, markdown_hierarchy, bilingual_journal, "
@@ -294,15 +292,7 @@ def build_deep_agent(
             ),
             tools=[extract_pdf_document],
         ),
-        SubAgent(
-            name="chunking-simulator",
-            description="Sub-agent untuk mensimulasikan partisi teks Markdown menjadi potongan chunk RAG.",
-            system_prompt=(
-                "Anda adalah Sub-Agent Evaluator Chunking RAG. "
-                "Tugas Anda: Simulasikan pemecahan teks Markdown hasil ekstraksi menjadi chunk-chunk terstruktur dan laporkan statistiknya."
-            ),
-            tools=[preview_chunks],
-        ),
+
         SubAgent(
             name="tabular-db-specialist",
             description="Sub-agent untuk deteksi tabel transaksional, ingesti ke SQLite, double-verification, dan eksekusi query SQL.",
@@ -326,17 +316,16 @@ def build_deep_agent(
 
     master_system_prompt = (
         "Anda adalah Master Orchestrator Deep Reasoning Agent untuk Sistem Ekstraksi Dokumen Internal Perusahaan "
-        "(Vision VLM -> Markdown Siap Chunking, Tabular SQLite, & Mermaid).\n\n"
+        "(Vision VLM -> Markdown Terstruktur, Tabular SQLite, & Mermaid).\n\n"
         "Karakteristik dokumen yang mungkin ditemui: surat/memo/pengumuman (plain), SOP/SK/kebijakan (markdown_hierarchy), "
         "artikel internal multi-kolom (bilingual_journal), slide presentasi (presentation_slides), "
         "screenshot chat (chat_transcript), form tanda tangan/paraf (signature_form).\n\n"
-        "Anda mengorkestrasi 7 Sub-Agent spesialis:\n"
+        "Anda mengorkestrasi 6 Sub-Agent spesialis:\n"
         "  - 'layout-classifier'         : Menentukan tipe dokumen & karakteristik komposit.\n"
         "  - 'markdown-extractor'        : Mengonversi halaman menjadi Markdown bersih.\n"
         "  - 'diagram-mermaid-specialist': Menangani diagram alur/relasi/topologi visual menjadi sintaks Mermaid.js.\n"
         "  - 'presentation-specialist'   : Menangani slide PPT/PPTX visual.\n"
         "  - 'pdf-orchestrator'          : Mengelola multi-halaman PDF dengan heading continuity.\n"
-        "  - 'chunking-simulator'        : Mensimulasikan pemotongan chunk siap RAG.\n"
         "  - 'tabular-db-specialist'     : Memisahkan tabel transaksional ke SQLite dan melakukan double-verification.\n\n"
         "Instruksi Kerja:\n"
         "1. Identifikasi format dokumen masukan (PDF, PPTX, gambar tunggal).\n"

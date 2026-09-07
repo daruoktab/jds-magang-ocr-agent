@@ -44,7 +44,7 @@ from .tabular_db import (
 # Inisialisasi Server MCP
 server = MCPServer(
     name="jds-magang-vlm-agent",
-    description="Vision VLM Document Extractor MCP Server: PDF, PPTX, Scan -> Markdown Siap Chunking, SQLite Tabular Engine, & Mermaid Diagrams",
+    description="Vision VLM Document Extractor MCP Server: PDF, PPTX, Scan -> Markdown Terstruktur, SQLite Tabular Engine, & Mermaid Diagrams",
     version="0.1.0",
 )
 
@@ -295,7 +295,7 @@ def extract_diagram_to_mermaid(
 
 @server.tool(
     name="preview_markdown_chunks",
-    description="Simulasikan pemotongan teks Markdown hasil ekstraksi menjadi chunks untuk sistem RAG.",
+    description="[STAGING / BLUEPRINT] Simulasikan pemotongan teks Markdown hasil ekstraksi menjadi chunks untuk blueprint sistem RAG.",
 )
 def preview_markdown_chunks(
     markdown_text: str,
