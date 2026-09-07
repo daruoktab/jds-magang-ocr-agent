@@ -15,16 +15,20 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import sys
 from pathlib import Path
+
+# Pastikan root direktori proyek berada di sys.path agar impor 'from app....' selalu dikenali
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
 import streamlit as st
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
-from app.job_tracker import JobManager
+from app.job_tracker import JobManager, is_pid_alive
 from app.tabular_db import cross_verify_dual_track
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SUPPORTED_TYPES = ["pdf", "pptx", "ppt", "png", "jpg", "jpeg", "webp"]
 
 SPEC_OPTIONS: dict[str, str | None] = {
@@ -227,7 +231,7 @@ def render_live_monitor(stem: str, output_path: Path) -> None:
 
     # Progress bar & badge
     pct = job.progress_percentage()
-    st.markdown("### ⏳ Proses Ekstraksi Sedang Berjalan di Latar Belakang")
+    st.markdown(f"### ⏳ Ekstraksi Berjalan: `{job.file_name or stem}`")
     st.progress(pct / 100.0, text=f"Progres: {pct:.1f}% — {job.stage}")
 
     # Kartu Metrik Granular
@@ -241,20 +245,33 @@ def render_live_monitor(stem: str, output_path: Path) -> None:
 
     c1.metric("📄 Halaman / Slide", page_str)
     c2.metric("🔄 Tahapan Proses", job.stage)
-    c3.metric("⚙️ PID Sistem", str(job.pid or "-"))
-    c4.metric("📝 Status File Log", "Tersambung (Aktif)")
+    c3.metric("⚙️ PID Subprocess", str(job.pid or "-"))
+    is_alive = is_pid_alive(job.pid) if job.pid else True
+    c4.metric(
+        "🩺 Status Eksekusi",
+        "🟢 Berjalan Normal" if is_alive else "⚠️ Tidak Responsif",
+    )
 
-    # Kotak informasi background safety
-    st.success(
-        f"🟢 **Monitoring Aktif:** Anda dapat meminimalkan browser atau membuka tab lain secara leluasa.\n\n"
-        f"- **File Log Real-Time:** `{job.latest_log_path}`\n"
-        f"- **Pesan Terakhir Sistem:** *{job.last_message or 'Menunggu baris berikutnya...'}*"
+    # Kotak informasi background safety & path file log fisik
+    log_file_str = str(job.latest_log_path.resolve()) if job.latest_log_path else "output/logs/..."
+    st.info(
+        f"📂 **Lokasi Berkas Log Disk:** `{log_file_str}`\n\n"
+        f"📌 **Aktivitas Terakhir:** *{job.last_message or 'Menunggu baris pertama...'}*"
     )
 
     # Tampilan log real-time streaming
-    st.markdown("##### 📜 Live Log Streaming (25 Baris Terakhir):")
-    recent_log_text = job_manager.get_latest_logs(stem, line_count=25)
+    st.markdown("##### 📜 Live Log Streaming (Terminal Subprocess):")
+    recent_log_text = job_manager.get_latest_logs(stem, line_count=35)
+    if not recent_log_text or recent_log_text == "(Belum ada log)":
+        recent_log_text = (
+            "(Sedang menginisialisasi subprocess Python .venv dan memuat dependensi Vision VLM...\n"
+            "Baris log pertama akan muncul di sini sesaat lagi...)"
+        )
     st.code(recent_log_text, language="text")
+    st.caption(
+        f"💡 **Tips CLI:** Anda juga dapat memantau log langsung dari terminal PowerShell menggunakan: "
+        f"`Get-Content -Path '{log_file_str}' -Wait`"
+    )
 
     # Aksi kontrol
     col_a1, col_a2 = st.columns([1, 1])
@@ -674,8 +691,11 @@ def main() -> None:
             label = f"{badge} {stem[:28]}...{pg_info}"
             doc_options[label] = stem
 
-        selected_label_idx = 0
         current_selected = st.session_state.get("selected_stem")
+        if current_selected and current_selected not in doc_options.values():
+            doc_options[f"⏳ {current_selected} (Aktif)"] = current_selected
+
+        selected_label_idx = 0
         if current_selected is not None:
             for idx, (lbl, val) in enumerate(doc_options.items()):
                 if val == current_selected:
@@ -755,10 +775,33 @@ def main() -> None:
         if uploaded_file is not None:
             saved_file = _save_uploaded_file(uploaded_file, output_dir)
             file_stem = saved_file.stem
-            st.session_state["selected_stem"] = file_stem
+            existing_job = job_manager.get_job(file_stem, output_dir=output_dir)
 
-            job = job_manager.get_job(file_stem, output_dir=output_dir)
-            if job is None or job.status in ("failed", "canceled"):
+            if existing_job and existing_job.status == "completed":
+                st.info(f"Dokumen **{saved_file.name}** sudah pernah diekstrak sebelumnya.")
+                col_e1, col_e2 = st.columns([1, 1])
+                with col_e1:
+                    if st.button("👁️ Lihat Hasil Ekstraksi", type="primary", use_container_width=True):
+                        st.session_state["selected_stem"] = file_stem
+                        st.rerun()
+                with col_e2:
+                    if st.button("🔄 Ekstrak Ulang Dokumen", use_container_width=True):
+                        job_manager.reset_job(file_stem, output_dir=output_dir)
+                        job_manager.start_job(
+                            input_path=saved_file,
+                            output_dir=output_dir,
+                            doc_type=chosen_spec,
+                            dpi=dpi_val,
+                            force_all_tables=force_all_tbl,
+                        )
+                        st.session_state["selected_stem"] = file_stem
+                        st.rerun()
+            elif existing_job and existing_job.status == "running":
+                st.info(f"Dokumen **{saved_file.name}** saat ini sedang diekstrak di latar belakang.")
+                if st.button("🔍 Buka Live Monitor", type="primary", use_container_width=True):
+                    st.session_state["selected_stem"] = file_stem
+                    st.rerun()
+            else:
                 col_b1, col_b2 = st.columns([1, 3])
                 with col_b1:
                     if st.button(
@@ -773,13 +816,12 @@ def main() -> None:
                             dpi=dpi_val,
                             force_all_tables=force_all_tbl,
                         )
+                        st.session_state["selected_stem"] = file_stem
                         st.rerun()
                 with col_b2:
                     st.info(
                         f"File siap diproses: **{saved_file.name}** ({saved_file.stat().st_size / 1024:.1f} KB)"
                     )
-            else:
-                st.rerun()
 
     else:
         # MODE 2: DOKUMEN AKTIF DIPILIH
@@ -800,20 +842,22 @@ def main() -> None:
                 st.error("❌ **Terjadi Kesalahan saat Ekstraksi Dokumen**")
                 if job.error_message:
                     st.error(f"Detail Kesalahan: {job.error_message}")
+                if job.latest_log_path:
+                    st.info(f"📂 **Lokasi Log Lengkap:** `{job.latest_log_path.resolve()}`")
 
-            st.markdown("##### 📜 Log Terakhir:")
+            st.markdown("##### 📜 Log Terakhir Sebelum Berhenti:")
             st.code(
-                job_manager.get_latest_logs(active_stem, line_count=30),
+                job_manager.get_latest_logs(active_stem, line_count=40),
                 language="text",
             )
 
             col_f1, col_f2 = st.columns([1, 1])
             with col_f1:
-                if st.button("🔄 Coba Ekstrak Lagi", type="primary"):
+                if st.button("🔄 Coba Ekstrak Ulang", type="primary", use_container_width=True):
                     job_manager.reset_job(active_stem, output_dir=output_dir)
                     st.rerun()
             with col_f2:
-                if st.button("➕ Beralih ke Unggah Dokumen Lain"):
+                if st.button("➕ Beralih ke Unggah Dokumen Lain", use_container_width=True):
                     st.session_state["selected_stem"] = None
                     st.rerun()
 

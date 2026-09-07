@@ -55,6 +55,17 @@ def is_pid_alive(pid: int | None) -> bool:
         return True
 
 
+def get_python_executable() -> str:
+    """Temukan interpreter python dari virtual environment proyek (.venv) agar bebas bentrok conda."""
+    venv_python = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+    if venv_python.exists():
+        return str(venv_python)
+    venv_python_unix = PROJECT_ROOT / ".venv" / "bin" / "python"
+    if venv_python_unix.exists():
+        return str(venv_python_unix)
+    return sys.executable
+
+
 @dataclass
 class JobInfo:
     job_id: str
@@ -251,8 +262,8 @@ class JobManager:
 
             # Susun perintah CLI
             cmd = [
-                sys.executable,
-                "main.py",
+                get_python_executable(),
+                str(PROJECT_ROOT / "main.py"),
                 str(input_path),
                 "-o",
                 str(out_file),

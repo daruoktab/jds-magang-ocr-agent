@@ -1,155 +1,93 @@
 """
-Vision VLM & Document Text Extractor (Ready for Chunking, Tabular Database, & Mermaid Diagrams).
-
-Modul:
-  - config.py        : Pengaturan lingkungan & model via .env
-  - preprocess.py    : Preprocessing gambar (auto-rotate EXIF, contrast enhancement)
-  - prompts.py       : Prompt spesialisasi 6 spesifikasi tata letak dokumen (plain, hierarchy, multi-column, slides, chat, signature)
-  - extractor.py     : Ekstraktor VLM multimodal -> Markdown
-  - agents.py        : Registry agent untuk spesifikasi dokumen
-  - ppt.py           : Ekstraktor presentasi PowerPoint (.pptx / .ppt)
-  - pdf.py           : Konversi & ekstraksi PDF multi-halaman
-  - multi_page.py    : Penyambung halaman (header continuity & chunking simulation)
-  - graph.py         : Pipeline LangGraph orkestrasi ekstraksi dokumen
-  - diagram.py       : Analisis & ekstraksi selektif diagram ke sintaks Mermaid.js
-  - deep_agent.py    : Harness Deep Agents untuk ekstraksi dokumen, database tabular, & diagram
-  - tabular_db.py    : Deteksi tabel transaksional, SQLite ingestion, double-verification, & SQL querying
-  - schemas.py       : Schema data (Pydantic models untuk dokumen, chunking, tabel, verifikasi, dan diagram)
+Vision VLM & Document Text Extractor Package.
 """
 
-from .agents import AGENT_REGISTRY, DocumentExtractionAgent, get_agent
-from .batch import batch_extract_documents, scan_document_directories
-from .config import Settings, get_settings
-from .deep_agent import build_deep_agent, run_deep_reasoning_agent
-from .diagram import (
-    classify_diagram_convertibility,
-    extract_diagram_to_mermaid,
-    sanitize_mermaid_code,
-)
-from .extractor import VisionExtractor
-from .graph import (
-    DocumentExtractionPipeline,
-    DocumentExtractionState,
-    VisionRAGPipeline,
-)
-from .mcp_server import server as mcp_server
-from .multi_page import (
-    format_page_delimiter,
-    preview_markdown_chunks,
-    split_markdown_by_pages,
-    stitch_pages_to_markdown,
-    strip_page_markers,
-    strip_thinking_process,
-)
-from .pdf import (
-    extract_pdf_with_pymupdf4llm,
-    pdf_page_count,
-    pdf_to_images,
-    process_multipage_pdf,
-)
-from .ppt import (
-    convert_presentation_to_pdf,
-    count_presentation_slides,
-    pptx_to_structured_text,
-    process_presentation,
-    process_presentation_vision,
-    render_presentation_slides_to_images,
-)
-from .preprocess import preprocess_image
-from .schemas import (
-    ChunkingPreview,
-    ChunkItem,
-    ClassificationResult,
-    DiagramConvertibilityResult,
-    DiagramExtractionResult,
-    DiagramFormatRecommendation,
-    DocumentPage,
-    DocumentSection,
-    DualTrackGuardrailReport,
-    ExtractedDocument,
-    PageTabularEvent,
-    TableClassificationResult,
-    TableColumnSchema,
-    TableIngestionResult,
-    TableSchema,
-    TableVerificationReport,
-    TabularQueryResult,
-    VerificationCheck,
-)
-from .tabular_db import (
-    TabularDatabaseManager,
-    TabularVerifier,
-    classify_table_heuristic,
-    cross_verify_dual_track,
-    extract_and_ingest_tables_from_markdown,
-    infer_table_schema,
-    parse_markdown_tables,
-    process_page_tabular_agent,
-    query_sqlite,
-    sanitize_markdown_tables,
-)
+from __future__ import annotations
+
+import importlib
+from typing import Any
 
 __all__ = [
     "AGENT_REGISTRY",
-    "ChunkItem",
-    "ChunkingPreview",
-    "ClassificationResult",
-    "DiagramConvertibilityResult",
-    "DiagramExtractionResult",
-    "DiagramFormatRecommendation",
     "DocumentExtractionAgent",
+    "get_agent",
+    "batch_extract_documents",
+    "scan_document_directories",
+    "Settings",
+    "get_settings",
+    "build_deep_agent",
+    "run_deep_reasoning_agent",
+    "classify_diagram_convertibility",
+    "extract_diagram_to_mermaid",
+    "sanitize_mermaid_code",
+    "VisionExtractor",
     "DocumentExtractionPipeline",
     "DocumentExtractionState",
-    "DocumentPage",
-    "DocumentSection",
-    "DualTrackGuardrailReport",
-    "ExtractedDocument",
-    "PageTabularEvent",
-    "Settings",
-    "TableClassificationResult",
-    "TableColumnSchema",
-    "TableIngestionResult",
-    "TableSchema",
-    "TableVerificationReport",
-    "TabularDatabaseManager",
-    "TabularQueryResult",
-    "TabularVerifier",
-    "VerificationCheck",
-    "VisionExtractor",
-    "VisionRAGPipeline",
-    "batch_extract_documents",
-    "build_deep_agent",
-    "classify_diagram_convertibility",
-    "classify_table_heuristic",
-    "convert_presentation_to_pdf",
-    "count_presentation_slides",
-    "cross_verify_dual_track",
-    "extract_and_ingest_tables_from_markdown",
-    "extract_diagram_to_mermaid",
-    "extract_pdf_with_pymupdf4llm",
     "format_page_delimiter",
-    "get_agent",
-    "get_settings",
-    "infer_table_schema",
-    "mcp_server",
-    "parse_markdown_tables",
-    "pdf_page_count",
-    "pdf_to_images",
-    "pptx_to_structured_text",
-    "preprocess_image",
     "preview_markdown_chunks",
-    "process_multipage_pdf",
-    "process_page_tabular_agent",
-    "process_presentation",
-    "process_presentation_vision",
-    "query_sqlite",
-    "render_presentation_slides_to_images",
-    "run_deep_reasoning_agent",
-    "sanitize_markdown_tables",
-    "sanitize_mermaid_code",
-    "scan_document_directories",
     "split_markdown_by_pages",
     "stitch_pages_to_markdown",
-    "strip_page_markers",
-    "strip_thinking_process",
+    "convert_pdf_to_images",
+    "extract_pdf",
+    "pdf_to_images",
+    "extract_presentation",
+    "extract_presentation_native",
+    "process_presentation",
+    "process_presentation_vision",
+    "ImagePreprocessor",
+    "preprocess_document_image",
+    "cross_verify_dual_track",
+    "detect_transactional_tables",
+    "export_tables_to_csv",
+    "get_table_data",
+    "ingest_markdown_tables_to_sqlite",
+    "list_tables",
+    "query_sqlite",
 ]
+
+_MODULE_MAP: dict[str, str] = {
+    "AGENT_REGISTRY": ".agents",
+    "DocumentExtractionAgent": ".agents",
+    "get_agent": ".agents",
+    "batch_extract_documents": ".batch",
+    "scan_document_directories": ".batch",
+    "Settings": ".config",
+    "get_settings": ".config",
+    "build_deep_agent": ".deep_agent",
+    "run_deep_reasoning_agent": ".deep_agent",
+    "classify_diagram_convertibility": ".diagram",
+    "extract_diagram_to_mermaid": ".diagram",
+    "sanitize_mermaid_code": ".diagram",
+    "VisionExtractor": ".extractor",
+    "DocumentExtractionPipeline": ".graph",
+    "DocumentExtractionState": ".graph",
+    "format_page_delimiter": ".multi_page",
+    "preview_markdown_chunks": ".multi_page",
+    "split_markdown_by_pages": ".multi_page",
+    "stitch_pages_to_markdown": ".multi_page",
+    "convert_pdf_to_images": ".pdf",
+    "extract_pdf": ".pdf",
+    "pdf_to_images": ".pdf",
+    "extract_presentation": ".ppt",
+    "extract_presentation_native": ".ppt",
+    "process_presentation": ".ppt",
+    "process_presentation_vision": ".ppt",
+    "ImagePreprocessor": ".preprocess",
+    "preprocess_document_image": ".preprocess",
+    "cross_verify_dual_track": ".tabular_db",
+    "detect_transactional_tables": ".tabular_db",
+    "export_tables_to_csv": ".tabular_db",
+    "get_table_data": ".tabular_db",
+    "ingest_markdown_tables_to_sqlite": ".tabular_db",
+    "list_tables": ".tabular_db",
+    "query_sqlite": ".tabular_db",
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _MODULE_MAP:
+        mod = importlib.import_module(_MODULE_MAP[name], __name__)
+        val = getattr(mod, name)
+        globals()[name] = val
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
