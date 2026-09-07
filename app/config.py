@@ -60,6 +60,37 @@ def _bool_env(name: str, default: str) -> bool:
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _load_local_dotenv() -> None:
+    """Load project `.env` before settings are created.
+
+    Explicit process environment variables take priority over `.env` values.
+    """
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.is_file():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or key in os.environ:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ[key] = value
+
+
+_load_local_dotenv()
+
+
 @dataclass(frozen=True)
 class Settings:
     """Pengaturan konfigurasi LLM, VLM, dan logging."""
