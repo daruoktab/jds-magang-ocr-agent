@@ -467,6 +467,157 @@ class TabularQueryResult(BaseModel):
 
 
 # ==============================================================================
+# Relational Tabular & Header-Detail Deduplication Schemas
+# ==============================================================================
+
+
+class DocumentHeaderRecord(BaseModel):
+    """Informasi metadata header dokumen untuk basis data relasional."""
+
+    header_id: int | None = Field(
+        default=None, description="ID unik primary key dokumen header"
+    )
+    doc_type: str = Field(
+        default="general_document",
+        description="Kategori dokumen (bank_statement, berita_acara, invoice, contract, dll)",
+    )
+    doc_title: str | None = Field(
+        default=None, description="Judul utama dokumen"
+    )
+    doc_number: str | None = Field(
+        default=None,
+        description="Nomor dokumen / nomor surat / nomor rekening",
+    )
+    doc_date: str | None = Field(
+        default=None, description="Tanggal dokumen atau rentang periode"
+    )
+    parties: str | None = Field(
+        default=None,
+        description="Pihak-pihak terkait (perusahaan, nasabah, bank, dll)",
+    )
+    total_amount: float | None = Field(
+        default=None,
+        description="Total nominal transaksi / saldo awal / saldo akhir",
+    )
+    currency: str = Field(
+        default="IDR", description="Mata uang dokumen (IDR, USD, dll)"
+    )
+    source_file: str = Field(default="", description="Nama file dokumen sumber")
+    fingerprint_hash: str | None = Field(
+        default=None,
+        description="Hash fingerprint untuk deteksi duplikasi dokumen",
+    )
+    created_at: str | None = Field(
+        default=None, description="Timestamp ISO pembuatan record"
+    )
+    updated_at: str | None = Field(
+        default=None, description="Timestamp ISO pembaruan record"
+    )
+
+
+class TransactionDetailRecord(BaseModel):
+    """Record baris transaksi finansial yang berelasi FK ke DocumentHeaderRecord."""
+
+    detail_id: int | None = Field(
+        default=None, description="ID unik detail transaksi"
+    )
+    header_id: int = Field(
+        ..., description="Foreign key ke header_id di document_headers"
+    )
+    txn_date: str | None = Field(
+        default=None,
+        description="Tanggal transaksi (ISO YYYY-MM-DD atau format string)",
+    )
+    value_date: str | None = Field(
+        default=None, description="Tanggal valuta transaksi"
+    )
+    description: str = Field(
+        default="", description="Deskripsi atau uraian transaksi"
+    )
+    ref_no: str | None = Field(
+        default=None, description="Nomor referensi, cek, atau bukti transaksi"
+    )
+    detail_info: str | None = Field(
+        default=None, description="Rincian informasi tambahan transaksi"
+    )
+    debit: float | None = Field(
+        default=None, description="Nominal debet / mutasi keluar"
+    )
+    credit: float | None = Field(
+        default=None, description="Nominal kredit / mutasi masuk"
+    )
+    balance: float | None = Field(
+        default=None, description="Saldo setelah transaksi"
+    )
+    source_doc: str = Field(default="", description="File sumber dokumen")
+    page_number: int | None = Field(
+        default=None, description="Nomor halaman dokumen"
+    )
+    row_hash: str | None = Field(
+        default=None, description="Hash baris untuk deduplikasi"
+    )
+    extra_fields: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Kolom dinamis opsional tambahan dari model",
+    )
+
+
+class DocumentSignatoryRecord(BaseModel):
+    """Record penandatangan atau persetujuan dokumen berelasi FK ke DocumentHeaderRecord."""
+
+    signatory_id: int | None = Field(
+        default=None, description="ID unik baris penandatangan"
+    )
+    header_id: int = Field(
+        ..., description="Foreign key ke header_id di document_headers"
+    )
+    role_party: str | None = Field(
+        default=None, description="Pihak atau instansi penandatangan"
+    )
+    name: str = Field(default="", description="Nama lengkap penandatangan")
+    position: str | None = Field(
+        default=None, description="Jabatan penandatangan (nullable)"
+    )
+    date: str | None = Field(
+        default=None, description="Tanggal tanda tangan"
+    )
+    signature_status: str | None = Field(
+        default=None,
+        description="Status atau keterangan tanda tangan/paraf",
+    )
+    notes: str | None = Field(
+        default=None, description="Catatan atau keterangan tambahan"
+    )
+    source_doc: str = Field(default="", description="File sumber dokumen")
+    page_number: int | None = Field(
+        default=None, description="Nomor halaman dokumen"
+    )
+    row_hash: str | None = Field(
+        default=None, description="Hash baris untuk deduplikasi"
+    )
+
+
+class DedupReport(BaseModel):
+    """Laporan hasil merge dan deduplikasi data tabel."""
+
+    table_name: str = Field(
+        ..., description="Nama tabel yang dideduplikasi"
+    )
+    initial_rows: int = Field(
+        ..., description="Jumlah baris sebelum deduplikasi"
+    )
+    deduped_rows: int = Field(
+        ..., description="Jumlah baris setelah deduplikasi"
+    )
+    duplicates_removed: int = Field(
+        ..., description="Jumlah duplikat yang dibersihkan/dihapus"
+    )
+    details: str = Field(
+        default="", description="Keterangan hasil deduplikasi"
+    )
+
+
+# ==============================================================================
 # Diagram & Visual Artifact Schemas (Mermaid.js Extraction)
 # ==============================================================================
 

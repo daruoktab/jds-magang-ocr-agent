@@ -16,6 +16,7 @@ Fitur:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -32,6 +33,8 @@ from langchain_core.language_models.chat_models import BaseChatModel
 logger = logging.getLogger("app.tabular_db")
 
 from .schemas import (
+    DedupReport,
+    DocumentHeaderRecord,
     DualTrackGuardrailReport,
     PageTabularEvent,
     TableClassificationResult,
@@ -98,6 +101,365 @@ TRANSACTIONAL_HEADER_KEYWORDS: set[str] = {
     "volume",
 }
 
+
+
+# ==============================================================================
+# Kamus Alias Kanonikal & Pemetaan Defensif (Defensive Model-Driven Parsing)
+# ==============================================================================
+
+TRANSACTION_CANONICAL_ALIASES: dict[str, list[str]] = {
+    "txn_date": [
+        "posting date",
+        "posting_date",
+        "post date",
+        "tanggal posting",
+        "tanggal",
+        "date",
+        "tgl",
+        "tgl transaksi",
+        "transaction date",
+    ],
+    "value_date": [
+        "value date",
+        "value_date",
+        "valuta date",
+        "tgl valuta",
+        "valuta",
+    ],
+    "description": [
+        "transaction description",
+        "description",
+        "deskripsi",
+        "keterangan",
+        "uraian",
+        "transaksi",
+        "uraian transaksi",
+        "narasi",
+        "rincian",
+        "item",
+        "nama item",
+    ],
+    "ref_no": [
+        "reference/cheque no",
+        "reference cheque no",
+        "reference",
+        "ref no",
+        "ref",
+        "cheque no",
+        "no ref",
+        "no referensi",
+        "no cek",
+        "nomor transaksi",
+        "id transaksi",
+        "doc ref",
+    ],
+    "detail_info": [
+        "detail",
+        "details",
+        "keterangan tambahan",
+        "info",
+        "informasi",
+        "penerima/pengirim",
+        "tujuan",
+    ],
+    "debit": [
+        "debit amount",
+        "debit",
+        "debet",
+        "mutasi debet",
+        "mutasi debit",
+        "keluar",
+        "pengeluaran",
+        "dr",
+    ],
+    "credit": [
+        "credit amount",
+        "credit",
+        "kredit",
+        "mutasi kredit",
+        "masuk",
+        "penerimaan",
+        "cr",
+    ],
+    "balance": [
+        "balance",
+        "saldo",
+        "sisa saldo",
+        "saldo akhir",
+        "total balance",
+    ],
+}
+
+SIGNATORY_CANONICAL_ALIASES: dict[str, list[str]] = {
+    "role_party": [
+        "pihak / peran",
+        "pihak peran",
+        "pihak",
+        "peran",
+        "role",
+        "party",
+        "pihak pertama",
+        "pihak kedua",
+        "instansi",
+        "perusahaan",
+        "organisasi",
+    ],
+    "name": [
+        "nama",
+        "nama penandatangan",
+        "nama terang",
+        "name",
+        "signatory",
+        "pejabat",
+    ],
+    "position": [
+        "jabatan",
+        "position",
+        "title",
+        "job title",
+        "kedudukan",
+        "role position",
+    ],
+    "date": [
+        "tanggal",
+        "tgl",
+        "date",
+        "signed date",
+        "tanggal ttd",
+    ],
+    "signature_status": [
+        "tanda tangan / paraf",
+        "tanda tangan",
+        "ttd",
+        "paraf",
+        "signature",
+        "status ttd",
+    ],
+    "notes": [
+        "keterangan",
+        "notes",
+        "catatan",
+        "remark",
+        "remarks",
+    ],
+}
+
+
+def extract_document_header_info(
+    markdown_text: str, source_file: str = ""
+) -> DocumentHeaderRecord:
+    """
+    Ekstrak informasi metadata header dokumen secara defensif dari teks Markdown.
+    Mengekstrak jenis dokumen, nomor dokumen, tanggal/periode, pihak-pihak terkait, dan total saldo/transaksi.
+    Menghasilkan fingerprint hash untuk deduplikasi antar-file/sumber.
+    """
+    now_iso = datetime.now(UTC).isoformat()
+    if not markdown_text:
+        return DocumentHeaderRecord(
+            source_file=source_file,
+            created_at=now_iso,
+            updated_at=now_iso,
+        )
+
+    text_lower = markdown_text.lower()
+    doc_type = "general_document"
+    if any(
+        kw in text_lower
+        for kw in (
+            "account statement",
+            "rekening koran",
+            "bank statement",
+            "giro",
+            "tabungan",
+            "statement of account",
+        )
+    ):
+        doc_type = "bank_statement"
+    elif any(
+        kw in text_lower
+        for kw in (
+            "berita acara",
+            "bast",
+            "serah terima",
+            "upgrade daya",
+            "perjanjian",
+        )
+    ):
+        doc_type = "berita_acara"
+    elif any(
+        kw in text_lower
+        for kw in ("invoice", "faktur", "tagihan", "kwitansi", "receipt")
+    ):
+        doc_type = "invoice"
+
+    # 1. Judul Dokumen (dari H1 atau baris tebal pertama)
+    doc_title: str | None = None
+    m_h1 = re.search(r"^#\s+(.+)$", markdown_text, re.MULTILINE)
+    if m_h1:
+        doc_title = clean_cell_text(m_h1.group(1))
+    else:
+        m_bold = re.search(r"\*\*([^\*\n]+)\*\*", markdown_text)
+        if m_bold:
+            doc_title = clean_cell_text(m_bold.group(1))
+
+    # 2. Nomor Dokumen / Nomor Rekening / Nomor Surat
+    doc_number: str | None = None
+    # Cari dengan separator eksplisit : atau = terlebih dahulu
+    m_acc = re.search(
+        r"(?:ACCOUNT(?:\s*NO|\s*NUMBER)?|NO\.?\s*REK(?:ENING)?|NOMOR\s*REKENING)\s*[:=]\s*([0-9A-Za-z\-_/]+)",
+        markdown_text,
+        re.IGNORECASE,
+    )
+    if m_acc and not m_acc.group(1).lower() in ("koran", "giro", "tabungan", "statement"):
+        doc_number = clean_cell_text(m_acc.group(1))
+    else:
+        m_acc_num = re.search(
+            r"(?:ACCOUNT(?:\s*NO|\s*NUMBER)?|REKENING|NO\.?\s*REK(?:ENING)?)\s*[:.]?\s*([0-9][0-9A-Za-z\-_/]+)",
+            markdown_text,
+            re.IGNORECASE,
+        )
+        if m_acc_num:
+            doc_number = clean_cell_text(m_acc_num.group(1))
+        else:
+            m_nomor = re.search(
+                r"(?:NOMOR|NO)\s*[:.]\s*([0-9A-Za-z\-_/]+)",
+                markdown_text,
+                re.IGNORECASE,
+            )
+            if m_nomor and not m_nomor.group(1).lower() in ("koran", "giro", "tabungan", "statement"):
+                doc_number = clean_cell_text(m_nomor.group(1))
+            else:
+                m_agenda = re.search(
+                    r"(?:NOMOR AGENDA|ID PELANGGAN)\s*[:.]\s*([0-9]+)",
+                    markdown_text,
+                    re.IGNORECASE,
+                )
+                if m_agenda:
+                    doc_number = clean_cell_text(m_agenda.group(1))
+
+    # 3. Tanggal / Periode
+    doc_date: str | None = None
+    m_period = re.search(
+        r"(?:PERIOD|PERIODE)\s*[:.]\s*([0-9./-]+(?:\s+(?:TO|-)\s+[0-9./-]+)?)",
+        markdown_text,
+        re.IGNORECASE,
+    )
+    if m_period:
+        doc_date = clean_cell_text(m_period.group(1))
+    else:
+        m_date = re.search(
+            r"(?:TANGGAL|DATE)\s*[:.]\s*([^\n\r]+)",
+            markdown_text,
+            re.IGNORECASE,
+        )
+        if m_date:
+            raw_d = clean_cell_text(m_date.group(1))
+            doc_date = parse_date_value(raw_d) or raw_d
+
+    # 4. Pihak-pihak terkait (Customer / Nasabah / PT)
+    parties: str | None = None
+    m_cust = re.search(
+        r"(?:CUSTOMER|NASABAH|PIHAK)\s*[:.]\s*([^\n\r]+)",
+        markdown_text,
+        re.IGNORECASE,
+    )
+    if m_cust:
+        parties = clean_cell_text(m_cust.group(1))
+    else:
+        m_pt = re.search(r"\*\*(PT\s+[^\*]+)\*\*", markdown_text)
+        if m_pt:
+            parties = clean_cell_text(m_pt.group(1))
+
+    # 5. Total Saldo / Total Amount
+    total_amount: float | None = None
+    m_tot = re.search(
+        r"(?:BALANCE AT PERIOD START|TOTAL|SALDO AKHIR|TOTAL AMOUNT|NILAI)\s*[:=]?\s*Rp?\.?\s*([0-9,.]+)",
+        markdown_text,
+        re.IGNORECASE,
+    )
+    if m_tot:
+        total_amount = parse_numeric_value(m_tot.group(1))
+
+    # Fingerprint Hash untuk deduplikasi dokumen sejenis
+    raw_fingerprint = f"{doc_type}|{clean_cell_text(doc_number or '')}|{clean_cell_text(doc_date or '')}|{clean_cell_text(parties or '')}"
+    fingerprint_hash = hashlib.sha256(raw_fingerprint.encode("utf-8")).hexdigest()[:16]
+
+    return DocumentHeaderRecord(
+        doc_type=doc_type,
+        doc_title=doc_title,
+        doc_number=doc_number,
+        doc_date=doc_date,
+        parties=parties,
+        total_amount=total_amount,
+        currency="IDR",
+        source_file=source_file,
+        fingerprint_hash=fingerprint_hash,
+        created_at=now_iso,
+        updated_at=now_iso,
+    )
+
+
+def defensive_map_columns(
+    raw_headers: list[str],
+    aliases_dict: dict[str, list[str]],
+    domain_type: str = "transaction",
+) -> tuple[bool, dict[str, int], dict[str, str]]:
+    """
+    Normalisasi defensif nama kolom terhadap kamus alias kanonikal.
+    Mengembalikan (is_valid, canonical_index_map, extra_columns_with_types).
+
+    Field wajib:
+      - transaction: minimal memiliki (txn_date ATAU description) DAN (debit ATAU credit ATAU balance ATAU amount)
+      - signatory: minimal memiliki (name ATAU role_party) DAN (position ATAU signature_status)
+    Field opsional: jika tidak ada di header sumber, akan bernilai None/NULL tanpa error.
+    Kolom yang tidak dikenal dipertahankan dalam extra_columns_with_types untuk skema evolutif dinamis.
+    """
+    canonical_indices: dict[str, int] = {}
+    matched_col_indices: set[int] = set()
+
+    for col_idx, raw_h in enumerate(raw_headers):
+        cleaned_h = clean_cell_text(raw_h).lower()
+        sanitized_h = sanitize_identifier(raw_h)
+        for canon_key, alias_list in aliases_dict.items():
+            if canon_key in canonical_indices:
+                continue
+            if any(
+                alias == cleaned_h
+                or alias == sanitized_h
+                or alias in cleaned_h
+                for alias in alias_list
+            ):
+                canonical_indices[canon_key] = col_idx
+                matched_col_indices.add(col_idx)
+                break
+
+    extra_columns: dict[str, str] = {}
+    for col_idx, raw_h in enumerate(raw_headers):
+        if col_idx not in matched_col_indices:
+            clean_ident = sanitize_identifier(raw_h)
+            if clean_ident:
+                extra_columns[clean_ident] = "TEXT"
+
+    # Validasi Anchor Wajib Defensif
+    if domain_type == "transaction":
+        has_anchor = ("txn_date" in canonical_indices or "description" in canonical_indices)
+        has_metric = (
+            "debit" in canonical_indices
+            or "credit" in canonical_indices
+            or "balance" in canonical_indices
+        )
+        is_valid = bool(has_anchor and has_metric)
+    elif domain_type == "signatory":
+        has_person = ("name" in canonical_indices or "role_party" in canonical_indices)
+        has_signature_or_pos = (
+            "position" in canonical_indices or "signature_status" in canonical_indices
+        )
+        is_valid = bool(has_person and has_signature_or_pos)
+    else:
+        is_valid = False
+
+    return is_valid, canonical_indices, extra_columns
+
 # ==============================================================================
 # Helper Parsing & Normalisasi Nilai
 # ==============================================================================
@@ -114,7 +476,8 @@ def sanitize_identifier(name: str) -> str:
 
 def clean_cell_text(cell: str) -> str:
     """Bersihkan teks sel dari spasi berlebih dan karakter markdown formatting."""
-    return re.sub(r"\s+", " ", cell).strip()
+    s = re.sub(r"\s+", " ", cell).strip()
+    return s.strip("*_").strip()
 
 
 def parse_numeric_value(val_str: str) -> float | int | None:
@@ -917,9 +1280,14 @@ class TabularDatabaseManager:
                 )
             return summary
 
-    def execute_query(self, sql_query: str, max_rows: int = 100) -> TabularQueryResult:
+    def execute_query(
+        self,
+        sql_query: str,
+        params: tuple[Any, ...] | list[Any] | None = None,
+        max_rows: int = 100,
+    ) -> TabularQueryResult:
         """
-        Eksekusi query SELECT aman pada database SQLite.
+        Eksekusi query SELECT aman pada database SQLite dengan dukungan parameter aman.
         """
         t0 = time.perf_counter()
         stripped = sql_query.strip().rstrip(";")
@@ -937,7 +1305,11 @@ class TabularDatabaseManager:
 
         try:
             with self._get_connection() as conn:
-                cursor = conn.execute(stripped)
+                cursor = (
+                    conn.execute(stripped, params)
+                    if params is not None
+                    else conn.execute(stripped)
+                )
                 col_names = (
                     [d[0] for d in cursor.description] if cursor.description else []
                 )
@@ -962,6 +1334,493 @@ class TabularDatabaseManager:
                 row_count=0,
                 execution_time_ms=elapsed,
                 error_message=f"SQL Error: {e}",
+            )
+
+
+    def ensure_relational_schema(self) -> None:
+        """
+        Inisialisasi tabel-tabel relasional kanonikal:
+          - document_headers: metadata surat/dokumen, nomor, tanggal, pihak, total
+          - transaction_details: baris-baris transaksi finansial (FK header_id)
+          - document_signatories: pihak-pihak penandatangan/persetujuan (FK header_id)
+        """
+        with self._get_connection() as conn:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS document_headers (
+                    header_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    doc_type TEXT DEFAULT 'general_document',
+                    doc_title TEXT,
+                    doc_number TEXT,
+                    doc_date TEXT,
+                    parties TEXT,
+                    total_amount REAL,
+                    currency TEXT DEFAULT 'IDR',
+                    source_file TEXT,
+                    fingerprint_hash TEXT UNIQUE,
+                    created_at TEXT,
+                    updated_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_headers_doc_type ON document_headers(doc_type);
+                CREATE INDEX IF NOT EXISTS idx_headers_doc_number ON document_headers(doc_number);
+                CREATE INDEX IF NOT EXISTS idx_headers_fingerprint ON document_headers(fingerprint_hash);
+
+                CREATE TABLE IF NOT EXISTS transaction_details (
+                    detail_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    header_id INTEGER NOT NULL,
+                    txn_date TEXT,
+                    value_date TEXT,
+                    description TEXT,
+                    ref_no TEXT,
+                    detail_info TEXT,
+                    debit REAL,
+                    credit REAL,
+                    balance REAL,
+                    _source_doc TEXT,
+                    _page_number INTEGER,
+                    _row_hash TEXT UNIQUE,
+                    _ingested_at TEXT,
+                    FOREIGN KEY (header_id) REFERENCES document_headers(header_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_txn_header_id ON transaction_details(header_id);
+                CREATE INDEX IF NOT EXISTS idx_txn_date ON transaction_details(txn_date);
+                CREATE INDEX IF NOT EXISTS idx_txn_row_hash ON transaction_details(_row_hash);
+
+                CREATE TABLE IF NOT EXISTS document_signatories (
+                    signatory_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    header_id INTEGER NOT NULL,
+                    role_party TEXT,
+                    name TEXT,
+                    position TEXT,
+                    date TEXT,
+                    signature_status TEXT,
+                    notes TEXT,
+                    _source_doc TEXT,
+                    _page_number INTEGER,
+                    _row_hash TEXT UNIQUE,
+                    _ingested_at TEXT,
+                    FOREIGN KEY (header_id) REFERENCES document_headers(header_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_sig_header_id ON document_signatories(header_id);
+                CREATE INDEX IF NOT EXISTS idx_sig_row_hash ON document_signatories(_row_hash);
+            """)
+
+    def ensure_columns_exist(
+        self, table_name: str, required_columns: dict[str, str]
+    ) -> None:
+        """
+        Skema evolusi dinamis (ALTER TABLE ADD COLUMN):
+        Menambahkan kolom-kolom baru opsional dari model ke tabel SQLite secara aman sebagai NULLable.
+        """
+        if not required_columns:
+            return
+        with self._get_connection() as conn:
+            cur = conn.execute(f'PRAGMA table_info("{table_name}");')
+            existing = {row["name"].lower() for row in cur.fetchall()}
+            for col_name, sql_type in required_columns.items():
+                clean_col = sanitize_identifier(col_name)
+                if clean_col.lower() not in existing:
+                    try:
+                        conn.execute(
+                            f'ALTER TABLE "{table_name}" ADD COLUMN "{clean_col}" {sql_type} NULL;'
+                        )
+                        logger.info(
+                            "[Tabular:SchemaEvolution] Kolom baru opsional '%s' (%s NULL) ditambahkan ke tabel '%s'",
+                            clean_col,
+                            sql_type,
+                            table_name,
+                        )
+                    except sqlite3.Error as exc:
+                        logger.warning(
+                            "[Tabular:SchemaEvolution] Gagal menambah kolom '%s' ke tabel '%s': %s",
+                            clean_col,
+                            table_name,
+                            exc,
+                        )
+
+    def ingest_document_header(self, header: DocumentHeaderRecord) -> int:
+        """
+        Simpan atau perbarui dokumen header ke tabel document_headers.
+        Mendukung deduplikasi berbasis fingerprint_hash atau nomor dokumen.
+        Mengembalikan header_id integer.
+        """
+        self.ensure_relational_schema()
+        now_iso = datetime.now(UTC).isoformat()
+        with self._get_connection() as conn:
+            existing_id: int | None = None
+            if header.fingerprint_hash:
+                cur = conn.execute(
+                    'SELECT header_id FROM document_headers WHERE fingerprint_hash = ?;',
+                    (header.fingerprint_hash,),
+                )
+                row = cur.fetchone()
+                if row:
+                    existing_id = int(row["header_id"])
+
+            if existing_id is None and header.doc_number:
+                cur = conn.execute(
+                    'SELECT header_id FROM document_headers WHERE doc_number = ? AND doc_type = ?;',
+                    (header.doc_number, header.doc_type),
+                )
+                row = cur.fetchone()
+                if row:
+                    existing_id = int(row["header_id"])
+
+            if existing_id is not None:
+                conn.execute(
+                    """UPDATE document_headers SET
+                        doc_title = COALESCE(doc_title, ?),
+                        doc_date = COALESCE(doc_date, ?),
+                        parties = COALESCE(parties, ?),
+                        total_amount = COALESCE(total_amount, ?),
+                        source_file = COALESCE(source_file, ?),
+                        updated_at = ?
+                       WHERE header_id = ?;""",
+                    (
+                        header.doc_title,
+                        header.doc_date,
+                        header.parties,
+                        header.total_amount,
+                        header.source_file,
+                        now_iso,
+                        existing_id,
+                    ),
+                )
+                return existing_id
+
+            cur = conn.execute(
+                """INSERT INTO document_headers (
+                    doc_type, doc_title, doc_number, doc_date, parties, total_amount, currency, source_file, fingerprint_hash, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);""",
+                (
+                    header.doc_type,
+                    header.doc_title,
+                    header.doc_number,
+                    header.doc_date,
+                    header.parties,
+                    header.total_amount,
+                    header.currency or "IDR",
+                    header.source_file,
+                    header.fingerprint_hash,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            return int(cur.lastrowid or 1)
+
+    def ingest_relational_transactions(
+        self,
+        header_id: int,
+        headers: list[str],
+        rows: list[list[str]],
+        source_doc: str = "",
+        page_number: int | None = None,
+    ) -> int:
+        """
+        Ingest baris transaksi finansial ke canonical transaction_details (FK header_id).
+        Mendukung pemetaan defensif, dynamic column evolution, dan deduplikasi row-level via _row_hash.
+        """
+        self.ensure_relational_schema()
+        _, col_idx_map, extra_cols = defensive_map_columns(
+            headers, TRANSACTION_CANONICAL_ALIASES, "transaction"
+        )
+        if extra_cols:
+            self.ensure_columns_exist("transaction_details", extra_cols)
+
+        now_iso = datetime.now(UTC).isoformat()
+        inserted_count = 0
+
+        base_cols = [
+            "header_id",
+            "txn_date",
+            "value_date",
+            "description",
+            "ref_no",
+            "detail_info",
+            "debit",
+            "credit",
+            "balance",
+            "_source_doc",
+            "_page_number",
+            "_row_hash",
+            "_ingested_at",
+        ]
+        extra_col_keys = list(extra_cols.keys())
+        all_insert_cols = base_cols + extra_col_keys
+        placeholders = ", ".join(["?"] * len(all_insert_cols))
+        quoted_cols = ", ".join([f'"{c}"' for c in all_insert_cols])
+        sql = f'INSERT OR IGNORE INTO transaction_details ({quoted_cols}) VALUES ({placeholders});'
+
+        extra_indices = [
+            (sanitize_identifier(h), i)
+            for i, h in enumerate(headers)
+            if sanitize_identifier(h) in extra_cols
+        ]
+
+        with self._get_connection() as conn:
+            for r in rows:
+                txn_date_raw = r[col_idx_map["txn_date"]] if "txn_date" in col_idx_map and col_idx_map["txn_date"] < len(r) else None
+                value_date_raw = r[col_idx_map["value_date"]] if "value_date" in col_idx_map and col_idx_map["value_date"] < len(r) else None
+                desc_raw = r[col_idx_map["description"]] if "description" in col_idx_map and col_idx_map["description"] < len(r) else ""
+                ref_raw = r[col_idx_map["ref_no"]] if "ref_no" in col_idx_map and col_idx_map["ref_no"] < len(r) else None
+                info_raw = r[col_idx_map["detail_info"]] if "detail_info" in col_idx_map and col_idx_map["detail_info"] < len(r) else None
+                debit_raw = r[col_idx_map["debit"]] if "debit" in col_idx_map and col_idx_map["debit"] < len(r) else None
+                credit_raw = r[col_idx_map["credit"]] if "credit" in col_idx_map and col_idx_map["credit"] < len(r) else None
+                bal_raw = r[col_idx_map["balance"]] if "balance" in col_idx_map and col_idx_map["balance"] < len(r) else None
+
+                txn_date = parse_date_value(str(txn_date_raw)) or (clean_cell_text(str(txn_date_raw)) if txn_date_raw else None)
+                value_date = parse_date_value(str(value_date_raw)) or (clean_cell_text(str(value_date_raw)) if value_date_raw else None)
+                desc = clean_cell_text(str(desc_raw or ""))
+                ref_no = clean_cell_text(str(ref_raw or "")) if ref_raw else None
+                detail_info = clean_cell_text(str(info_raw or "")) if info_raw else None
+                debit = parse_numeric_value(str(debit_raw)) if debit_raw is not None else None
+                credit = parse_numeric_value(str(credit_raw)) if credit_raw is not None else None
+                balance = parse_numeric_value(str(bal_raw)) if bal_raw is not None else None
+
+                raw_hash_str = f"{header_id}|{txn_date or ''}|{desc}|{ref_no or ''}|{debit or 0}|{credit or 0}|{balance or 0}"
+                row_hash = hashlib.sha256(raw_hash_str.encode("utf-8")).hexdigest()[:24]
+
+                vals: list[Any] = [
+                    header_id,
+                    txn_date,
+                    value_date,
+                    desc,
+                    ref_no,
+                    detail_info,
+                    debit,
+                    credit,
+                    balance,
+                    source_doc,
+                    page_number,
+                    row_hash,
+                    now_iso,
+                ]
+                for col_k in extra_col_keys:
+                    e_val = None
+                    for e_name, e_idx in extra_indices:
+                        if e_name == col_k and e_idx < len(r):
+                            e_val = clean_cell_text(r[e_idx])
+                            break
+                    vals.append(e_val)
+
+                cur = conn.execute(sql, vals)
+                if cur.rowcount > 0:
+                    inserted_count += cur.rowcount
+
+        return inserted_count
+
+    def ingest_relational_signatories(
+        self,
+        header_id: int,
+        headers: list[str],
+        rows: list[list[str]],
+        source_doc: str = "",
+        page_number: int | None = None,
+    ) -> int:
+        """
+        Ingest baris penandatangan / persetujuan dokumen ke document_signatories (FK header_id).
+        Field 'position' (jabatan) bersifat nullable opsional.
+        """
+        self.ensure_relational_schema()
+        _, col_idx_map, extra_cols = defensive_map_columns(
+            headers, SIGNATORY_CANONICAL_ALIASES, "signatory"
+        )
+        if extra_cols:
+            self.ensure_columns_exist("document_signatories", extra_cols)
+
+        now_iso = datetime.now(UTC).isoformat()
+        inserted_count = 0
+
+        base_cols = [
+            "header_id",
+            "role_party",
+            "name",
+            "position",
+            "date",
+            "signature_status",
+            "notes",
+            "_source_doc",
+            "_page_number",
+            "_row_hash",
+            "_ingested_at",
+        ]
+        extra_col_keys = list(extra_cols.keys())
+        all_insert_cols = base_cols + extra_col_keys
+        placeholders = ", ".join(["?"] * len(all_insert_cols))
+        quoted_cols = ", ".join([f'"{c}"' for c in all_insert_cols])
+        sql = f'INSERT OR IGNORE INTO document_signatories ({quoted_cols}) VALUES ({placeholders});'
+
+        extra_indices = [
+            (sanitize_identifier(h), i)
+            for i, h in enumerate(headers)
+            if sanitize_identifier(h) in extra_cols
+        ]
+
+        with self._get_connection() as conn:
+            for r in rows:
+                role_raw = r[col_idx_map["role_party"]] if "role_party" in col_idx_map and col_idx_map["role_party"] < len(r) else None
+                name_raw = r[col_idx_map["name"]] if "name" in col_idx_map and col_idx_map["name"] < len(r) else ""
+                pos_raw = r[col_idx_map["position"]] if "position" in col_idx_map and col_idx_map["position"] < len(r) else None
+                date_raw = r[col_idx_map["date"]] if "date" in col_idx_map and col_idx_map["date"] < len(r) else None
+                sig_raw = r[col_idx_map["signature_status"]] if "signature_status" in col_idx_map and col_idx_map["signature_status"] < len(r) else None
+                notes_raw = r[col_idx_map["notes"]] if "notes" in col_idx_map and col_idx_map["notes"] < len(r) else None
+
+                role = clean_cell_text(str(role_raw or "")) if role_raw else None
+                name = clean_cell_text(str(name_raw or ""))
+                position = clean_cell_text(str(pos_raw or "")) if pos_raw else None
+                sig_date = parse_date_value(str(date_raw)) or (clean_cell_text(str(date_raw)) if date_raw else None)
+                sig_status = clean_cell_text(str(sig_raw or "")) if sig_raw else None
+                notes = clean_cell_text(str(notes_raw or "")) if notes_raw else None
+
+                raw_hash_str = f"{header_id}|{role or ''}|{name}|{position or ''}"
+                row_hash = hashlib.sha256(raw_hash_str.encode("utf-8")).hexdigest()[:24]
+
+                vals: list[Any] = [
+                    header_id,
+                    role,
+                    name,
+                    position,
+                    sig_date,
+                    sig_status,
+                    notes,
+                    source_doc,
+                    page_number,
+                    row_hash,
+                    now_iso,
+                ]
+                for col_k in extra_col_keys:
+                    e_val = None
+                    for e_name, e_idx in extra_indices:
+                        if e_name == col_k and e_idx < len(r):
+                            e_val = clean_cell_text(r[e_idx])
+                            break
+                    vals.append(e_val)
+
+                cur = conn.execute(sql, vals)
+                if cur.rowcount > 0:
+                    inserted_count += cur.rowcount
+
+        return inserted_count
+
+    def merge_and_deduplicate_tables(
+        self,
+        table_name: str = "transaction_details",
+        match_columns: list[str] | None = None,
+    ) -> DedupReport:
+        """
+        Fungsi merge & deduplikasi untuk dokumen sejenis / multiple file:
+        1. Mengidentifikasi baris duplikat berdasarkan kolom kunci bisnis.
+        2. Mengonsolidasikan (merge) nilai non-null dari baris duplikat ke baris primer.
+        3. Menghapus baris duplikat yang redundan.
+        4. Mengembalikan laporan ringkasan DedupReport.
+        """
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name = ?;",
+                (table_name,),
+            )
+            if not cur.fetchone():
+                return DedupReport(
+                    table_name=table_name,
+                    initial_rows=0,
+                    deduped_rows=0,
+                    duplicates_removed=0,
+                    details=f"Tabel '{table_name}' tidak ditemukan di database.",
+                )
+
+            col_cur = conn.execute(f'PRAGMA table_info("{table_name}");')
+            all_cols = [r["name"] for r in col_cur.fetchall()]
+            pk_col = all_cols[0]
+
+            initial_count = conn.execute(
+                f'SELECT COUNT(*) as cnt FROM "{table_name}";'
+            ).fetchone()["cnt"]
+
+            if not match_columns:
+                if table_name == "transaction_details":
+                    candidates = ["header_id", "txn_date", "description", "debit", "credit", "balance"]
+                    match_columns = [c for c in candidates if c in all_cols]
+                elif table_name == "document_signatories":
+                    candidates = ["header_id", "role_party", "name"]
+                    match_columns = [c for c in candidates if c in all_cols]
+                elif table_name == "document_headers":
+                    candidates = ["fingerprint_hash"]
+                    match_columns = [c for c in candidates if c in all_cols]
+                else:
+                    candidates = [c for c in all_cols if not c.startswith("_") and c != pk_col]
+                    match_columns = candidates[: min(4, len(candidates))]
+
+            if not match_columns:
+                return DedupReport(
+                    table_name=table_name,
+                    initial_rows=initial_count,
+                    deduped_rows=initial_count,
+                    duplicates_removed=0,
+                    details="Tidak ada kolom acuan pembanding deduplikasi yang tersedia.",
+                )
+
+            group_by_str = ", ".join([f'"{c}"' for c in match_columns])
+            where_clause = " AND ".join([f'"{c}" IS ?' for c in match_columns])
+
+            dup_groups = conn.execute(f"""
+                SELECT {group_by_str}, COUNT(*) as cnt
+                FROM "{table_name}"
+                GROUP BY {group_by_str}
+                HAVING cnt > 1;
+            """).fetchall()
+
+            removed_count = 0
+            for grp in dup_groups:
+                vals = tuple(grp[c] for c in match_columns)
+                rows = conn.execute(f"""
+                    SELECT * FROM "{table_name}"
+                    WHERE {where_clause}
+                    ORDER BY "{pk_col}" ASC;
+                """, vals).fetchall()
+
+                if len(rows) <= 1:
+                    continue
+
+                base_row = dict(rows[0])
+                base_id = base_row[pk_col]
+
+                for dup in rows[1:]:
+                    dup_dict = dict(dup)
+                    dup_id = dup_dict[pk_col]
+
+                    for col_name, val in dup_dict.items():
+                        if (
+                            col_name != pk_col
+                            and base_row.get(col_name) is None
+                            and val is not None
+                        ):
+                            conn.execute(
+                                f'UPDATE "{table_name}" SET "{col_name}" = ? WHERE "{pk_col}" = ?;',
+                                (val, base_id),
+                            )
+                            base_row[col_name] = val
+
+                    conn.execute(
+                        f'DELETE FROM "{table_name}" WHERE "{pk_col}" = ?;',
+                        (dup_id,),
+                    )
+                    removed_count += 1
+
+            final_count = conn.execute(
+                f'SELECT COUNT(*) as cnt FROM "{table_name}";'
+            ).fetchone()["cnt"]
+
+            details = (
+                f"Deduplikasi tabel '{table_name}' berhasil: {removed_count} baris duplikat digabung & dibersihkan "
+                f"(awal: {initial_count}, akhir: {final_count} baris)."
+            )
+            logger.info("[Tabular:Dedup] %s", details)
+
+            return DedupReport(
+                table_name=table_name,
+                initial_rows=initial_count,
+                deduped_rows=final_count,
+                duplicates_removed=removed_count,
+                details=details,
             )
 
     def inspect_database(self) -> dict[str, Any]:
@@ -1201,7 +2060,7 @@ class TabularVerifier:
             )
 
             sample_rows_res = self.db.execute_query(
-                f'SELECT "_row_id", "{debit_col}", "{credit_col}", "{balance_col}" FROM "{table_name}" ORDER BY "_row_id" ASC LIMIT 20;'
+                f'SELECT "{debit_col}", "{credit_col}", "{balance_col}" FROM "{table_name}" ORDER BY 1 ASC LIMIT 20;'
             )
             s_rows = sample_rows_res.rows
             continuity_mismatches = 0
@@ -1338,6 +2197,11 @@ def process_page_tabular_agent(
     src_stem = Path(source_file).stem if source_file else "doc"
     base_prefix = sanitize_identifier(table_name_prefix or src_stem)
 
+    # Inisialisasi skema relasional kanonikal & ingest header dokumen
+    db_manager.ensure_relational_schema()
+    header_rec = extract_document_header_info(page_markdown, source_file=source_file)
+    header_id = db_manager.ingest_document_header(header_rec)
+
     # 2. Inspeksi tabel eksisting di SQLite
     db_info = db_manager.inspect_database()
     existing_tables = list(db_info.get("tables", {}).keys())
@@ -1374,59 +2238,137 @@ def process_page_tabular_agent(
         # Klasifikasi semantik tabel (untuk logging & metadata)
         classification = classify_table_heuristic(headers, rows, context=context)
 
-        # Cari tabel yang cocok di SQLite (utamakan explicit tag jika ada, lalu skema similarity)
-        matched = None
-        if append_if_matching:
-            matched = db_manager.find_matching_table(
-                headers=headers,
-                explicit_table_name=sqlite_hint,
-                doc_prefix=base_prefix,
-            )
+        # Deteksi domain relasional kanonikal
+        is_canon_txn, _, _ = defensive_map_columns(headers, TRANSACTION_CANONICAL_ALIASES, "transaction")
+        is_canon_sig, _, _ = defensive_map_columns(headers, SIGNATORY_CANONICAL_ALIASES, "signatory")
 
-        if matched:
-            target_table, schema = matched
+        is_relational_txn = (
+            sqlite_hint == "transaction_details"
+            or is_canon_txn
+            or classification.table_type in ("financial_statement", "transactional_log")
+        )
+        is_relational_sig = (
+            sqlite_hint == "document_signatories"
+            or is_canon_sig
+            or any("pihak" in h.lower() or "tanda tangan" in h.lower() or "jabatan" in h.lower() for h in headers)
+        )
+
+        if is_relational_txn:
+            target_table = "transaction_details"
             is_append = True
-            # Query status tabel sebelum append
-            prior_query = f'SELECT COUNT(*) as prev_cnt FROM "{target_table}";'
-            prior_res = db_manager.execute_query(prior_query)
-            prev_count = prior_res.rows[0]["prev_cnt"] if prior_res.rows else 0
-            queries_run.append(
-                {
-                    "query": prior_query,
-                    "purpose": "Inspeksi baris sebelum penambahan data",
-                    "result": prev_count,
-                }
-            )
-            actions.append(
-                f"Tabel #{idx} cocok dengan tabel eksisting '{target_table}' ({prev_count} baris awal). Menambahkan {len(rows)} baris halaman {page_number}."
-            )
-        else:
-            target_table = sqlite_hint or f"{base_prefix}_t{idx}"
-            schema = infer_table_schema(
-                table_name=target_table,
+            rows_ingested = db_manager.ingest_relational_transactions(
+                header_id=header_id,
                 headers=headers,
                 rows=rows,
-                source_file=source_file,
-                metadata={"context": context, "page": page_number, "classification": classification.table_type},
+                source_doc=source_file,
+                page_number=page_number,
             )
-            is_append = False
+            total_page_rows += rows_ingested
             actions.append(
-                f"Tabel #{idx} adalah tabel baru ({classification.table_type}). Membuat skema tabel '{target_table}' dengan {len(schema.columns)} kolom."
+                f"Tabel #{idx} teridentifikasi sebagai detail transaksi. Ingest ke 'transaction_details' (FK header_id={header_id}, +{rows_ingested} baris baru/deduped)."
             )
+            inspect_t = db_manager.inspect_database()
+            cols_info = inspect_t["tables"].get("transaction_details", {}).get("columns", [])
+            schema = TableSchema(
+                table_name="transaction_details",
+                source_file=source_file,
+                columns=[
+                    TableColumnSchema(
+                        name=c["name"],
+                        original_name=c["name"],
+                        sql_type=c["type"],
+                        is_nullable=True,
+                        description="",
+                        sample_values=[],
+                    )
+                    for c in cols_info
+                    if not c["name"].startswith("_")
+                ],
+            )
+        elif is_relational_sig:
+            target_table = "document_signatories"
+            is_append = True
+            rows_ingested = db_manager.ingest_relational_signatories(
+                header_id=header_id,
+                headers=headers,
+                rows=rows,
+                source_doc=source_file,
+                page_number=page_number,
+            )
+            total_page_rows += rows_ingested
+            actions.append(
+                f"Tabel #{idx} teridentifikasi sebagai penandatangan/persetujuan. Ingest ke 'document_signatories' (FK header_id={header_id}, +{rows_ingested} baris baru/deduped)."
+            )
+            inspect_t = db_manager.inspect_database()
+            cols_info = inspect_t["tables"].get("document_signatories", {}).get("columns", [])
+            schema = TableSchema(
+                table_name="document_signatories",
+                source_file=source_file,
+                columns=[
+                    TableColumnSchema(
+                        name=c["name"],
+                        original_name=c["name"],
+                        sql_type=c["type"],
+                        is_nullable=True,
+                        description="",
+                        sample_values=[],
+                    )
+                    for c in cols_info
+                    if not c["name"].startswith("_")
+                ],
+            )
+        else:
+            matched = None
+            if append_if_matching:
+                matched = db_manager.find_matching_table(
+                    headers=headers,
+                    explicit_table_name=sqlite_hint,
+                    doc_prefix=base_prefix,
+                )
+
+            if matched:
+                target_table, schema = matched
+                is_append = True
+                prior_query = f'SELECT COUNT(*) as prev_cnt FROM "{target_table}";'
+                prior_res = db_manager.execute_query(prior_query)
+                prev_count = prior_res.rows[0]["prev_cnt"] if prior_res.rows else 0
+                queries_run.append(
+                    {
+                        "query": prior_query,
+                        "purpose": "Inspeksi baris sebelum penambahan data",
+                        "result": prev_count,
+                    }
+                )
+                actions.append(
+                    f"Tabel #{idx} cocok dengan tabel eksisting '{target_table}' ({prev_count} baris awal). Menambahkan {len(rows)} baris halaman {page_number}."
+                )
+            else:
+                target_table = sqlite_hint or f"{base_prefix}_t{idx}"
+                schema = infer_table_schema(
+                    table_name=target_table,
+                    headers=headers,
+                    rows=rows,
+                    source_file=source_file,
+                    metadata={"context": context, "page": page_number, "classification": classification.table_type},
+                )
+                is_append = False
+                actions.append(
+                    f"Tabel #{idx} adalah tabel baru ({classification.table_type}). Membuat skema tabel '{target_table}' dengan {len(schema.columns)} kolom."
+                )
+
+            # Ingest baris data untuk tabel umum
+            rows_ingested = db_manager.ingest_records(
+                table_name=target_table,
+                schema=schema,
+                headers=headers,
+                rows=rows,
+                source_doc=source_file,
+                page_number=page_number,
+                replace=not is_append,
+            )
+            total_page_rows += rows_ingested
 
         table_mappings_for_tagging.append((tbl, target_table))
-
-        # Ingest baris data
-        rows_ingested = db_manager.ingest_records(
-            table_name=target_table,
-            schema=schema,
-            headers=headers,
-            rows=rows,
-            source_doc=source_file,
-            page_number=page_number,
-            replace=not is_append,
-        )
-        total_page_rows += rows_ingested
 
         # Jalankan query SQL mandiri untuk verifikasi baris setelah ingesti
         post_query = f'SELECT COUNT(*) as total_cnt FROM "{target_table}";'
@@ -1449,7 +2391,7 @@ def process_page_tabular_agent(
         )
 
         sample_data = db_manager.execute_query(
-            f'SELECT * FROM "{target_table}" ORDER BY "_row_id" DESC LIMIT 3;'
+            f'SELECT * FROM "{target_table}" ORDER BY 1 DESC LIMIT 3;'
         ).rows
 
         status_str: Any = "success" if verif_report.is_valid else "warning"
@@ -1673,3 +2615,21 @@ __all__ = [
     "sanitize_identifier",
     "sanitize_markdown_tables",
 ]
+
+
+def merge_and_deduplicate_tables(
+    db_manager_or_path: TabularDatabaseManager | str | Path,
+    table_name: str = "transaction_details",
+    match_columns: list[str] | None = None,
+) -> DedupReport:
+    """
+    Fungsi utilitas public untuk menggabungkan (merge) dan mendeduplikasi data tabel yang mirip/duplikat
+    dari multiple file atau hasil ekstraksi ganda ke dalam satu tabel bersih.
+    """
+    if isinstance(db_manager_or_path, TabularDatabaseManager):
+        mgr = db_manager_or_path
+    else:
+        mgr = TabularDatabaseManager(db_manager_or_path)
+    return mgr.merge_and_deduplicate_tables(
+        table_name=table_name, match_columns=match_columns
+    )

@@ -29,6 +29,7 @@ from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 from app.job_tracker import JobManager, is_pid_alive
 from app.tabular_db import cross_verify_dual_track
+
 SUPPORTED_TYPES = ["pdf", "pptx", "ppt", "png", "jpg", "jpeg", "webp"]
 
 SPEC_OPTIONS: dict[str, str | None] = {
@@ -517,6 +518,24 @@ def render_completed_document_view(stem: str, output_path: Path) -> None:
                 tables = [r[0] for r in cursor.fetchall()]
 
                 if tables:
+                    if "document_headers" in tables and "transaction_details" in tables:
+                        with st.expander("📑 Tampilan Relasional Header & Detail Transaksi", expanded=False):
+                            df_hdr = pd.read_sql_query("SELECT * FROM document_headers;", conn)
+                            st.markdown("**Daftar Header Dokumen Terdaftar:**")
+                            st.dataframe(df_hdr, use_container_width=True)
+                            if not df_hdr.empty and "header_id" in df_hdr.columns:
+                                selected_hdr = st.selectbox(
+                                    "Filter Detail Transaksi Berdasarkan Header ID:",
+                                    options=df_hdr["header_id"].tolist(),
+                                    format_func=lambda hid: f"ID #{hid} | {df_hdr.loc[df_hdr['header_id'] == hid, 'doc_title'].values[0] or 'Dokumen'} ({df_hdr.loc[df_hdr['header_id'] == hid, 'doc_number'].values[0] or '-'})",
+                                    key="rel_hdr_filter",
+                                )
+                                df_rel_dtl = pd.read_sql_query(
+                                    f"SELECT * FROM transaction_details WHERE header_id = {int(selected_hdr)};", conn
+                                )
+                                st.caption(f"Menampilkan {len(df_rel_dtl)} item transaksi untuk Header ID #{selected_hdr}:")
+                                st.dataframe(df_rel_dtl, use_container_width=True)
+
                     selected_tbl = st.selectbox(
                         "Pilih Tabel untuk Dilihat:", tables
                     )
@@ -541,6 +560,15 @@ def render_completed_document_view(stem: str, output_path: Path) -> None:
                         )
 
                     st.dataframe(df_preview, use_container_width=True)
+
+                    # Fitur Deduplikasi & Pembersihan Data
+                    with st.expander("🧹 Deduplikasi & Konsolidasi Data"):
+                        st.caption("Deteksi baris-baris identik atau mirip dari multiple sumber, gabungkan nilai non-null, dan bersihkan duplikasi.")
+                        if st.button(f"Jalankan Merge & Deduplikasi pada '{selected_tbl}'", key=f"btn_dedup_{selected_tbl}"):
+                            from app.tabular_db import merge_and_deduplicate_tables
+                            report = merge_and_deduplicate_tables(db_file, selected_tbl)
+                            st.success(f"{report.details}")
+                            st.rerun()
 
                     # Quick Visual Chart jika terdapat kolom numerik
                     num_cols = df_preview.select_dtypes(
