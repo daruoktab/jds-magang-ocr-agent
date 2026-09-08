@@ -115,6 +115,9 @@ class Settings:
         default_factory=lambda: _float_env("VLM_TEMPERATURE", "0.1")
     )
     vlm_timeout: float = field(default_factory=lambda: _float_env("VLM_TIMEOUT", "300"))
+    vlm_max_tokens: int = field(
+        default_factory=lambda: _int_env("VLM_MAX_TOKENS", "4096")
+    )
     vlm_enable_thinking: bool = field(
         default_factory=lambda: _bool_env("VLM_ENABLE_THINKING", "false")
     )
@@ -141,6 +144,7 @@ def setup_logging(
     log_file: str | Path | None = None,
     auto_log_stem: str | None = None,
     auto_log_dir: str | Path | None = None,
+    llm_response_log_file: str | Path | None = None,
 ) -> None:
     """Inisialisasi logging terformat dengan timestamp ke konsol dan opsional ke file.
 
@@ -174,3 +178,25 @@ def setup_logging(
         force=True,
     )
 
+    # Respons mentah LLM sengaja dipisahkan dari log pipeline karena dapat
+    # berukuran besar dan berisi isi dokumen.
+    response_log_path: Path | None = None
+    if llm_response_log_file:
+        response_log_path = Path(llm_response_log_file).resolve()
+    elif auto_log_stem:
+        response_dir = Path(auto_log_dir).resolve() if auto_log_dir else Path("output") / auto_log_stem / "logs"
+        response_dir.mkdir(parents=True, exist_ok=True)
+        response_log_path = response_dir / f"{auto_log_stem}_llm_responses.log"
+
+    response_log = logging.getLogger("app.llm.response")
+    response_log.handlers.clear()
+    response_log.setLevel(logging.DEBUG)
+    response_log.propagate = False
+    if response_log_path:
+        response_log_path.parent.mkdir(parents=True, exist_ok=True)
+        response_handler = logging.FileHandler(str(response_log_path), mode="w", encoding="utf-8")
+        response_handler.setFormatter(logging.Formatter(
+            "%(asctime)s | %(levelname)-7s | %(message)s",
+            datefmt=date_format,
+        ))
+        response_log.addHandler(response_handler)

@@ -203,6 +203,11 @@ def main() -> int:
         log_file=args.log_file,
         auto_log_stem=doc_stem,
         auto_log_dir=doc_log_dir,
+        llm_response_log_file=(
+            doc_log_dir / f"{doc_stem}_llm_responses.log"
+            if doc_log_dir and doc_stem
+            else None
+        ),
     )
     logger.info("CLI start: %s", " ".join(sys.argv))
 

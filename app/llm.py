@@ -27,6 +27,7 @@ from langchain_openai import ChatOpenAI
 from .config import Settings, get_settings
 
 logger = logging.getLogger("app.llm")
+response_logger = logging.getLogger("app.llm.response")
 
 
 class LoggingCallbackHandler(BaseCallbackHandler):
@@ -60,6 +61,31 @@ class LoggingCallbackHandler(BaseCallbackHandler):
             elapsed,
             gen_count,
         )
+
+        # Simpan respons mentah di logger terpisah agar diagnosis output kosong
+        # tidak tercampur dengan log pipeline utama.
+        for index, generation_group in enumerate(response.generations, start=1):
+            for candidate_index, generation in enumerate(generation_group, start=1):
+                message = getattr(generation, "message", None)
+                content = getattr(message, "content", None)
+                if content is None:
+                    content = getattr(generation, "text", "")
+                generation_info = getattr(generation, "generation_info", None)
+                message_metadata = {
+                    "additional_kwargs": getattr(message, "additional_kwargs", {}),
+                    "response_metadata": getattr(message, "response_metadata", {}),
+                }
+                response_logger.info(
+                    "[LLM Response Raw] model=%s candidate=%d.%d chars=%d "
+                    "generation_info=%r metadata=%r\n--- BEGIN RESPONSE ---\n%s\n--- END RESPONSE ---",
+                    self.model_name,
+                    index,
+                    candidate_index,
+                    len(str(content)),
+                    generation_info,
+                    message_metadata,
+                    content,
+                )
 
 
 def encode_image(image_path: str | Path) -> str:
@@ -106,7 +132,13 @@ def build_chat_model(
 
     # Dukungan model reasoning (mis. Qwen 2.5 / DeepSeek-R1 / Qwen3)
     if enable_thinking is not None:
-        params["extra_body"] = {"enable_thinking": enable_thinking}
+        # llama.cpp/Qwen chat templates membaca flag ini melalui
+        # chat_template_kwargs. Mengirimnya sebagai field top-level membuat
+        # model tetap berpikir sampai batas token dan dapat mengembalikan
+        # content Markdown kosong dengan finish_reason=length.
+        params["extra_body"] = {
+            "chat_template_kwargs": {"enable_thinking": enable_thinking}
+        }
 
     return ChatOpenAI(
         base_url=base_url,
@@ -128,7 +160,9 @@ def build_vlm(settings: Settings | None = None) -> ChatOpenAI:
         api_key=resolved.vlm_api_key,
         temperature=resolved.vlm_temperature,
         timeout=resolved.vlm_timeout,
+        max_tokens=resolved.vlm_max_tokens,
         enable_thinking=resolved.vlm_enable_thinking,
+        callbacks=[LoggingCallbackHandler(resolved.vlm_model, resolved.vlm_base_url)],
     )
 
 

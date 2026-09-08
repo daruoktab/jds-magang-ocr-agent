@@ -31,6 +31,10 @@ from .schemas import PageInspectionResult
 logger = logging.getLogger("app.extractor")
 
 
+class EmptyLLMResponseError(RuntimeError):
+    """LLM berhasil dipanggil tetapi tidak menghasilkan konten yang dapat dipakai."""
+
+
 class VisionExtractor:
     """Ekstraktor dokumen multimodal: Mengubah gambar dokumen menjadi Markdown siap chunking."""
 
@@ -355,7 +359,8 @@ class VisionExtractor:
         ]
 
         response = self.llm.invoke(messages)
-        md_text = strip_thinking_process(str(response.content).strip())
+        raw_content = str(response.content or "").strip()
+        md_text = strip_thinking_process(raw_content)
 
         # Bersihkan pembungkus markdown block ```markdown ... ``` jika VLM membungkusnya
         if md_text.startswith("```markdown") and md_text.endswith("```"):
@@ -367,4 +372,14 @@ class VisionExtractor:
 
         md_text = strip_page_markers(md_text)
         md_text = collapse_consecutive_duplicate_blocks(md_text)
+        if not md_text.strip():
+            logger.error(
+                "[Extractor:Markdown] Respons LLM kosong setelah sanitasi untuk image=%s "
+                "(raw_chars=%d). Proses dihentikan agar output kosong tidak dianggap sukses.",
+                image_path,
+                len(raw_content),
+            )
+            raise EmptyLLMResponseError(
+                f"Respons LLM kosong saat mengekstrak Markdown: {image_path}"
+            )
         return md_text
