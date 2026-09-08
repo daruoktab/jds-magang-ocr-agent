@@ -185,7 +185,9 @@ class JobManager:
     _jobs: ClassVar[dict[str, JobInfo]] = {}
     _processes: ClassVar[dict[str, subprocess.Popen]] = {}
     _threads: ClassVar[dict[str, threading.Thread]] = {}
-    _lock: ClassVar[threading.Lock] = threading.Lock()
+    # RLock diperlukan karena start_job/list_all_documents memanggil get_job
+    # saat lock sudah dipegang oleh thread yang sama.
+    _lock: ClassVar[threading.RLock] = threading.RLock()
 
     @classmethod
     def get_instance(cls) -> JobManager:
@@ -471,7 +473,9 @@ class JobManager:
                             "completed" if returncode == 0 else "failed"
                         )
                         job.save_status()
-                    elif not is_pid_alive(job.pid):
+                    # Worker thread may still be starting the subprocess.
+                    # Do not mark a job failed before it receives a PID.
+                    elif job.pid is not None and not is_pid_alive(job.pid):
                         job.status = "failed"
                         job.stage = "Proses Berhenti Tak Terduga"
                         job.error_message = "Proses sistem telah terhenti."
@@ -533,7 +537,11 @@ class JobManager:
                 )
 
                 # Validasi jika status tersimpan "running" tapi PID sudah mati
-                if job.status == "running" and not is_pid_alive(job.pid):
+                if (
+                    job.status == "running"
+                    and job.pid is not None
+                    and not is_pid_alive(job.pid)
+                ):
                     job.status = "failed"
                     job.stage = "Proses Terhenti"
                     job.error_message = "Proses tidak aktif lagi di sistem."
