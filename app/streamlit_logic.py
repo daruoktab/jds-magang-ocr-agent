@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from typing import Any
 import sys
 from pathlib import Path
 
@@ -524,17 +525,29 @@ def render_completed_document_view(stem: str, output_path: Path) -> None:
                             st.markdown("**Daftar Header Dokumen Terdaftar:**")
                             st.dataframe(df_hdr, use_container_width=True)
                             if not df_hdr.empty and "header_id" in df_hdr.columns:
+                                def _fmt_hdr(hid: Any) -> str:
+                                    matching = df_hdr.loc[df_hdr["header_id"] == hid]
+                                    if matching.empty:
+                                        return f"ID #{hid}"
+                                    r_data = matching.iloc[0]
+                                    t_val = r_data.get("doc_title")
+                                    t_str = str(t_val).strip() if pd.notna(t_val) and str(t_val).strip() else "Dokumen"
+                                    n_val = r_data.get("doc_number")
+                                    n_str = str(n_val).strip() if pd.notna(n_val) and str(n_val).strip() else "-"
+                                    return f"ID #{hid} | {t_str} ({n_str})"
+
                                 selected_hdr = st.selectbox(
                                     "Filter Detail Transaksi Berdasarkan Header ID:",
                                     options=df_hdr["header_id"].tolist(),
-                                    format_func=lambda hid: f"ID #{hid} | {df_hdr.loc[df_hdr['header_id'] == hid, 'doc_title'].values[0] or 'Dokumen'} ({df_hdr.loc[df_hdr['header_id'] == hid, 'doc_number'].values[0] or '-'})",
+                                    format_func=_fmt_hdr,
                                     key="rel_hdr_filter",
                                 )
-                                df_rel_dtl = pd.read_sql_query(
-                                    f"SELECT * FROM transaction_details WHERE header_id = {int(selected_hdr)};", conn
-                                )
-                                st.caption(f"Menampilkan {len(df_rel_dtl)} item transaksi untuk Header ID #{selected_hdr}:")
-                                st.dataframe(df_rel_dtl, use_container_width=True)
+                                if selected_hdr is not None:
+                                    df_rel_dtl = pd.read_sql_query(
+                                        f"SELECT * FROM transaction_details WHERE header_id = {int(selected_hdr)};", conn
+                                    )
+                                    st.caption(f"Menampilkan {len(df_rel_dtl)} item transaksi untuk Header ID #{selected_hdr}:")
+                                    st.dataframe(df_rel_dtl, use_container_width=True)
 
                     selected_tbl = st.selectbox(
                         "Pilih Tabel untuk Dilihat:", tables

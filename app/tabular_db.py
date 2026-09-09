@@ -554,12 +554,16 @@ def parse_date_value(val_str: str) -> str | None:
     if re.match(r"^(19|20)\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$", raw):
         return raw
 
-    # Format DD.MM.YYYY atau DD/MM/YYYY atau DD-MM-YYYY
+    # Format DD.MM.YYYY atau DD/MM/YYYY atau DD-MM-YYYY (juga dukung 1 digit D/M misal 1/8/2024 atau 2 digit YY)
     m = re.match(
-        r"^(0[1-9]|[12]\d|3[01])[./-]((0[1-9]|1[0-2]))[./-]((19|20)\d{2})$", raw
+        r"^(0?[1-9]|[12]\d|3[01])[./-](0?[1-9]|1[0-2])[./-]((?:19|20)?\d{2})$", raw
     )
     if m:
-        return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+        day = int(m.group(1))
+        month = int(m.group(2))
+        year_str = m.group(3)
+        year = int(f"20{year_str}" if len(year_str) == 2 else year_str)
+        return f"{year:04d}-{month:02d}-{day:02d}"
 
     return None
 
@@ -1468,11 +1472,11 @@ class TabularDatabaseManager:
             if existing_id is not None:
                 conn.execute(
                     """UPDATE document_headers SET
-                        doc_title = COALESCE(doc_title, ?),
-                        doc_date = COALESCE(doc_date, ?),
-                        parties = COALESCE(parties, ?),
-                        total_amount = COALESCE(total_amount, ?),
-                        source_file = COALESCE(source_file, ?),
+                        doc_title = COALESCE(?, doc_title),
+                        doc_date = COALESCE(?, doc_date),
+                        parties = COALESCE(?, parties),
+                        total_amount = COALESCE(?, total_amount),
+                        source_file = COALESCE(?, source_file),
                         updated_at = ?
                        WHERE header_id = ?;""",
                     (
@@ -1728,12 +1732,37 @@ class TabularDatabaseManager:
                 )
 
             col_cur = conn.execute(f'PRAGMA table_info("{table_name}");')
-            all_cols = [r["name"] for r in col_cur.fetchall()]
-            pk_col = all_cols[0]
+            col_infos = col_cur.fetchall()
+            all_cols = [r["name"] for r in col_infos]
+            if not all_cols:
+                return DedupReport(
+                    table_name=table_name,
+                    initial_rows=0,
+                    deduped_rows=0,
+                    duplicates_removed=0,
+                    details=f"Tabel '{table_name}' tidak ditemukan atau kosong skemanya.",
+                )
 
             initial_count = conn.execute(
                 f'SELECT COUNT(*) as cnt FROM "{table_name}";'
             ).fetchone()["cnt"]
+
+            pk_candidates = [r["name"] for r in col_infos if r["pk"] > 0]
+            if pk_candidates:
+                pk_col = pk_candidates[0]
+                is_internal_pk = False
+                select_pk_expr = f'"{pk_col}"'
+                order_pk_expr = f'"{pk_col}"'
+            elif "_row_id" in all_cols:
+                pk_col = "_row_id"
+                is_internal_pk = False
+                select_pk_expr = '"_row_id"'
+                order_pk_expr = '"_row_id"'
+            else:
+                pk_col = "_internal_pk"
+                is_internal_pk = True
+                select_pk_expr = 'rowid AS "_internal_pk"'
+                order_pk_expr = 'rowid'
 
             if not match_columns:
                 if table_name == "transaction_details":
@@ -1743,7 +1772,7 @@ class TabularDatabaseManager:
                     candidates = ["header_id", "role_party", "name"]
                     match_columns = [c for c in candidates if c in all_cols]
                 elif table_name == "document_headers":
-                    candidates = ["fingerprint_hash"]
+                    candidates = ["doc_number", "doc_type"] if "doc_number" in all_cols else ["fingerprint_hash"]
                     match_columns = [c for c in candidates if c in all_cols]
                 else:
                     candidates = [c for c in all_cols if not c.startswith("_") and c != pk_col]
@@ -1772,9 +1801,9 @@ class TabularDatabaseManager:
             for grp in dup_groups:
                 vals = tuple(grp[c] for c in match_columns)
                 rows = conn.execute(f"""
-                    SELECT * FROM "{table_name}"
+                    SELECT {select_pk_expr}, * FROM "{table_name}"
                     WHERE {where_clause}
-                    ORDER BY "{pk_col}" ASC;
+                    ORDER BY {order_pk_expr} ASC;
                 """, vals).fetchall()
 
                 if len(rows) <= 1:
@@ -1790,19 +1819,42 @@ class TabularDatabaseManager:
                     for col_name, val in dup_dict.items():
                         if (
                             col_name != pk_col
+                            and not col_name.startswith("_internal")
                             and base_row.get(col_name) is None
                             and val is not None
                         ):
-                            conn.execute(
-                                f'UPDATE "{table_name}" SET "{col_name}" = ? WHERE "{pk_col}" = ?;',
-                                (val, base_id),
-                            )
+                            if is_internal_pk:
+                                conn.execute(
+                                    f'UPDATE "{table_name}" SET "{col_name}" = ? WHERE rowid = ?;',
+                                    (val, base_id),
+                                )
+                            else:
+                                conn.execute(
+                                    f'UPDATE "{table_name}" SET "{col_name}" = ? WHERE "{pk_col}" = ?;',
+                                    (val, base_id),
+                                )
                             base_row[col_name] = val
 
-                    conn.execute(
-                        f'DELETE FROM "{table_name}" WHERE "{pk_col}" = ?;',
-                        (dup_id,),
-                    )
+                    if table_name == "document_headers":
+                        conn.execute(
+                            'UPDATE transaction_details SET header_id = ? WHERE header_id = ?;',
+                            (base_id, dup_id),
+                        )
+                        conn.execute(
+                            'UPDATE document_signatories SET header_id = ? WHERE header_id = ?;',
+                            (base_id, dup_id),
+                        )
+
+                    if is_internal_pk:
+                        conn.execute(
+                            f'DELETE FROM "{table_name}" WHERE rowid = ?;',
+                            (dup_id,),
+                        )
+                    else:
+                        conn.execute(
+                            f'DELETE FROM "{table_name}" WHERE "{pk_col}" = ?;',
+                            (dup_id,),
+                        )
                     removed_count += 1
 
             final_count = conn.execute(
@@ -2060,7 +2112,7 @@ class TabularVerifier:
             )
 
             sample_rows_res = self.db.execute_query(
-                f'SELECT "{debit_col}", "{credit_col}", "{balance_col}" FROM "{table_name}" ORDER BY 1 ASC LIMIT 20;'
+                f'SELECT "{debit_col}", "{credit_col}", "{balance_col}" FROM "{table_name}" ORDER BY rowid ASC LIMIT 20;'
             )
             s_rows = sample_rows_res.rows
             continuity_mismatches = 0
@@ -2486,8 +2538,15 @@ def cross_verify_dual_track(
         expected_md_rows = md_rows_per_sqlite_table.get(t_name, 0)
         cols = [c["name"] for c in t_info.get("columns", []) if not c["name"].startswith("_")]
 
-        # Tabel dianggap tersinkronisasi jika row count sama, atau jika hanya 1 tabel dan total baris cocok
-        is_synced = (sql_rows == expected_md_rows) or (sql_rows > 0 and expected_md_rows == 0 and total_md_rows == sql_rows)
+        # Tabel metadata (header & penandatangan) berasal dari parsing teks, bukan tabel Markdown
+        is_metadata_table = t_name in ("document_headers", "document_signatories")
+        if is_metadata_table:
+            is_synced = True
+            status_str = "synchronized"
+        else:
+            is_synced = (sql_rows == expected_md_rows) or (sql_rows > 0 and expected_md_rows == 0 and total_md_rows == sql_rows)
+            status_str = "synchronized" if is_synced else "row_count_mismatch"
+
         if not is_synced and expected_md_rows > 0:
             discrepancies.append(
                 f"Tabel SQLite '{t_name}' ({sql_rows} baris) berbeda dengan data Markdown terkait ({expected_md_rows} baris)."
@@ -2500,7 +2559,7 @@ def cross_verify_dual_track(
                 "markdown_rows_matched": expected_md_rows or sql_rows,
                 "columns_count": len(cols),
                 "columns": cols,
-                "status": "synchronized" if is_synced else "row_count_mismatch",
+                "status": status_str,
             }
         )
 

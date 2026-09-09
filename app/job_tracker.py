@@ -56,7 +56,9 @@ def is_pid_alive(pid: int | None) -> bool:
 
 
 def get_python_executable() -> str:
-    """Temukan interpreter python dari virtual environment proyek (.venv) agar bebas bentrok conda."""
+    """Temukan interpreter python aktif saat ini (mis. Conda/Venv) atau fallback ke .venv proyek."""
+    if sys.executable and Path(sys.executable).exists():
+        return sys.executable
     venv_python = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
     if venv_python.exists():
         return str(venv_python)

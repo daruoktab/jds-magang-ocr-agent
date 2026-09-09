@@ -10,6 +10,7 @@ from app.tabular_db import (
     TabularDatabaseManager,
     defensive_map_columns,
     merge_and_deduplicate_tables,
+    parse_date_value,
     process_page_tabular_agent,
 )
 
@@ -54,6 +55,16 @@ class TestRelationalTabularDB(unittest.TestCase):
         self.assertIn("balance", col_map)
         self.assertIn("channel_pembayaran", extra_cols)
 
+    def test_parse_date_value_formats(self):
+        """Uji konversi berbagai variasi format tanggal ke ISO YYYY-MM-DD secara presisi."""
+        self.assertEqual(parse_date_value("15/08/2024"), "2024-08-15")
+        self.assertEqual(parse_date_value("1/8/2024"), "2024-08-01")
+        self.assertEqual(parse_date_value("05.12.2023"), "2023-12-05")
+        self.assertEqual(parse_date_value("10/02/25"), "2025-02-10")
+        self.assertEqual(parse_date_value("2024-05-20"), "2024-05-20")
+        self.assertEqual(parse_date_value("20240201"), "2024-02-01")
+        self.assertIsNone(parse_date_value("bukan_tanggal"))
+
     def test_header_detail_ingestion(self):
         """Uji alur Header-Detail: Header dibuat, lalu baris transaksi dihubungkan via header_id."""
         header = DocumentHeaderRecord(
@@ -85,7 +96,7 @@ class TestRelationalTabularDB(unittest.TestCase):
         )
         self.assertEqual(inserted, 2)
 
-        # Query verifikasi FK relasi
+        # Query verifikasi FK relasi & parsing tanggal presisi
         res = self.mgr.execute_query(
             "SELECT t.*, h.doc_title, h.parties FROM transaction_details t "
             "JOIN document_headers h ON t.header_id = h.header_id WHERE t.header_id = ?;",
@@ -93,18 +104,15 @@ class TestRelationalTabularDB(unittest.TestCase):
         )
         self.assertEqual(len(res.rows), 2)
         self.assertEqual(res.rows[0]["doc_title"], "Rekening Koran Bank Mandiri")
+        self.assertEqual(res.rows[0]["txn_date"], "2025-01-02")
         self.assertEqual(res.rows[0]["balance"], 50000000.0)
         self.assertEqual(res.rows[1]["debit"], 5000000.0)
 
     def test_deduplication_on_insert(self):
         """Uji bahwa baris identik yang di-insert ulang diabaikan via _row_hash (INSERT OR IGNORE)."""
-        header = DocumentHeaderRecord(
-            doc_type="bank_statement",
-            doc_number="999-888",
-            fingerprint_hash="fp_test_dedup",
+        header_id = self.mgr.ingest_document_header(
+            DocumentHeaderRecord(doc_type="bank_statement", doc_number="111", fingerprint_hash="fp_111")
         )
-        header_id = self.mgr.ingest_document_header(header)
-
         headers = ["Tanggal", "Keterangan", "Debit", "Kredit", "Saldo"]
         rows = [
             ["01/02/2025", "Pembayaran Gaji", "10000000", "0", "40000000"],
@@ -159,6 +167,57 @@ class TestRelationalTabularDB(unittest.TestCase):
         row = self.mgr.execute_query("SELECT * FROM transaction_details;").rows[0]
         self.assertEqual(row["ref_no"], "TRX999")
         self.assertEqual(row["catatan_audit"], "Verified OK")
+
+    def test_header_deduplication_reparents_children(self):
+        """Uji bahwa deduplikasi document_headers mengalihkan child rows ke header utama dan tidak menghilangkannya."""
+        # Buat Header 1
+        h1 = DocumentHeaderRecord(
+            doc_type="faktur_pajak",
+            doc_number="FP-2025-001",
+            fingerprint_hash="fp_faktur_001",
+            doc_title="Faktur Pajak Awal",
+        )
+        id1 = self.mgr.ingest_document_header(h1)
+
+        # Buat Header 2 secara manual dengan nomor & tipe sama (duplikat dari sumber file lain)
+        with self.mgr._get_connection() as conn:
+            cur = conn.execute(
+                """INSERT INTO document_headers (doc_type, doc_number, fingerprint_hash, doc_title)
+                   VALUES ('faktur_pajak', 'FP-2025-001', 'fp_faktur_002', 'Faktur Pajak Sumber Lain');"""
+            )
+            assert cur.lastrowid is not None
+            id2 = int(cur.lastrowid)
+
+        # Kaitkan transaksi ke Header 2
+        with self.mgr._get_connection() as conn:
+            conn.execute(
+                """INSERT INTO transaction_details (header_id, description, debit, _row_hash)
+                   VALUES (?, 'Barang Modal dari File 2', 15000000, 'hash_file2');""",
+                (id2,),
+            )
+
+        # Jalankan deduplikasi pada document_headers
+        report = merge_and_deduplicate_tables(self.mgr, "document_headers")
+        self.assertEqual(report.duplicates_removed, 1)
+
+        # Pastikan transaksi milik id2 kini teralihkan ke id1 (re-parented)
+        tx_rows = self.mgr.execute_query(
+            "SELECT * FROM transaction_details WHERE header_id = ?;", (id1,)
+        ).rows
+        self.assertEqual(len(tx_rows), 1)
+        self.assertEqual(tx_rows[0]["description"], "Barang Modal dari File 2")
+
+    def test_generic_table_deduplication_without_pk(self):
+        """Uji deduplikasi tabel generik tanpa primary key eksplisit (memakai rowid)."""
+        with self.mgr._get_connection() as conn:
+            conn.execute("CREATE TABLE audit_logs (level TEXT, message TEXT, code INT);")
+            conn.execute("INSERT INTO audit_logs VALUES ('INFO', 'Proses selesai', 200);")
+            conn.execute("INSERT INTO audit_logs VALUES ('INFO', 'Proses selesai', 200);")
+            conn.execute("INSERT INTO audit_logs VALUES ('ERROR', 'Gagal koneksi', 500);")
+
+        report = merge_and_deduplicate_tables(self.mgr, "audit_logs")
+        self.assertEqual(report.duplicates_removed, 1)
+        self.assertEqual(report.deduped_rows, 2)
 
     def test_signatory_table_nullable_position(self):
         """Uji tabel document_signatories: jabatan/position opsional & nullable."""
