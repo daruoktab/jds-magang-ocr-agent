@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Arsitektur jds-magang: ekstraksi dokumen berbasis VLM",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/daruoktab/jds-magang.git",
+      "provider": "github",
+      "link_mode": "local-only",
+      "revision": "4687307a48273cba242df81ec7ca8cd409b3bd5e"
+    },
+    "views": [
+      {
+        "id": "default-path",
+        "label": "Jalur ekstraksi utama",
+        "focus": ["documents", "entrypoints", "rendering", "vision-vlm", "pipeline", "markdown"],
+        "note": "Dokumen dirender atau dipraproses, lalu dipahami VLM sebagai Markdown terstruktur."
+      },
+      {
+        "id": "specialists",
+        "label": "Spesialis dan validasi",
+        "focus": ["pipeline", "deep-agent", "diagram-specialist", "tabular-specialist", "quality-guardrails"],
+        "note": "Spesialis dipanggil hanya saat sinyal halaman memerlukannya; guardrail mengecek hasil sebelum dipakai."
+      },
+      {
+        "id": "structured-data",
+        "label": "Data terstruktur",
+        "focus": ["tabular-specialist", "sqlite", "markdown", "quality-guardrails"],
+        "note": "Tabel transaksional menjadi SQLite yang dapat diquery; dokumen dan hasil ekstraksi tetap tersimpan sebagai Markdown terstruktur."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "documents",
+      "type": "external",
+      "label": "Dokumen sumber",
+      "sublabel": "PDF, PPTX, scan, chat",
+      "tag": "multimodal",
+      "pos": [40, 310],
+      "size": [154, 70],
+      "sources": [{"path": "README.md", "line": 3, "label": "format didukung"}]
+    },
+    {
+      "id": "entrypoints",
+      "type": "frontend",
+      "label": "Antarmuka kerja",
+      "sublabel": "CLI, batch, MCP, UI",
+      "pos": [245, 310],
+      "size": [160, 70],
+      "sources": [{"path": "main.py", "line": 61, "label": "CLI"}, {"path": "app/mcp_server.py", "line": 53, "label": "MCP"}, {"path": "app/streamlit_logic.py", "line": 699, "label": "workspace"}]
+    },
+    {
+      "id": "rendering",
+      "type": "backend",
+      "label": "Render dan praproses",
+      "sublabel": "PyMuPDF, LibreOffice",
+      "pos": [465, 310],
+      "size": [178, 70],
+      "sources": [{"path": "app/pdf.py", "line": 66, "label": "PDF ke gambar"}, {"path": "app/ppt.py", "line": 206, "label": "slide render"}, {"path": "app/preprocess.py", "line": 29, "label": "praproses"}]
+    },
+    {
+      "id": "vision-vlm",
+      "type": "external",
+      "label": "Vision Language Model",
+      "sublabel": "OpenAI-compatible VLM",
+      "tag": "bukan OCR saja",
+      "pos": [700, 310],
+      "size": [190, 70],
+      "sources": [{"path": "app/llm.py", "line": 154, "label": "VLM client"}, {"path": "app/extractor.py", "line": 336, "label": "Markdown vision"}]
+    },
+    {
+      "id": "pipeline",
+      "type": "backend",
+      "label": "Pipeline LangGraph",
+      "sublabel": "classify → extract → judge",
+      "tag": "adaptive fast-path",
+      "pos": [950, 310],
+      "size": [184, 70],
+      "sources": [{"path": "app/graph.py", "line": 125, "label": "pipeline"}, {"path": "app/graph.py", "line": 141, "label": "StateGraph"}]
+    },
+    {
+      "id": "markdown",
+      "type": "cloud",
+      "label": "Markdown terstruktur",
+      "sublabel": "heading dan halaman",
+      "pos": [1185, 310],
+      "size": [168, 70],
+      "sources": [{"path": "app/multi_page.py", "line": 156, "label": "split/stitch"}, {"path": "app/prompts.py", "line": 397, "label": "prompt spesifikasi"}]
+    },
+    {
+      "id": "deep-agent",
+      "type": "backend",
+      "label": "Deep Agent Harness",
+      "sublabel": "6 sub-agent via MCP",
+      "tag": "opsional: conversational",
+      "pos": [700, 110],
+      "size": [190, 70],
+      "sources": [{"path": "app/deep_agent.py", "line": 51, "label": "orchestrator"}, {"path": "app/deep_agent.py", "line": 238, "label": "sub-agent"}]
+    },
+    {
+      "id": "diagram-specialist",
+      "type": "backend",
+      "label": "Spesialis diagram",
+      "sublabel": "visual → Mermaid → verify",
+      "pos": [950, 110],
+      "size": [184, 70],
+      "sources": [{"path": "app/diagram.py", "line": 475, "label": "klasifikasi"}, {"path": "app/diagram.py", "line": 613, "label": "ekstraksi"}]
+    },
+    {
+      "id": "mermaid-renderer",
+      "type": "cloud",
+      "label": "Mermaid compiler",
+      "sublabel": "render PNG dan feedback",
+      "pos": [1185, 110],
+      "size": [168, 70],
+      "sources": [{"path": "app/diagram.py", "line": 366, "label": "validasi render"}]
+    },
+    {
+      "id": "tabular-specialist",
+      "type": "backend",
+      "label": "Spesialis tabular",
+      "sublabel": "classify → ingest → verify",
+      "pos": [950, 525],
+      "size": [184, 70],
+      "sources": [{"path": "app/tabular_db.py", "line": 2235, "label": "ingesti per halaman"}, {"path": "app/tabular_db.py", "line": 2510, "label": "guardrail"}]
+    },
+    {
+      "id": "sqlite",
+      "type": "database",
+      "label": "SQLite relasional",
+      "sublabel": "header, transaksi, query",
+      "pos": [1185, 525],
+      "size": [168, 70],
+      "sources": [{"path": "app/tabular_db.py", "line": 1367, "label": "schema relasional"}, {"path": "app/tabular_db.py", "line": 2690, "label": "query aman"}]
+    },
+    {
+      "id": "quality-guardrails",
+      "type": "security",
+      "label": "Quality guardrails",
+      "sublabel": "judge, hierarki, dual-track",
+      "pos": [700, 525],
+      "size": [190, 70],
+      "sources": [{"path": "app/extractor.py", "line": 220, "label": "judge/refine"}, {"path": "app/hierarchy.py", "line": 372, "label": "audit struktur"}]
+    }
+  ],
+  "connections": [
+    {"id": "input", "from": "documents", "to": "entrypoints", "label": "pilih / unggah", "labelAt": [220, 394], "variant": "emphasis"},
+    {"id": "prepare", "from": "entrypoints", "to": "rendering", "label": "batch halaman/slide", "labelAt": [435, 420]},
+    {"id": "vision", "from": "rendering", "to": "vision-vlm", "label": "gambar + konteks", "labelAt": [672, 394], "variant": "emphasis"},
+    {"id": "extract", "from": "vision-vlm", "to": "pipeline", "label": "klasifikasi dan Markdown", "labelAt": [920, 280]},
+    {"id": "output", "from": "pipeline", "to": "markdown", "label": "hasil terstruktur", "labelAt": [1162, 280], "variant": "emphasis"},
+    {"id": "agent-tools", "from": "entrypoints", "to": "deep-agent", "label": "mode MCP percakapan", "labelAt": [545, 230], "variant": "dashed"},
+    {"id": "agent-vision", "from": "deep-agent", "to": "vision-vlm", "label": "tool vision", "labelAt": [795, 194], "variant": "dashed"},
+    {"id": "diagram-trigger", "from": "pipeline", "to": "diagram-specialist", "label": "jika ada indikator visual", "labelAt": [1042, 244], "variant": "dashed"},
+    {"id": "diagram-render", "from": "diagram-specialist", "to": "mermaid-renderer", "label": "validasi sintaks/render", "labelAt": [1162, 194]},
+    {"id": "diagram-result", "from": "mermaid-renderer", "to": "markdown", "label": "Mermaid tervalidasi", "labelAt": [1274, 244], "variant": "dashed"},
+    {"id": "tabular-trigger", "from": "markdown", "to": "tabular-specialist", "label": "tabel transaksi", "labelAt": [1162, 455], "variant": "emphasis"},
+    {"id": "sqlite-write", "from": "tabular-specialist", "to": "sqlite", "label": "ingest + deduplikasi", "labelAt": [1162, 609]},
+    {"id": "quality", "from": "pipeline", "to": "quality-guardrails", "label": "audit adaptif", "labelAt": [920, 455], "variant": "security"},
+    {"id": "quality-to-tabular", "from": "quality-guardrails", "to": "tabular-specialist", "label": "dual-track / saldo", "labelAt": [920, 609], "variant": "security"}
+  ],
+  "cards": [
+    {"dot": "cyan", "title": "Bukan OCR sederhana", "items": ["VLM membaca layout, tabel, diagram, dan konteks visual; bukan hanya transkripsi karakter.", "Enam spesifikasi dapat dikombinasikan untuk dokumen multi-kolom, chat, slide, dan form approval."]},
+    {"dot": "emerald", "title": "Agent yang hemat dan terarah", "items": ["LangGraph memilih jalur adaptif: judge dan spesialis diagram dilewati pada halaman sederhana.", "Deep Agent menyediakan mode conversational dengan enam peran khusus melalui MCP."]},
+    {"dot": "violet", "title": "Output dapat dipakai", "items": ["Tabel transaksi menjadi SQLite relasional untuk SUM, AVG, filter tanggal, dan audit saldo.", "Diagram diuji compiler Mermaid dan dapat dikoreksi dari error atau perbandingan visual."]}
+  ]
+}
