@@ -1,5 +1,6 @@
 # ============ Environment agent (jangan commit) ============
 .agents/
+.claude/
 skills-lock.json
 
 # ============ Python ============
