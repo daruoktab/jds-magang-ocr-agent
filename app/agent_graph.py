@@ -48,6 +48,7 @@ class DocumentBatchState(TypedDict, total=False):
     doc_type: str  # "pptx", "pdf", "image"
     total_items: int
     current_page: int
+    reset_existing: bool
     batch_start: int
     batch_size: int
     batch_end: int
@@ -56,6 +57,7 @@ class DocumentBatchState(TypedDict, total=False):
     has_more: bool
     next_start: int | None
     incoming_markdown: str | None
+    ingest_transactional_tables: bool
     specs: str
     merged_markdown: str | None
     is_complete: bool
@@ -329,8 +331,10 @@ class AgentDocumentGraph:
 
         current_page_in = state.get("current_page", state.get("batch_start", 1))
 
-        # Jika mulai/re-ekstraksi dari Halaman 1 pada dokumen multi-halaman, bersihkan sisa chunk lama (page > 1)
-        if current_page_in == 1 and total_items > 1:
+        # Menghapus chunk lama adalah aksi destruktif. Hanya lakukan saat pemanggil
+        # secara eksplisit menandai re-ekstraksi penuh; batch biasa harus selalu
+        # mempertahankan halaman yang telah disimpan sebelumnya.
+        if state.get("reset_existing", False) and current_page_in == 1 and total_items > 1:
             for old_p in chunks_dir.glob("page_*.md"):
                 try:
                     num = int(old_p.stem.split("_")[-1])
@@ -401,27 +405,32 @@ class AgentDocumentGraph:
         db_file = db_dir / f"{resolved.stem}.sqlite"
 
         tabular_info: list[dict[str, Any]] = []
-        try:
-            tab_results = extract_and_ingest_tables_from_markdown(
-                markdown_text=merged_md,
-                source_file=str(resolved),
-                db_path=db_file,
-                force_all_tables=False,
-            )
-            for res in tab_results:
-                if res.status == "success":
-                    tabular_info.append({
-                        "table_name": res.table_name,
-                        "rows_ingested": res.total_rows_ingested,
-                        "columns": res.columns,
-                        "verified": res.verification_report.is_valid
-                        if res.verification_report
-                        else False,
-                    })
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Gagal auto-ingest tabel transaksional ke SQLite: %s", exc)
+        if state.get("ingest_transactional_tables", True):
+            try:
+                tab_results = extract_and_ingest_tables_from_markdown(
+                    markdown_text=merged_md,
+                    source_file=str(resolved),
+                    db_path=db_file,
+                    force_all_tables=False,
+                )
+                for res in tab_results:
+                    if res.status == "success":
+                        tabular_info.append({
+                            "table_name": res.table_name,
+                            "rows_ingested": res.total_rows_ingested,
+                            "columns": res.columns,
+                            "verified": res.verification_report.is_valid
+                            if res.verification_report
+                            else False,
+                        })
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Gagal auto-ingest tabel transaksional ke SQLite: %s", exc)
 
-        active_tables = TabularDatabaseManager(db_file).get_active_tables_summary()
+        active_tables = (
+            TabularDatabaseManager(db_file).get_active_tables_summary()
+            if db_file.exists()
+            else []
+        )
 
         metadata = {
             "source_file": str(resolved),

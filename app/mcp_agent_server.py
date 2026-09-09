@@ -34,6 +34,7 @@ import base64
 import json
 import logging
 import random
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1094,6 +1095,10 @@ def submit_page_and_get_next(
         "specs": specs,
         "output_dir": output_dir,
         "dpi": dpi,
+        # Endpoint ini merepresentasikan alur halaman berurutan. Mengirim ulang
+        # halaman 1 berarti memulai ekstraksi baru; jalur save batch generik
+        # tetap mempertahankan chunk lama kecuali reset_existing diminta.
+        "reset_existing": page_number == 1,
     }
     result_state = graph.advance_graph.invoke(initial_state)
 
@@ -1441,13 +1446,13 @@ def preview_markdown_chunks(
     Simulasikan chunking pada teks Markdown.
     """
     try:
-        chunks = sim_preview_chunks(
+        preview = sim_preview_chunks(
             markdown_text,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
         )
         return json.dumps(
-            {"total_chunks": len(chunks), "chunks": chunks},
+            asdict(preview),
             indent=2,
             ensure_ascii=False,
         )
@@ -1605,6 +1610,8 @@ def save_extraction_result(
     specs: str = "plain",
     output_dir: str = "output/agent_gold",
     ingest_transactional_tables: bool = True,
+    current_page: int = 1,
+    reset_existing: bool = False,
 ) -> str:
     """
     Simpan Markdown hasil ekstraksi agent beserta metadata gold data, struktur halaman, dan ingesti SQLite jika ada tabel transaksional.
@@ -1616,6 +1623,8 @@ def save_extraction_result(
         specs: Spesifikasi layout yang digunakan ('plain', 'markdown_hierarchy', 'bilingual_journal', 'presentation_slides', atau komposit).
         output_dir: Direktori tujuan penyimpanan gold data.
         ingest_transactional_tables: Otomatis ingest tabel transaksional ke database SQLite jika terdeteksi.
+        current_page: Nomor halaman batch bila Markdown tidak memuat penanda `<!-- PAGE: N -->`.
+        reset_existing: Hapus chunk halaman lama saat memulai ulang ekstraksi penuh dari halaman 1.
     """
     if not markdown or not markdown.strip():
         return "ERROR: Konten Markdown kosong; tidak ada yang disimpan."
@@ -1628,6 +1637,9 @@ def save_extraction_result(
         "incoming_markdown": markdown,
         "specs": specs,
         "output_dir": output_dir,
+        "current_page": current_page,
+        "reset_existing": reset_existing,
+        "ingest_transactional_tables": ingest_transactional_tables,
     }
     result_state = graph.save_graph.invoke(initial_state)
 

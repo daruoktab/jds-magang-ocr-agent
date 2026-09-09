@@ -16,6 +16,7 @@ AI agent sungguhan via `deepagents.create_deep_agent`:
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -104,7 +105,11 @@ def build_deep_agent(
         """Evaluasi kelayakan diagram visual pada dokumen: apakah cocok dikonversi menjadi kode Mermaid yang valid (flowchart, sequence, ERD, state, class, mindmap, block architecture) atau tidak cocok (grafik statistik kontinu, peta, foto, skematik sirkuit mikro)."""
         proc = preprocess_image(image_path)
         res = classify_diagram_convertibility(proc.processed_path, llm=vlm)
-        return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
+        payload = res.model_dump()
+        rendered_bytes = payload.pop("rendered_image_bytes", None)
+        if rendered_bytes is not None:
+            payload["rendered_image_size_bytes"] = len(rendered_bytes)
+        return json.dumps(payload, indent=2, ensure_ascii=False)
 
     @tool
     def extract_diagram_to_mermaid(
@@ -114,7 +119,11 @@ def build_deep_agent(
         """Ekstrak diagram visual pada dokumen menjadi kode Mermaid.js yang valid dan terstruktur, atau berikan deskripsi terstruktur jika diagram tidak cocok untuk Mermaid."""
         proc = preprocess_image(image_path)
         res = run_extract_diagram(proc.processed_path, llm=vlm, forced_diagram_type=diagram_hint)
-        return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
+        payload = res.model_dump()
+        rendered_bytes = payload.pop("rendered_image_bytes", None)
+        if rendered_bytes is not None:
+            payload["rendered_image_size_bytes"] = len(rendered_bytes)
+        return json.dumps(payload, indent=2, ensure_ascii=False)
 
     @tool
     def extract_presentation_pptx(pptx_path: str) -> str:
@@ -155,7 +164,7 @@ def build_deep_agent(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
         )
-        return json.dumps(preview.model_dump(), indent=2, ensure_ascii=False)
+        return json.dumps(asdict(preview), indent=2, ensure_ascii=False)
 
     @tool
     def classify_table_storage(markdown_text: str) -> str:

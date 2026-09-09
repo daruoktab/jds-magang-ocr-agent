@@ -11,6 +11,7 @@ from app.tabular_db import (
     defensive_map_columns,
     merge_and_deduplicate_tables,
     parse_date_value,
+    parse_numeric_value,
     process_page_tabular_agent,
 )
 
@@ -168,8 +169,8 @@ class TestRelationalTabularDB(unittest.TestCase):
         self.assertEqual(row["ref_no"], "TRX999")
         self.assertEqual(row["catatan_audit"], "Verified OK")
 
-    def test_header_deduplication_reparents_children(self):
-        """Uji bahwa deduplikasi document_headers mengalihkan child rows ke header utama dan tidak menghilangkannya."""
+    def test_header_deduplication_keeps_distinct_fingerprints(self):
+        """Header dengan fingerprint berbeda tidak boleh digabung hanya karena nomor dokumen sama."""
         # Buat Header 1
         h1 = DocumentHeaderRecord(
             doc_type="faktur_pajak",
@@ -196,13 +197,13 @@ class TestRelationalTabularDB(unittest.TestCase):
                 (id2,),
             )
 
-        # Jalankan deduplikasi pada document_headers
+        # Fingerprint berbeda mewakili dokumen/sumber yang berbeda.
         report = merge_and_deduplicate_tables(self.mgr, "document_headers")
-        self.assertEqual(report.duplicates_removed, 1)
+        self.assertEqual(report.duplicates_removed, 0)
 
-        # Pastikan transaksi milik id2 kini teralihkan ke id1 (re-parented)
+        # Transaksi tetap terhubung ke header sumber asal.
         tx_rows = self.mgr.execute_query(
-            "SELECT * FROM transaction_details WHERE header_id = ?;", (id1,)
+            "SELECT * FROM transaction_details WHERE header_id = ?;", (id2,)
         ).rows
         self.assertEqual(len(tx_rows), 1)
         self.assertEqual(tx_rows[0]["description"], "Barang Modal dari File 2")

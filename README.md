@@ -176,7 +176,7 @@ Sistem kini dilengkapi modul cerdas ([`app/tabular_db.py`](app/tabular_db.py)):
 
 ## 🤖 Arsitektur Sub-Agent (Deep Agents Harness — via MCP)
 
-Proyek ini dilengkapi dengan **Master Agent dan 7 Sub-Agent Spesialis** ([app/deep_agent.py](app/deep_agent.py)) berbasis Vision Language Model murni. Deep Agent tersedia via **MCP Server** untuk use case conversational (instruksi bebas, query SQLite interaktif) — bukan via CLI, karena pipeline default CLI sudah mencakup seluruh kemampuan ekstraksi secara lebih cepat dan deterministik.
+Proyek ini dilengkapi dengan **Master Agent dan 6 Sub-Agent Spesialis** ([app/deep_agent.py](app/deep_agent.py)) berbasis Vision Language Model murni. Deep Agent tersedia via **MCP Server** untuk use case conversational (instruksi bebas, query SQLite interaktif) — bukan via CLI, karena pipeline default CLI sudah mencakup seluruh kemampuan ekstraksi secara lebih cepat dan deterministik.
 
 Semua tool Deep Agent terintegrasi dengan konfigurasi caller: `db_path` dan `output_markdown_path` di-bake ke dalam tool, sehingga hasil ekstraksi menulis ke path yang ditentukan.
 
@@ -187,14 +187,13 @@ Semua tool Deep Agent terintegrasi dengan konfigurasi caller: `db_path` dan `out
 | `diagram-mermaid-specialist` | Evaluasi selektif & ekstraksi diagram visual ke kode Mermaid.js yang valid | `classify_diagram_suitability`, `extract_diagram_to_mermaid` |
 | `presentation-specialist` | Ekstraksi slide PowerPoint (.pptx/.ppt): render gambar per slide, lalu dibaca VLM menjadi Markdown | `extract_presentation_pptx` |
 | `pdf-orchestrator` | Orkestrasi pemrosesan PDF multi-halaman & penyambungan kontinuitas heading | `extract_pdf_document` |
-| `chunking-simulator` | Evaluasi kesiapan partisi Markdown dengan header splitter & recursive splitter | `preview_chunks` |
 | `tabular-db-specialist` | Deteksi tabel transaksional, simpan ke SQLite, verifikasi ganda, & eksekusi query SQL | `classify_table_storage`, `ingest_table_to_sqlite`, `verify_sqlite_table`, `query_tabular_database` |
 
 ---
 
 ## 🔌 Model Context Protocol (MCP) Server & Batch Document Discovery
 
-Server MCP berstandar resmi **MCP Python SDK v2.0** ([app/mcp_server.py](app/mcp_server.py)) menyediakan MCP Tools lengkap untuk AI Assistant:
+Server MCP berbasis **MCP Python SDK** (`mcp>=1.0.0`; [app/mcp_server.py](app/mcp_server.py)) menyediakan MCP Tools lengkap untuk AI Assistant:
 
 ### Daftar MCP Tools:
 1. **`scan_document_folders`**: Pindai direktori (mis. `dataset`, `input`, `output`) dan seluruh subfolder untuk mendeteksi folder dokumen.
@@ -233,14 +232,14 @@ Server MCP berstandar resmi **MCP Python SDK v2.0** ([app/mcp_server.py](app/mcp
 ## 🚀 Penggunaan CLI
 
 ### Perilaku Default
-- **Output otomatis disimpan ke file** `output/{nama_file}.md` (bukan dump ke terminal) — pakai `-o` untuk override
+- **Output otomatis disimpan ke file** `output/{nama_file}/{nama_file}.md` (bukan dump ke terminal) — pakai `-o` untuk override
 - **Streaming per-halaman**: Markdown ditulis ke file output sambil dokumen diproses, bukan di akhir
-- **Log real-time otomatis** ke `output/logs/{nama_file}_latest.log` — monitor dengan `Get-Content -Wait` (PowerShell) atau `tail -f` (Linux)
-- **Database SQLite otomatis** di `output/databases/{nama_file}.sqlite`
+- **Log real-time otomatis** ke `output/{nama_file}/logs/{nama_file}_latest.log` — monitor dengan `Get-Content -Wait` (PowerShell) atau `tail -f` (Linux)
+- **Database SQLite otomatis** di `output/{nama_file}/databases/{nama_file}.sqlite`
 
 ### 1. Ekstraksi Dokumen Tunggal (PDF / Gambar / Scan)
 ```bash
-# Ekstraksi otomatis — output ke output/sample.md, SQLite ke output/databases/
+# Ekstraksi otomatis — output ke output/sample/sample.md, SQLite ke output/sample/databases/
 python main.py dataset/sample.pdf
 
 # Dengan path output eksplisit
@@ -306,7 +305,7 @@ python main.py dokumen.pdf --thorough
 
 ### 6. Logging
 ```bash
-# Log otomatis real-time ke output/logs/{nama}_latest.log (default)
+# Log otomatis real-time ke output/{nama}/logs/{nama}_latest.log (default)
 python main.py dokumen.pdf
 
 # Path log kustom

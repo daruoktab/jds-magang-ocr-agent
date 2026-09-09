@@ -346,13 +346,17 @@ def render_completed_document_view(stem: str, output_path: Path) -> None:
             total_imgs = len(images)
             col_ctl1, col_ctl2 = st.columns([2, 2])
             with col_ctl1:
-                selected_page_idx = st.slider(
-                    "Pilih Halaman / Slide:",
-                    min_value=1,
-                    max_value=total_imgs,
-                    value=1,
-                    format="Halaman %d",
-                )
+                if total_imgs == 1:
+                    selected_page_idx = 1
+                    st.caption("Hanya tersedia 1 halaman / slide.")
+                else:
+                    selected_page_idx = st.slider(
+                        "Pilih Halaman / Slide:",
+                        min_value=1,
+                        max_value=total_imgs,
+                        value=1,
+                        format="Halaman %d",
+                    )
             with col_ctl2:
                 view_mode = st.radio(
                     "Mode Teks Kolom Kanan:",

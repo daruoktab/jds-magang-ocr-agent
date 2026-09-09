@@ -14,6 +14,7 @@ Menjalankan server:
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
@@ -263,7 +264,13 @@ def classify_diagram_convertibility(image_path: str) -> str:
         proc = preprocess_image(str(path_obj))
         vlm = build_vlm(settings)
         res = run_classify_diagram(proc.processed_path, llm=vlm)
-        return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
+        payload = res.model_dump()
+        # Payload MCP harus JSON; bytes PNG tersedia melalui path artefak, bukan
+        # disisipkan mentah ke respons JSON.
+        rendered_bytes = payload.pop("rendered_image_bytes", None)
+        if rendered_bytes is not None:
+            payload["rendered_image_size_bytes"] = len(rendered_bytes)
+        return json.dumps(payload, indent=2, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat evaluasi diagram: {e}"
 
@@ -288,7 +295,11 @@ def extract_diagram_to_mermaid(
         proc = preprocess_image(str(path_obj))
         vlm = build_vlm(settings)
         res = run_extract_diagram(proc.processed_path, llm=vlm, forced_diagram_type=diagram_hint)
-        return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
+        payload = res.model_dump()
+        rendered_bytes = payload.pop("rendered_image_bytes", None)
+        if rendered_bytes is not None:
+            payload["rendered_image_size_bytes"] = len(rendered_bytes)
+        return json.dumps(payload, indent=2, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat ekstraksi diagram Mermaid: {e}"
 
@@ -312,7 +323,7 @@ def preview_markdown_chunks(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
     )
-    return json.dumps(preview.model_dump(), indent=2, ensure_ascii=False)
+    return json.dumps(asdict(preview), indent=2, ensure_ascii=False)
 
 
 @server.tool(
@@ -354,7 +365,7 @@ def query_tabular_database(
     Query database SQLite dokumen.
     """
     try:
-        res = query_sqlite(sqlite_db_path, sql_query)
+        res = query_sqlite(sql_query, db_path=sqlite_db_path)
         return json.dumps(res.model_dump(), indent=2, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
         return f"ERROR saat eksekusi query SQLite: {e}"

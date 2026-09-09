@@ -291,11 +291,11 @@ def test_tabular_multi_page_append_continuity(tmp_path: Path):
     # Harus di-append ke tabel yang sama, bukan membuat tabel baru
     assert res2[0].table_name == res1[0].table_name
 
-    # Verifikasi total baris di database SQLite tunggal
+    # Verifikasi total baris tabel detail transaksi pada skema relasional.
     db_mgr = TabularDatabaseManager(db_file)
     active_summary = db_mgr.get_active_tables_summary()
-    assert len(active_summary) == 1
-    assert active_summary[0]["total_rows"] == 5
+    summaries = {item["table_name"]: item for item in active_summary}
+    assert summaries["transaction_details"]["total_rows"] == 5
 
     # Query agregasi SQL
     q_res = db_mgr.execute_query(

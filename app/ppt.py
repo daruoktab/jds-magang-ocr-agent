@@ -38,13 +38,21 @@ logger = logging.getLogger(__name__)
 
 def _find_libreoffice_binary() -> str | None:
     """Temukan binary LibreOffice / soffice di sistem Windows atau Linux."""
-    # 1. Cek di PATH
+    # 1. Path eksplisit dari konfigurasi pengguna.
+    configured = os.environ.get("LIBREOFFICE_BIN")
+    if configured:
+        configured_path = Path(configured).expanduser()
+        if configured_path.is_file():
+            return str(configured_path)
+        logger.warning("LIBREOFFICE_BIN tidak menunjuk ke executable: %s", configured)
+
+    # 2. Cek di PATH
     for name in ("soffice", "libreoffice", "soffice.exe", "libreoffice.exe"):
         found = shutil.which(name)
         if found:
             return found
 
-    # 2. Lokasi standar Windows
+    # 3. Lokasi standar Windows
     if platform.system() == "Windows":
         candidates = [
             Path(r"C:\Program Files\LibreOffice\program\soffice.exe"),
@@ -63,7 +71,7 @@ def _find_libreoffice_binary() -> str | None:
             if c.exists():
                 return str(c)
 
-    # 3. Lokasi standar Linux / macOS
+    # 4. Lokasi standar Linux / macOS
     for loc in (
         "/usr/bin/soffice",
         "/usr/bin/libreoffice",

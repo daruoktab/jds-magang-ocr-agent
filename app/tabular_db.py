@@ -380,8 +380,20 @@ def extract_document_header_info(
     if m_tot:
         total_amount = parse_numeric_value(m_tot.group(1))
 
-    # Fingerprint Hash untuk deduplikasi dokumen sejenis
-    raw_fingerprint = f"{doc_type}|{clean_cell_text(doc_number or '')}|{clean_cell_text(doc_date or '')}|{clean_cell_text(parties or '')}"
+    # Fingerprint harus membedakan dokumen yang tidak memiliki metadata header.
+    # source_file tetap sama pada setiap halaman sebuah dokumen, sehingga halaman
+    # yang diproses terpisah masih mengarah ke header relasional yang sama.
+    raw_fingerprint = "|".join(
+        (
+            doc_type,
+            clean_cell_text(doc_number or ""),
+            clean_cell_text(doc_date or ""),
+            clean_cell_text(parties or ""),
+            str(Path(source_file).resolve()) if source_file else "",
+        )
+    )
+    if not source_file and not any((doc_number, doc_date, parties, doc_title)):
+        raw_fingerprint = f"{doc_type}|{hashlib.sha256(markdown_text.encode('utf-8')).hexdigest()}"
     fingerprint_hash = hashlib.sha256(raw_fingerprint.encode("utf-8")).hexdigest()[:16]
 
     return DocumentHeaderRecord(
@@ -510,26 +522,26 @@ def parse_numeric_value(val_str: str) -> float | int | None:
     if not cleaned:
         return None
 
-    # Format Internasional: 1,234,567.89 (koma ribuan, titik desimal)
-    if re.match(r"^\d{1,3}(,\d{3})*(\.\d+)?$", cleaned):
-        try:
-            num = float(cleaned.replace(",", ""))
-            return -num if is_negative else num
-        except ValueError:
-            pass
+    has_dot = "." in cleaned
+    has_comma = "," in cleaned
+    # Jika ada dua pemisah, yang paling kanan adalah pemisah desimal.
+    if has_dot and has_comma:
+        decimal_sep = "." if cleaned.rfind(".") > cleaned.rfind(",") else ","
+        thousands_sep = "," if decimal_sep == "." else "."
+        normalized = cleaned.replace(thousands_sep, "").replace(decimal_sep, ".")
+    elif has_dot or has_comma:
+        sep = "." if has_dot else ","
+        whole, fraction = cleaned.rsplit(sep, 1)
+        # Satu pemisah dengan tepat tiga digit sesudahnya lazim dipakai sebagai
+        # pemisah ribuan dalam dokumen Indonesia (Rp 50.000, 1.234).
+        is_thousands = len(fraction) == 3 and len(whole.replace(sep, "")) >= 1
+        normalized = cleaned.replace(sep, "") if is_thousands else f"{whole}.{fraction}"
+    else:
+        normalized = cleaned
 
-    # Format Eropa/Indonesia: 1.234.567,89 (titik ribuan, koma desimal)
-    if re.match(r"^\d{1,3}(\.\d{3})*(,\d+)?$", cleaned):
+    if re.match(r"^\d+(\.\d+)?$", normalized):
         try:
-            num = float(cleaned.replace(".", "").replace(",", "."))
-            return -num if is_negative else num
-        except ValueError:
-            pass
-
-    # Angka polos atau desimal standar: 12345.67
-    if re.match(r"^\d+(\.\d+)?$", cleaned):
-        try:
-            num = float(cleaned)
+            num = float(normalized)
             return -num if is_negative else num
         except ValueError:
             pass
@@ -615,9 +627,24 @@ def sanitize_markdown_tables(markdown_text: str) -> str:
                     peek_idx += 1
                 if peek_idx < len(lines):
                     peek_line = lines[peek_idx].strip()
+                    # Header yang langsung diikuti separator menandai tabel baru;
+                    # jangan gabungkan dua tabel yang hanya dipisahkan baris kosong.
+                    is_new_table = (
+                        peek_line.startswith("|")
+                        and peek_line.endswith("|")
+                        and peek_idx + 1 < len(lines)
+                        and re.match(
+                            r"^\|(\s*:?-+:?\s*\|)+$",
+                            lines[peek_idx + 1].strip(),
+                        )
+                    )
                     # Jika baris berikutnya adalah baris tabel '| ... |' atau sub-header '... | ... |'
-                    if (peek_line.startswith("|") and peek_line.endswith("|")) or (
-                        "|" in peek_line and peek_line.endswith("|")
+                    if (
+                        (
+                            (peek_line.startswith("|") and peek_line.endswith("|"))
+                            or ("|" in peek_line and peek_line.endswith("|"))
+                        )
+                        and not is_new_table
                     ):
                         # Lewati baris kosong ini agar tabel tidak terputus
                         i += 1
@@ -1213,10 +1240,6 @@ class TabularDatabaseManager:
                 if len(matched_keys) >= 2:
                     score = max(score, 0.75)
 
-                # Jika berasal dari dokumen prefix yang sama dan jumlah kolom sama/hampir sama
-                if doc_prefix and t.startswith(doc_prefix) and abs(len(sanitized_incoming) - len(existing_cols)) <= 1:
-                    score = max(score, 0.70)
-
                 if score >= threshold and score > best_score:
                     best_score = score
                     best_match = t
@@ -1460,15 +1483,6 @@ class TabularDatabaseManager:
                 if row:
                     existing_id = int(row["header_id"])
 
-            if existing_id is None and header.doc_number:
-                cur = conn.execute(
-                    'SELECT header_id FROM document_headers WHERE doc_number = ? AND doc_type = ?;',
-                    (header.doc_number, header.doc_type),
-                )
-                row = cur.fetchone()
-                if row:
-                    existing_id = int(row["header_id"])
-
             if existing_id is not None:
                 conn.execute(
                     """UPDATE document_headers SET
@@ -1580,7 +1594,8 @@ class TabularDatabaseManager:
                 credit = parse_numeric_value(str(credit_raw)) if credit_raw is not None else None
                 balance = parse_numeric_value(str(bal_raw)) if bal_raw is not None else None
 
-                raw_hash_str = f"{header_id}|{txn_date or ''}|{desc}|{ref_no or ''}|{debit or 0}|{credit or 0}|{balance or 0}"
+                raw_row_values = "\x1f".join(clean_cell_text(str(value)) for value in r)
+                raw_hash_str = f"{header_id}|{txn_date or ''}|{desc}|{ref_no or ''}|{debit or 0}|{credit or 0}|{balance or 0}|{raw_row_values}"
                 row_hash = hashlib.sha256(raw_hash_str.encode("utf-8")).hexdigest()[:24]
 
                 vals: list[Any] = [
@@ -1772,8 +1787,7 @@ class TabularDatabaseManager:
                     candidates = ["header_id", "role_party", "name"]
                     match_columns = [c for c in candidates if c in all_cols]
                 elif table_name == "document_headers":
-                    candidates = ["doc_number", "doc_type"] if "doc_number" in all_cols else ["fingerprint_hash"]
-                    match_columns = [c for c in candidates if c in all_cols]
+                    match_columns = ["fingerprint_hash"] if "fingerprint_hash" in all_cols else []
                 else:
                     candidates = [c for c in all_cols if not c.startswith("_") and c != pk_col]
                     match_columns = candidates[: min(4, len(candidates))]
@@ -1789,10 +1803,12 @@ class TabularDatabaseManager:
 
             group_by_str = ", ".join([f'"{c}"' for c in match_columns])
             where_clause = " AND ".join([f'"{c}" IS ?' for c in match_columns])
+            non_null_clause = " AND ".join([f'"{c}" IS NOT NULL' for c in match_columns])
 
             dup_groups = conn.execute(f"""
                 SELECT {group_by_str}, COUNT(*) as cnt
                 FROM "{table_name}"
+                WHERE {non_null_clause}
                 GROUP BY {group_by_str}
                 HAVING cnt > 1;
             """).fetchall()
@@ -2223,7 +2239,7 @@ def process_page_tabular_agent(
     db_path: str | Path | None = None,
     table_name_prefix: str | None = None,
     append_if_matching: bool = True,
-    force_all_tables: bool = True,
+    force_all_tables: bool = False,
     llm: BaseChatModel | None = None,
 ) -> tuple[PageTabularEvent, list[TableIngestionResult]]:
     """
@@ -2294,11 +2310,7 @@ def process_page_tabular_agent(
         is_canon_txn, _, _ = defensive_map_columns(headers, TRANSACTION_CANONICAL_ALIASES, "transaction")
         is_canon_sig, _, _ = defensive_map_columns(headers, SIGNATORY_CANONICAL_ALIASES, "signatory")
 
-        is_relational_txn = (
-            sqlite_hint == "transaction_details"
-            or is_canon_txn
-            or classification.table_type in ("financial_statement", "transactional_log")
-        )
+        is_relational_txn = sqlite_hint == "transaction_details" or is_canon_txn
         is_relational_sig = (
             sqlite_hint == "document_signatories"
             or is_canon_sig
@@ -2369,7 +2381,7 @@ def process_page_tabular_agent(
                     if not c["name"].startswith("_")
                 ],
             )
-        else:
+        elif force_all_tables:
             matched = None
             if append_if_matching:
                 matched = db_manager.find_matching_table(
@@ -2419,6 +2431,12 @@ def process_page_tabular_agent(
                 replace=not is_append,
             )
             total_page_rows += rows_ingested
+
+        else:
+            actions.append(
+                f"Tabel #{idx} ({classification.table_type}) dilewati karena bukan tabel transaksional atau penandatangan."
+            )
+            continue
 
         table_mappings_for_tagging.append((tbl, target_table))
 
@@ -2508,10 +2526,22 @@ def cross_verify_dual_track(
     total_md_tables = len(md_tables)
     total_sqlite_tables = len(sqlite_tables)
 
-    # Petakan setiap tabel Markdown ke tabel SQLite tujuannya
+    # Petakan setiap tabel Markdown ke tabel SQLite tujuannya. Tabel relasional
+    # tidak selalu memiliki tag, maka gunakan pemetaan kanonikal sebelum mencoba
+    # pencocokan skema generik.
     md_rows_per_sqlite_table: dict[str, int] = {}
     for tbl in md_tables:
         t_target = tbl.get("sqlite_table_hint")
+        is_txn, _, _ = defensive_map_columns(
+            tbl["headers"], TRANSACTION_CANONICAL_ALIASES, "transaction"
+        )
+        is_signatory, _, _ = defensive_map_columns(
+            tbl["headers"], SIGNATORY_CANONICAL_ALIASES, "signatory"
+        )
+        if not t_target and is_txn:
+            t_target = "transaction_details"
+        elif not t_target and is_signatory:
+            t_target = "document_signatories"
         if not t_target and sqlite_tables:
             matched = db_manager.find_matching_table(tbl["headers"])
             if matched:
@@ -2523,7 +2553,14 @@ def cross_verify_dual_track(
             md_rows_per_sqlite_table[t_target] = md_rows_per_sqlite_table.get(t_target, 0) + len(tbl["rows"])
 
     total_md_rows = sum(len(t["rows"]) for t in md_tables)
-    total_sqlite_rows = sum(t_info.get("row_count", 0) for t_info in sqlite_tables.values())
+    data_table_names = {
+        name
+        for name in sqlite_tables
+        if name not in ("document_headers", "document_signatories")
+    }
+    total_sqlite_rows = sum(
+        sqlite_tables[name].get("row_count", 0) for name in data_table_names
+    )
     logger.info(
         "Guardrail Cross-Verification: Memeriksa integritas teks Markdown vs SQLite (%d tabel MD, %d tabel SQLite)...",
         total_md_tables,
@@ -2538,16 +2575,18 @@ def cross_verify_dual_track(
         expected_md_rows = md_rows_per_sqlite_table.get(t_name, 0)
         cols = [c["name"] for c in t_info.get("columns", []) if not c["name"].startswith("_")]
 
-        # Tabel metadata (header & penandatangan) berasal dari parsing teks, bukan tabel Markdown
-        is_metadata_table = t_name in ("document_headers", "document_signatories")
-        if is_metadata_table:
-            is_synced = True
-            status_str = "synchronized"
+        if t_name == "document_headers":
+            expected_md_rows = 1 if stitched_markdown.strip() else 0
+            is_synced = sql_rows == expected_md_rows
+            status_str = "synchronized" if is_synced else "row_count_mismatch"
+        elif t_name == "document_signatories":
+            is_synced = sql_rows == expected_md_rows
+            status_str = "synchronized" if is_synced else "row_count_mismatch"
         else:
             is_synced = (sql_rows == expected_md_rows) or (sql_rows > 0 and expected_md_rows == 0 and total_md_rows == sql_rows)
             status_str = "synchronized" if is_synced else "row_count_mismatch"
 
-        if not is_synced and expected_md_rows > 0:
+        if not is_synced:
             discrepancies.append(
                 f"Tabel SQLite '{t_name}' ({sql_rows} baris) berbeda dengan data Markdown terkait ({expected_md_rows} baris)."
             )
@@ -2556,7 +2595,7 @@ def cross_verify_dual_track(
             {
                 "table_name": t_name,
                 "sqlite_rows": sql_rows,
-                "markdown_rows_matched": expected_md_rows or sql_rows,
+                "markdown_rows_matched": expected_md_rows,
                 "columns_count": len(cols),
                 "columns": cols,
                 "status": status_str,

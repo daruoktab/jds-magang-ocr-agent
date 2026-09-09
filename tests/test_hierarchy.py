@@ -197,7 +197,7 @@ Berikut adalah tabel transaksi:
         assert event1.page_number == 1
         assert event1.tables_detected == 1
         assert event1.rows_ingested_total == 2
-        assert event1.status == "created_new_table"
+        assert event1.status == "appended_existing_table"
         assert len(res1) == 1
         assert res1[0].verification_report is not None
         assert res1[0].verification_report.is_valid is True
@@ -246,7 +246,7 @@ Berikut adalah tabel transaksi:
         assert isinstance(guard_report, DualTrackGuardrailReport)
         assert guard_report.guardrail_status == "PASSED"
         assert guard_report.total_markdown_tables == 2
-        assert guard_report.total_sqlite_tables == 1
+        assert guard_report.total_sqlite_tables == 3
         assert guard_report.total_sqlite_rows == 4
         assert len(guard_report.discrepancies) == 0
 
@@ -350,11 +350,11 @@ def test_multipage_bank_statement_tagged_metadata_single_sqlite_table() -> None:
         assert event2.status == "appended_existing_table"
         p2_tagged = event2.tagged_markdown or p2_md
 
-        # SQLite harus HANYA memiliki 1 tabel
+        # Skema relasional selalu memiliki header, detail transaksi, dan penandatangan.
         db_mgr = TabularDatabaseManager(db_path)
         tables = list(db_mgr.inspect_database()["tables"].keys())
-        assert len(tables) == 1
-        t_name = tables[0]
+        assert set(tables) == {"document_headers", "document_signatories", "transaction_details"}
+        t_name = "transaction_details"
         total_rows = db_mgr.execute_query(f'SELECT COUNT(*) as cnt FROM "{t_name}";').rows[0]["cnt"]
         assert total_rows == 5
 
@@ -367,7 +367,6 @@ def test_multipage_bank_statement_tagged_metadata_single_sqlite_table() -> None:
             total_pages=2,
         )
         assert report.guardrail_status == "PASSED"
-        assert report.total_sqlite_tables == 1
+        assert report.total_sqlite_tables == 3
         assert report.total_sqlite_rows == 5
         assert len(report.discrepancies) == 0
-
