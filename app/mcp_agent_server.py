@@ -43,6 +43,7 @@ from mcp.types import ContentBlock, ImageContent, TextContent
 
 from .multi_page import preview_markdown_chunks as sim_preview_chunks
 from .preprocess import preprocess_image
+from .prompts import MARKDOWN_LINE_BREAK_RULES, MERMAID_EXTRACTION_RULES
 from .tabular_db import (
     TabularDatabaseManager,
     extract_and_ingest_tables_from_markdown,
@@ -290,6 +291,8 @@ server = MCPServer(
     ),
     instructions=(
         "Alur kerja wajib agent saat membuat gold data example (Batch-by-Batch Pipeline):\n"
+        f"{MARKDOWN_LINE_BREAK_RULES}\n\n"
+        f"{MERMAID_EXTRACTION_RULES}\n\n"
         "1. Panggil 'open_file_dialog' / 'open_folder_dialog' jika user ingin memilih file/folder secara visual lewat pop-up File Explorer Windows, atau gunakan 'scan_document_folders' untuk pemindaian direktori.\n"
         "2. TANYAKAN KE USER folder/file mana yang datanya ingin diproses (user memilih, mis. 'input/ppt/english' atau via file dialog).\n"
         "3. TANYAKAN KE USER berapa banyak data random yang ingin dibuat (tanpa duplikasi).\n"

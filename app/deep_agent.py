@@ -36,6 +36,7 @@ from .multi_page import preview_markdown_chunks
 from .pdf import process_multipage_pdf
 from .ppt import process_presentation_vision
 from .preprocess import preprocess_image
+from .prompts import MARKDOWN_LINE_BREAK_RULES, MERMAID_EXTRACTION_RULES
 from .tabular_db import (
     TabularDatabaseManager,
     TabularVerifier,
@@ -328,6 +329,8 @@ def build_deep_agent(
         "  - 'pdf-orchestrator'          : Mengelola multi-halaman PDF dengan heading continuity.\n"
         "  - 'tabular-db-specialist'     : Memisahkan tabel transaksional ke SQLite dan melakukan double-verification.\n\n"
         "Instruksi Kerja:\n"
+        f"{MARKDOWN_LINE_BREAK_RULES}\n\n"
+        f"{MERMAID_EXTRACTION_RULES}\n\n"
         "1. Identifikasi format dokumen masukan (PDF, PPTX, gambar tunggal).\n"
         "2. Delegasikan tugas ke sub-agent yang relevan. Contoh: 'diagram-mermaid-specialist' jika ada diagram/topologi, "
         "'tabular-db-specialist' jika ada tabel data transaksional.\n"

@@ -22,6 +22,8 @@ from .multi_page import (
 from .prompts import (
     CLASSIFY_PROMPT,
     CLASSIFY_SYSTEM,
+    MARKDOWN_LINE_BREAK_RULES,
+    MERMAID_EXTRACTION_RULES,
     SYSTEM_DOCUMENT_EXTRACTOR,
     build_extraction_prompt,
     normalize_specs,
@@ -233,8 +235,9 @@ class VisionExtractor:
         judge_prompt = (
             "Periksa DRAFT MARKDOWN berikut terhadap GAMBAR ASLI DOKUMEN.\n\n"
             "Panduan verifikasi:\n"
+            f"{MARKDOWN_LINE_BREAK_RULES}\n\n"
             "1. KELENGKAPAN: Pastikan seluruh teks, judul, dan data pada gambar tercakup akurat.\n"
-            "2. DIAGRAM VISUAL: Jika terdapat diagram, pertahankan representasi diagram atau deskripsinya.\n"
+            f"2. DIAGRAM VISUAL:\n{MERMAID_EXTRACTION_RULES}\n"
             "3. INTEGRITAS TABEL: Pastikan tabel Markdown (GFM) utuh tanpa baris kosong di tengah.\n"
             "4. KEBERSIHAN: Hapus teks duplikat berulang jika ada.\n"
             "5. JIKA DRAFT SUDAH LENGKAP & BENAR: Kembalikan teks DRAFT MARKDOWN secara persis tanpa perubahan.\n\n"
@@ -295,6 +298,14 @@ class VisionExtractor:
 
             if not refined_md:
                 logger.warning("[Extractor:Judge] Hasil judge kosong. Menggunakan draft awal.")
+                return draft_markdown
+
+            # Judge tidak boleh menghilangkan satu pun diagram dari draft.
+            mermaid_fence = r"^\s*```mermaid\b"
+            draft_diagrams = len(re.findall(mermaid_fence, draft_markdown, re.MULTILINE | re.IGNORECASE))
+            refined_diagrams = len(re.findall(mermaid_fence, refined_md, re.MULTILINE | re.IGNORECASE))
+            if refined_diagrams < draft_diagrams:
+                logger.warning("[Extractor:Judge] Blok Mermaid berkurang (%d -> %d). Mempertahankan draft.", draft_diagrams, refined_diagrams)
                 return draft_markdown
 
             # Guardrail 2: Cegah pembengkakan liar akibat halusinasi / perulangan

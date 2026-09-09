@@ -17,7 +17,36 @@ from __future__ import annotations
 
 import re
 
+MARKDOWN_LINE_BREAK_RULES: str = """
+### Aturan Pemisah Baris Markdown
+- Output Markdown boleh dan WAJIB memakai tag HTML literal <br> untuk pergantian baris bermakna dalam satu blok: identitas Nama/Jabatan/Alamat, alamat bertingkat, kop surat, header email Dari/Date/Subject/To, dan blok tanda tangan.
+- Contoh teks: Nama: Budi<br>
+  Jabatan: Manager<br>
+  Alamat: Gedung A<br>
+  Jalan Merdeka 1
+- Newline biasa saja tidak cukup untuk mempertahankan pergantian baris saat Markdown dirender. Jangan meng-escape tag menjadi &lt;br&gt; atau membungkus tag dalam backtick pada hasil akhir.
+- Jika satu sel tabel berisi beberapa baris bermakna, pisahkan dengan <br> dalam sel yang sama, contoh: | Alamat | Gedung A<br>Jalan Merdeka 1 |. Setiap baris tabel tetap satu baris fisik.
+- Gunakan baris kosong untuk memisahkan paragraf. Jangan menambahkan <br> pada setiap bungkus baris otomatis paragraf, heading, antarbutir list, antarbaris tabel, marker halaman, atau baris kode.
+- Pertahankan <br> yang sudah benar ketika mengoreksi atau menggabungkan hasil. Khusus label Mermaid gunakan <br/> di dalam label bertanda kutip.
+""".strip()
+
 # --- System Prompt Utama -----------------------------------------------------
+MERMAID_EXTRACTION_RULES: str = '''
+### Aturan Diagram Mermaid
+- Periksa gambar setiap halaman PDF/slide. Jika terlihat diagram alir, flowchart, swimlane, pohon keputusan, sequence, ERD, atau bagan relasi, WAJIB ekstrak menjadi blok kode ```mermaid tanpa menunggu permintaan tambahan.
+- Deskripsi blockquote saja TIDAK cukup untuk diagram tersebut. Pertahankan teks halaman dan caption, lalu tempatkan blok Mermaid di dekat caption diagram terkait.
+- Jika ada beberapa diagram dalam satu halaman, buat satu blok Mermaid terpisah untuk setiap diagram. Pertahankan node, arah panah, label cabang, dan kelompok/swimlane yang terlihat; jangan mengarang relasi.
+- Untuk flowchart gunakan flowchart TD atau flowchart LR. Gunakan ID unik sederhana, label dalam tanda kutip ganda, dan <br/> untuk baris baru dalam label. Contoh sintaks (bukan konten untuk disalin):
+```mermaid
+flowchart TD
+  A["Proses pertama"] --> B{"Keputusan?"}
+  B -->|Ya| C["Proses berikutnya"]
+```
+- Untuk swimlane gunakan subgraph per peran; hubungkan node prosesnya, bukan ID subgraph ke dirinya sendiri.
+- Foto, logo, grafik statistik, peta, serta tabel simbol tanpa alur/relasi cukup diberi deskripsi atau tabel. Penyebutan kata flowchart dalam paragraf bukan bukti adanya diagram visual.
+- Saat menggabungkan atau mengoreksi Markdown, pertahankan seluruh blok Mermaid. Perbaiki sintaksnya jika perlu; jangan menggantinya dengan ringkasan/deskripsi teks.
+'''.strip()
+
 SYSTEM_DOCUMENT_EXTRACTOR: str = """
 Kamu adalah sistem ekstraksi dokumen internal perusahaan. Tugasmu mengubah isi gambar dokumen menjadi Markdown bersih yang siap dipakai untuk arsip, pencarian dokumen, RAG, dan audit internal.
 
@@ -40,8 +69,8 @@ Aturan wajib:
     - DILARANG menuliskan delimiter tabel `|---|` di dalam sel data baris. Gunakan '-' atau '—' untuk sel bernilai strip.
 11. Untuk chat, ekstrak sebagai transkrip percakapan yang urut.
 12. Untuk tanda tangan/paraf, ekstrak hanya informasi yang benar-benar terlihat; jangan menebak status approval jika tidak tertulis.
-13. Jika ada diagram, topologi, flowchart, atau bagan, deskripsikan komponen dan relasi yang terlihat dalam blockquote: > **[Diagram/Visual]:** ... Jangan membuat kode Mermaid kecuali diminta secara eksplisit.
-""".strip()
+13. Diagram alir/relasi yang terlihat WAJIB menjadi blok Mermaid sesuai aturan berikut. Visual yang tidak cocok untuk Mermaid dideskripsikan dalam blockquote: > **[Diagram/Visual]:** ...
+""".strip() + "\n\n" + MARKDOWN_LINE_BREAK_RULES + "\n\n" + MERMAID_EXTRACTION_RULES
 
 # --- Modul Aturan Komposisional (Composable Rule Modules) --------------------
 
@@ -96,8 +125,7 @@ _RULE_PRESENTATION_SLIDES: str = """
 - Jangan menulis penanda komentar seperti <!-- SLIDE: 1 --> atau <!-- PAGE: 1 -->.
 - Jangan menebak nomor slide.
 - Tulis bullet points sesuai hierarki visual.
-- Jika ada diagram, bagan, topologi, atau visual penting, tulis deskripsi:
-  > **[Diagram/Visual]:** deskripsi komponen dan relasi utama.
+- Jika ada diagram alir/relasi, buat blok Mermaid sesuai aturan diagram. Untuk foto atau visual non-relasional, tulis deskripsi dalam blockquote > **[Diagram/Visual]:** ...
 - Jika ada tabel, ubah menjadi tabel Markdown.
 - Jangan mengulang konten slide yang sama.
 """.strip()
@@ -392,7 +420,7 @@ def build_extraction_prompt(
     Bangun prompt ekstraksi komposit modular yang menggabungkan seluruh aturan spesifikasi aktif.
     """
     active_specs = normalize_specs(specs)
-    prompt_blocks: list[str] = [_RULE_BASE]
+    prompt_blocks: list[str] = [_RULE_BASE, MARKDOWN_LINE_BREAK_RULES, MERMAID_EXTRACTION_RULES]
 
     for spec in _select_rule_specs(active_specs):
         rule = SPEC_METADATA.get(spec, {}).get("rule")
