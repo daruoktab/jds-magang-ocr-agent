@@ -18,6 +18,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from .pdf import pdf_page_count, pdf_to_images
+from .prompts import MARKDOWN_LINE_BREAK_RULES, MERMAID_EXTRACTION_RULES
 from .ppt import count_presentation_slides, render_presentation_slides_to_images
 from .tabular_db import extract_and_ingest_tables_from_markdown
 
@@ -84,6 +85,8 @@ def get_subagent_task_directives(
             "EVALUASI GAMBAR HALAMAN INI: "
             "Pilih 1 atau lebih peran spesialis yang relevan di bawah ini, dan terapkan SEMUA aturan & formatnya secara ketat dalam hasil Markdown Anda."
         ),
+        "markdown_format_rules": MARKDOWN_LINE_BREAK_RULES,
+        "diagram_format_rules": MERMAID_EXTRACTION_RULES,
         "available_specialist_roles": [
             "mermaid_specialist",
             "tabular_sqlite_specialist",
@@ -98,7 +101,11 @@ def get_subagent_task_directives(
                 "mandatory_action": (
                     "WAJIB diekstrak sebagai blok kode ```mermaid (misal flowchart TD / flowchart LR / sequenceDiagram). "
                     "DILARANG KERAS menggunakan panah teks biasa (↓, ->, -->) dalam daftar teks untuk diagram alir. "
-                    "Gunakan identifier bersih (tanpa spasi/simbol) dan beri tanda kutip ganda pada label teks node."
+                    "Gunakan identifier bersih (tanpa spasi/simbol) dan beri tanda kutip ganda pada label teks node. "
+                    "Jika satu label node terdiri dari beberapa baris atau memuat line break visual, "
+                    "WAJIB pertahankan pemisah baris tersebut sebagai tag HTML <br/> di dalam label yang diapit tanda kutip ganda; "
+                    "contoh: A[\"Baris pertama<br/>Baris kedua\"]. Jangan mengganti <br/> dengan spasi atau newline literal "
+                    "di dalam satu baris kode Mermaid, dan jangan menaruh <br/> di luar label node."
                 ),
             },
             "tabular_sqlite_specialist": {

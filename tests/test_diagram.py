@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -255,6 +255,18 @@ def test_extract_diagram_to_mermaid_success(tmp_path):
     assert res.text_summary is not None and "Alur autentikasi token JWT" in res.text_summary
 
 
+def test_missing_renderer_preserves_mermaid_without_retry(tmp_path):
+    img_file = tmp_path / "flow.png"
+    _create_dummy_image(img_file)
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value.content = '```mermaid\nflowchart TD\n A["Start"] --> B["End"]\n```'
+    with patch("app.diagram.render_mermaid_to_png", return_value=(False, None, "MMDC executable not found at 'mmdc'")):
+        result = extract_diagram_to_mermaid(img_file, mock_llm, forced_diagram_type="flowchart")
+    assert result.is_mermaid
+    assert 'A["Start"] --> B["End"]' in result.mermaid_code
+    assert mock_llm.invoke.call_count == 1
+
+
 def test_extract_diagram_unsuitable_fallback(tmp_path):
     img_file = tmp_path / "map_test.png"
     _create_dummy_image(img_file)
@@ -425,4 +437,3 @@ if __name__ == "__main__":
         print("✓ test_extract_diagram_visual_feedback_loop passed")
 
     print("All tests in test_diagram.py passed successfully!")
-

@@ -57,6 +57,19 @@ class TestAgentOrchestrator(unittest.TestCase):
         self.assertIn("Judul Terkoreksi", refined)
         self.assertIn("```mermaid", refined)
 
+    def test_judge_preserves_diagrams_when_replaced_with_description(self):
+        diagram = '```mermaid\nflowchart TD\n A["Start"] --> B["End"]\n```'
+        mock_llm = MagicMock()
+        extractor = VisionExtractor(mock_llm)
+        for remaining in (0, 1):
+            with self.subTest(remaining=remaining):
+                draft = "# Dua Diagram\n\n" + diagram + "\n\n" + diagram
+                mock_llm.invoke.return_value.content = (
+                    "# Dua Diagram\n\n> **[Diagram/Visual]:** Alur proses.\n\n"
+                    + (diagram if remaining else "")
+                )
+                self.assertEqual(extractor.judge_and_refine(str(self.img_file), draft), draft)
+
     def test_pipeline_orchestration_with_diagram_and_judge(self):
         mock_llm = MagicMock()
 

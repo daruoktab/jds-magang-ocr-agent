@@ -22,6 +22,8 @@ from .multi_page import (
 from .prompts import (
     CLASSIFY_PROMPT,
     CLASSIFY_SYSTEM,
+    MARKDOWN_LINE_BREAK_RULES,
+    MERMAID_EXTRACTION_RULES,
     SYSTEM_DOCUMENT_EXTRACTOR,
     build_extraction_prompt,
     normalize_specs,
@@ -29,6 +31,10 @@ from .prompts import (
 from .schemas import PageInspectionResult
 
 logger = logging.getLogger("app.extractor")
+
+
+class EmptyLLMResponseError(RuntimeError):
+    """LLM berhasil dipanggil tetapi tidak menghasilkan konten yang dapat dipakai."""
 
 
 class VisionExtractor:
@@ -229,8 +235,9 @@ class VisionExtractor:
         judge_prompt = (
             "Periksa DRAFT MARKDOWN berikut terhadap GAMBAR ASLI DOKUMEN.\n\n"
             "Panduan verifikasi:\n"
+            f"{MARKDOWN_LINE_BREAK_RULES}\n\n"
             "1. KELENGKAPAN: Pastikan seluruh teks, judul, dan data pada gambar tercakup akurat.\n"
-            "2. DIAGRAM VISUAL: Jika terdapat diagram, pertahankan representasi diagram atau deskripsinya.\n"
+            f"2. DIAGRAM VISUAL:\n{MERMAID_EXTRACTION_RULES}\n"
             "3. INTEGRITAS TABEL: Pastikan tabel Markdown (GFM) utuh tanpa baris kosong di tengah.\n"
             "4. KEBERSIHAN: Hapus teks duplikat berulang jika ada.\n"
             "5. JIKA DRAFT SUDAH LENGKAP & BENAR: Kembalikan teks DRAFT MARKDOWN secara persis tanpa perubahan.\n\n"
@@ -291,6 +298,14 @@ class VisionExtractor:
 
             if not refined_md:
                 logger.warning("[Extractor:Judge] Hasil judge kosong. Menggunakan draft awal.")
+                return draft_markdown
+
+            # Judge tidak boleh menghilangkan satu pun diagram dari draft.
+            mermaid_fence = r"^\s*```mermaid\b"
+            draft_diagrams = len(re.findall(mermaid_fence, draft_markdown, re.MULTILINE | re.IGNORECASE))
+            refined_diagrams = len(re.findall(mermaid_fence, refined_md, re.MULTILINE | re.IGNORECASE))
+            if refined_diagrams < draft_diagrams:
+                logger.warning("[Extractor:Judge] Blok Mermaid berkurang (%d -> %d). Mempertahankan draft.", draft_diagrams, refined_diagrams)
                 return draft_markdown
 
             # Guardrail 2: Cegah pembengkakan liar akibat halusinasi / perulangan
@@ -355,7 +370,8 @@ class VisionExtractor:
         ]
 
         response = self.llm.invoke(messages)
-        md_text = strip_thinking_process(str(response.content).strip())
+        raw_content = str(response.content or "").strip()
+        md_text = strip_thinking_process(raw_content)
 
         # Bersihkan pembungkus markdown block ```markdown ... ``` jika VLM membungkusnya
         if md_text.startswith("```markdown") and md_text.endswith("```"):
@@ -367,4 +383,14 @@ class VisionExtractor:
 
         md_text = strip_page_markers(md_text)
         md_text = collapse_consecutive_duplicate_blocks(md_text)
+        if not md_text.strip():
+            logger.error(
+                "[Extractor:Markdown] Respons LLM kosong setelah sanitasi untuk image=%s "
+                "(raw_chars=%d). Proses dihentikan agar output kosong tidak dianggap sukses.",
+                image_path,
+                len(raw_content),
+            )
+            raise EmptyLLMResponseError(
+                f"Respons LLM kosong saat mengekstrak Markdown: {image_path}"
+            )
         return md_text

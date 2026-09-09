@@ -813,7 +813,7 @@ def extract_diagram_to_mermaid(
             render_ok, png_data, render_err = render_mermaid_to_png(mermaid_block)
             is_env_error = any(
                 marker in (render_err or "").lower()
-                for marker in ("tidak terinstal", "chrome-headless-shell", "could not find chrome")
+                for marker in ("tidak terinstal", "chrome-headless-shell", "could not find chrome", "mmdc executable not found")
             )
             if not render_ok and render_err and not is_env_error:
                 logger.warning(
