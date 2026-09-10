@@ -56,6 +56,14 @@ def _save_uploaded_file(uploaded_file: UploadedFile, output_dir: Path) -> Path:
     return target_path
 
 
+def _save_uploaded_files(
+    uploaded_files: list[UploadedFile] | tuple[UploadedFile, ...],
+    output_dir: Path,
+) -> list[Path]:
+    """Simpan beberapa file upload dan kembalikan path dalam urutan pilihan user."""
+    return [_save_uploaded_file(uploaded_file, output_dir) for uploaded_file in uploaded_files]
+
+
 def _get_sqlite_db_for_file(file_stem: str, output_dir: Path) -> Path | None:
     """Cari file database SQLite yang terkait dengan file yang diproses."""
     db_candidates = [
@@ -216,6 +224,32 @@ def render_mermaid_html(mermaid_code: str, height: int = 420) -> None:
 # ==============================================================================
 # Komponen Monitoring Live Real-Time (Auto-Refresh Fragment)
 # ==============================================================================
+
+
+@st.fragment(run_every=2)
+def render_batch_monitor(stems: list[str], output_path: Path) -> None:
+    """Tampilkan semua hasil upload batch agar dokumen selain yang aktif tetap terlihat."""
+    job_manager = JobManager.get_instance()
+    st.markdown("### Dokumen dalam batch upload")
+    labels = {
+        "running": "Sedang diproses",
+        "completed": "Selesai",
+        "failed": "Gagal",
+        "canceled": "Dibatalkan",
+    }
+    for stem in dict.fromkeys(stems):
+        job = job_manager.get_job(stem, output_dir=output_path)
+        info_col, action_col = st.columns([4, 1])
+        with info_col:
+            status = labels.get(job.status, job.status) if job else "Belum tersedia"
+            st.write(f"{job.file_name if job else stem} — {status}")
+            if job and job.status == "failed" and job.error_message:
+                st.caption(job.error_message)
+        with action_col:
+            if st.button("Buka", key=f"batch_open_{stem}", disabled=job is None):
+                st.session_state["selected_stem"] = stem
+                st.rerun()
+    st.caption("Setiap file memiliki hasil Markdown sendiri. Pilih Buka untuk melihat hasil atau progresnya.")
 
 
 @st.fragment(run_every=2)
@@ -804,6 +838,10 @@ def main() -> None:
     # Main Area Router
     active_stem = st.session_state.get("selected_stem")
 
+    batch_stems = st.session_state.get("batch_upload_stems", [])
+    if len(batch_stems) > 1:
+        render_batch_monitor(batch_stems, output_dir)
+
     if active_stem is None:
         # MODE 1: UNGGAH DOKUMEN BARU
         st.subheader("📤 Unggah Dokumen Baru")
@@ -811,62 +849,58 @@ def main() -> None:
             "Mendukung format PDF multi-halaman, presentasi PPTX/PPT, dan gambar resolusi tinggi."
         )
 
-        uploaded_file = st.file_uploader(
+        uploaded_files = st.file_uploader(
             "Pilih file dokumen:",
             type=SUPPORTED_TYPES,
+            accept_multiple_files=True,
             help="File akan disimpan secara aman di output/uploads/ dan dieksekusi di latar belakang.",
         )
 
-        if uploaded_file is not None:
-            saved_file = _save_uploaded_file(uploaded_file, output_dir)
-            file_stem = saved_file.stem
-            existing_job = job_manager.get_job(file_stem, output_dir=output_dir)
+        if uploaded_files:
+            saved_files = _save_uploaded_files(uploaded_files, output_dir)
+            st.markdown(f"**{len(saved_files)} file siap diproses**")
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "File": path.name,
+                            "Ukuran": f"{path.stat().st_size / 1024:.1f} KB",
+                            "Status": (
+                                job_manager.get_job(path.stem, output_dir=output_dir).status
+                                if job_manager.get_job(path.stem, output_dir=output_dir)
+                                else "siap"
+                            ),
+                        }
+                        for path in saved_files
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
 
-            if existing_job and existing_job.status == "completed":
-                st.info(f"Dokumen **{saved_file.name}** sudah pernah diekstrak sebelumnya.")
-                col_e1, col_e2 = st.columns([1, 1])
-                with col_e1:
-                    if st.button("👁️ Lihat Hasil Ekstraksi", type="primary", use_container_width=True):
-                        st.session_state["selected_stem"] = file_stem
-                        st.rerun()
-                with col_e2:
-                    if st.button("🔄 Ekstrak Ulang Dokumen", use_container_width=True):
-                        job_manager.reset_job(file_stem, output_dir=output_dir)
-                        job_manager.start_job(
-                            input_path=saved_file,
-                            output_dir=output_dir,
-                            doc_type=chosen_spec,
-                            dpi=dpi_val,
-                            force_all_tables=force_all_tbl,
-                        )
-                        st.session_state["selected_stem"] = file_stem
-                        st.rerun()
-            elif existing_job and existing_job.status == "running":
-                st.info(f"Dokumen **{saved_file.name}** saat ini sedang diekstrak di latar belakang.")
-                if st.button("🔍 Buka Live Monitor", type="primary", use_container_width=True):
-                    st.session_state["selected_stem"] = file_stem
-                    st.rerun()
-            else:
-                col_b1, col_b2 = st.columns([1, 3])
-                with col_b1:
-                    if st.button(
-                        "🚀 Mulai Ekstraksi Dokumen",
-                        type="primary",
-                        use_container_width=True,
-                    ):
-                        job_manager.start_job(
-                            input_path=saved_file,
-                            output_dir=output_dir,
-                            doc_type=chosen_spec,
-                            dpi=dpi_val,
-                            force_all_tables=force_all_tbl,
-                        )
-                        st.session_state["selected_stem"] = file_stem
-                        st.rerun()
-                with col_b2:
-                    st.info(
-                        f"File siap diproses: **{saved_file.name}** ({saved_file.stat().st_size / 1024:.1f} KB)"
+            if st.button(
+                f"🚀 Mulai Ekstraksi {len(saved_files)} File",
+                type="primary",
+                use_container_width=True,
+            ):
+                started_jobs = []
+                for saved_file in saved_files:
+                    job = job_manager.start_job(
+                        input_path=saved_file,
+                        output_dir=output_dir,
+                        doc_type=chosen_spec,
+                        dpi=dpi_val,
+                        force_all_tables=force_all_tbl,
                     )
+                    started_jobs.append(job)
+
+                # Buka monitor file pertama; semua file tetap berjalan di background.
+                if started_jobs:
+                    st.session_state["selected_stem"] = started_jobs[0].job_id
+                    st.session_state["batch_upload_stems"] = [
+                        job.job_id for job in started_jobs
+                    ]
+                    st.rerun()
 
     else:
         # MODE 2: DOKUMEN AKTIF DIPILIH
