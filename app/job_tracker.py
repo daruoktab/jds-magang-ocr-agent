@@ -98,6 +98,7 @@ class JobInfo:
     pid: int | None = None
     returncode: int | None = None
     error_message: str | None = None
+    extraction_options: dict[str, Any] = field(default_factory=dict)
     recent_logs: collections.deque[str] = field(
         default_factory=lambda: collections.deque(maxlen=200)
     )
@@ -136,6 +137,7 @@ class JobInfo:
             "pid": self.pid,
             "returncode": self.returncode,
             "error_message": self.error_message,
+            "extraction_options": self.extraction_options,
         }
 
     def save_status(self) -> None:
@@ -260,6 +262,8 @@ class JobManager:
                 stage="Menginisialisasi proses CLI...",
                 last_message="Memulai pipeline ekstraksi...",
                 started_at=start_iso,
+                extraction_options=dict(doc_type=doc_type, dpi=dpi, force_all_tables=force_all_tables,
+                                        preview_chunks=preview_chunks, chunk_size=chunk_size, chunk_overlap=chunk_overlap),
             )
             job.save_status()
             self._jobs[stem] = job
@@ -535,6 +539,7 @@ class JobManager:
                     pid=data.get("pid"),
                     returncode=data.get("returncode"),
                     error_message=data.get("error_message"),
+                    extraction_options=data.get("extraction_options", {}),
                     recent_logs=recent,
                 )
 
@@ -617,6 +622,20 @@ class JobManager:
             job.save_status()
 
         return True
+
+    def restart_job(self, stem: str, output_dir: Path) -> JobInfo:
+        """Mulai ulang langsung, dengan sumber dan opsi proses sebelumnya."""
+        job = self.get_job(stem, output_dir=output_dir)
+        if job and job.status == "running":
+            return job
+        source = job.input_path if job else None
+        if source is None or not source.is_file():
+            uploads = output_dir / "uploads"
+            matches = [p for p in uploads.iterdir() if p.is_file() and p.stem == stem] if uploads.exists() else []
+            if len(matches) != 1:
+                raise FileNotFoundError(f"Sumber dokumen '{stem}' tidak tersedia atau ambigu. Unggah ulang file sumber.")
+            source = matches[0]
+        return self.start_job(source, output_dir, **(job.extraction_options if job else {}))
 
     def reset_job(self, stem: str, output_dir: Path | None = None) -> None:
         """Hapus referensi job dari memori dan bersihkan file status agar dapat diekstrak ulang."""

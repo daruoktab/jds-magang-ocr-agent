@@ -14,10 +14,12 @@ Fitur Utama:
 from __future__ import annotations
 
 import re
+import hashlib
 import sqlite3
 import sys
 from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -53,8 +55,12 @@ def _save_uploaded_file(uploaded_file: UploadedFile, output_dir: Path) -> Path:
     """Simpan file yang diunggah ke direktori output/uploads secara stabil."""
     uploads_dir = output_dir / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
-    target_path = uploads_dir / Path(uploaded_file.name).name
-    target_path.write_bytes(uploaded_file.getvalue())
+    name = Path(uploaded_file.name.replace("\\", "/")).name
+    content = uploaded_file.getvalue()
+    identity = hashlib.sha256(name.encode("utf-8") + b"\0" + content).hexdigest()[:16]
+    target_path = uploads_dir / f"{Path(name).stem}_{identity}{Path(name).suffix.lower()}"
+    if not target_path.exists():
+        target_path.write_bytes(content)
     return target_path
 
 
@@ -237,6 +243,44 @@ def build_document_zip(stem: str, output_dir: Path) -> bytes:
     return archive_buffer.getvalue()
 
 
+def table_csv_bytes(conn: sqlite3.Connection, table: str) -> bytes:
+    quoted = '"' + table.replace('"', '""') + '"'
+    return pd.read_sql_query(f"SELECT * FROM {quoted}", conn).to_csv(index=False).encode("utf-8-sig")
+
+
+def build_sqlite_download(db_file: Path) -> bytes:
+    """Snapshot konsisten, termasuk transaksi yang telah commit di WAL."""
+    source = sqlite3.connect(db_file.resolve().as_uri() + '?mode=ro', uri=True)
+    try:
+        with TemporaryDirectory(prefix='sqlite_download_') as directory:
+            path = Path(directory) / 'snapshot.sqlite'
+            snapshot = sqlite3.connect(path)
+            try:
+                source.backup(snapshot)
+                snapshot.execute('PRAGMA journal_mode=DELETE')
+            finally:
+                snapshot.close()
+            return path.read_bytes()
+    finally:
+        source.close()
+
+
+def build_all_tables_csv_zip(conn: sqlite3.Connection, tables: list[str]) -> bytes:
+    buffer = BytesIO()
+    used: set[str] = set()
+    with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
+        for table in tables:
+            safe_name = re.sub(r'[^\w .-]', '_', table).strip('. ') or 'table'
+            name = safe_name + '.csv'
+            index = 2
+            while name in used:
+                name = f'{safe_name}_{index}.csv'
+                index += 1
+            used.add(name)
+            archive.writestr(name, table_csv_bytes(conn, table))
+    return buffer.getvalue()
+
+
 def render_mermaid_html(mermaid_code: str, height: int = 420) -> None:
     """Render diagram Mermaid interaktif dalam format SVG menggunakan Mermaid.js CDN."""
     html_code = f"""
@@ -408,7 +452,7 @@ def render_completed_document_view(stem: str, output_path: Path) -> None:
             use_container_width=True,
         )
         if st.button("🔄 Ekstrak Ulang Dokumen Ini", use_container_width=True):
-            job_manager.reset_job(stem, output_dir=output_path)
+            job_manager.restart_job(stem, output_dir=output_path)
             st.rerun()
 
     # Label utama memakai bahasa berbasis tujuan pengguna; istilah teknis ada di detail.
@@ -630,7 +674,7 @@ def render_completed_document_view(stem: str, output_path: Path) -> None:
                 st.write(f"Lokasi database: `{db_file}`")
                 st.download_button(
                     "⬇️ Unduh seluruh database (.sqlite)",
-                    data=db_file.read_bytes(),
+                    data=build_sqlite_download(db_file),
                     file_name=db_file.name,
                     mime="application/vnd.sqlite3",
                 )
@@ -643,6 +687,13 @@ def render_completed_document_view(stem: str, output_path: Path) -> None:
                 tables = [r[0] for r in cursor.fetchall()]
 
                 if tables:
+                    st.download_button(
+                        "⬇️ Unduh Semua CSV (.ZIP)",
+                        data=build_all_tables_csv_zip(conn, tables),
+                        file_name=f"{stem}_csv.zip",
+                        mime="application/zip",
+                        key=f"all_csv_{stem}",
+                    )
                     if "document_headers" in tables and "transaction_details" in tables:
                         with st.expander("📑 Tampilan Relasional Header & Detail Transaksi", expanded=False):
                             df_hdr = pd.read_sql_query("SELECT * FROM document_headers;", conn)
@@ -686,9 +737,7 @@ def render_completed_document_view(stem: str, output_path: Path) -> None:
                             f"**Pratinjau Tabel: `{selected_tbl}` ({len(df_preview)} baris)**"
                         )
                     with col_t2:
-                        csv_data = df_preview.to_csv(index=False).encode(
-                            "utf-8"
-                        )
+                        csv_data = table_csv_bytes(conn, selected_tbl)
                         st.download_button(
                             "⬇️ Unduh Tabel (.CSV)",
                             data=csv_data,
@@ -1021,7 +1070,7 @@ def main() -> None:
             col_f1, col_f2 = st.columns([1, 1])
             with col_f1:
                 if st.button("🔄 Coba Ekstrak Ulang", type="primary", use_container_width=True):
-                    job_manager.reset_job(active_stem, output_dir=output_dir)
+                    job_manager.restart_job(active_stem, output_dir=output_dir)
                     st.rerun()
             with col_f2:
                 if st.button("➕ Beralih ke Unggah Dokumen Lain", use_container_width=True):
