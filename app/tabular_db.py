@@ -2603,12 +2603,12 @@ def _compare_table_values(manager: TabularDatabaseManager, md_tables: list[dict[
                 discrepancies.append(f"Tabel '{target}': kolom sumber tidak ditemukan di SQLite: {', '.join(sorted(missing))}.")
                 continue
 
-            def normalize(value: Any, column: str, from_sql: bool) -> str:
-                if types[column] in ('REAL', 'NUMERIC', 'INTEGER'):
+            def normalize(value: Any, column: str, from_sql: bool, *, column_types: dict[str, str] = types) -> str:
+                if column_types[column] in ('REAL', 'NUMERIC', 'INTEGER'):
                     number = value if from_sql else parse_numeric_value(str(value))
                     return '' if number is None else format(float(number), '.12g')
                 text = clean_cell_text(str(value)) if value is not None else ''
-                if types[column] == 'DATE' or column in ('txn_date', 'value_date', 'date'):
+                if column_types[column] == 'DATE' or column in ('txn_date', 'value_date', 'date'):
                     text = parse_date_value(text) or text
                 return text or ''
 

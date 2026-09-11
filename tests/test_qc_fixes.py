@@ -6,6 +6,7 @@ import unittest
 from io import BytesIO, StringIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import patch
 from zipfile import ZipFile
 
@@ -63,9 +64,8 @@ class TestQCFixes(unittest.TestCase):
 
     def test_page_replacement_rolls_back_on_failure(self):
         self.ingest()
-        with patch.object(TabularDatabaseManager, 'ingest_relational_transactions', side_effect=RuntimeError('failure')):
-            with self.assertRaises(RuntimeError):
-                self.ingest(MD.replace('100', '200'))
+        with patch.object(TabularDatabaseManager, 'ingest_relational_transactions', side_effect=RuntimeError('failure')), self.assertRaises(RuntimeError):
+            self.ingest(MD.replace('100', '200'))
         with sqlite3.connect(self.db) as conn:
             self.assertEqual(conn.execute('SELECT debit FROM transaction_details').fetchall(), [(100,)])
 
@@ -87,10 +87,10 @@ class TestQCFixes(unittest.TestCase):
     def test_upload_collisions_and_stable_reruns(self):
         uploads = [SimpleNamespace(name=name, getvalue=lambda data=data: data) for name, data in
                    [('image.png', b'A'), ('image.png', b'B'), ('image.jpg', b'C')]]
-        paths = _save_uploaded_files(uploads, self.root)
+        paths = _save_uploaded_files(cast(Any, uploads), self.root)
         self.assertEqual(len({p.stem for p in paths}), 3)
         self.assertEqual([p.read_bytes() for p in paths], [b'A', b'B', b'C'])
-        self.assertEqual(paths, _save_uploaded_files(uploads, self.root))
+        self.assertEqual(paths, _save_uploaded_files(cast(Any, uploads), self.root))
 
     def test_retry_starts_worker_and_preserves_options(self):
         source = self.root / 'image.png'
@@ -109,10 +109,10 @@ class TestQCFixes(unittest.TestCase):
     def test_mermaid_specialist_recovers_invalid_draft(self):
         pipeline = object.__new__(DocumentExtractionPipeline)
         pipeline.thorough = True
-        pipeline.extractor = SimpleNamespace(judge_and_refine=lambda **kw: kw['draft_markdown'])
+        pipeline.extractor = cast(Any, SimpleNamespace(judge_and_refine=lambda **kw: kw['draft_markdown']))
         state = {'image_path': 'unused', 'markdown_content': '# Flow\n```mermaid\nbroken\n```',
                  'diagram_mermaid_code': 'flowchart TD\n A["Start"] --> B["End"]'}
-        result = pipeline._node_aggregate_and_judge(state)
+        result = pipeline._node_aggregate_and_judge(cast(Any, state))
         self.assertIn('A["Start"] --> B["End"]', result['markdown_content'])
 
     def test_csv_full_table_zip_and_sqlite_snapshot(self):

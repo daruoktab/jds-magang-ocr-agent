@@ -262,8 +262,14 @@ class JobManager:
                 stage="Menginisialisasi proses CLI...",
                 last_message="Memulai pipeline ekstraksi...",
                 started_at=start_iso,
-                extraction_options=dict(doc_type=doc_type, dpi=dpi, force_all_tables=force_all_tables,
-                                        preview_chunks=preview_chunks, chunk_size=chunk_size, chunk_overlap=chunk_overlap),
+                extraction_options={
+                    "doc_type": doc_type,
+                    "dpi": dpi,
+                    "force_all_tables": force_all_tables,
+                    "preview_chunks": preview_chunks,
+                    "chunk_size": chunk_size,
+                    "chunk_overlap": chunk_overlap,
+                },
             )
             job.save_status()
             self._jobs[stem] = job

@@ -17,10 +17,11 @@ import hashlib
 import re
 import sqlite3
 import sys
+from collections.abc import Sequence
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Protocol
 from zipfile import ZIP_DEFLATED, ZipFile
 
 # Pastikan root direktori proyek berada di sys.path agar impor 'from app....' selalu dikenali
@@ -30,7 +31,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import pandas as pd
 import streamlit as st
-from streamlit.runtime.uploaded_file_manager import UploadedFile
+
+
+class UploadedFileLike(Protocol):
+    name: str
+
+    def getvalue(self) -> bytes: ...
 
 from app.job_tracker import JobManager, is_pid_alive
 from app.tabular_db import cross_verify_dual_track
@@ -51,7 +57,7 @@ SPEC_OPTIONS: dict[str, str | None] = {
 # ==============================================================================
 
 
-def _save_uploaded_file(uploaded_file: UploadedFile, output_dir: Path) -> Path:
+def _save_uploaded_file(uploaded_file: UploadedFileLike, output_dir: Path) -> Path:
     """Simpan file yang diunggah ke direktori output/uploads secara stabil."""
     uploads_dir = output_dir / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -65,7 +71,7 @@ def _save_uploaded_file(uploaded_file: UploadedFile, output_dir: Path) -> Path:
 
 
 def _save_uploaded_files(
-    uploaded_files: list[UploadedFile] | tuple[UploadedFile, ...],
+    uploaded_files: Sequence[UploadedFileLike],
     output_dir: Path,
 ) -> list[Path]:
     """Simpan beberapa file upload dan kembalikan path dalam urutan pilihan user."""
