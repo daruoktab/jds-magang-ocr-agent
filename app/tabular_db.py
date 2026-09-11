@@ -22,10 +22,10 @@ import logging
 import re
 import sqlite3
 import time
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any

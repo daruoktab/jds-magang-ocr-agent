@@ -26,7 +26,11 @@ from .multi_page import (
 )
 from .prompts import normalize_specs
 from .schemas import DocumentPage, ExtractedDocument, PageTabularEvent
-from .tabular_db import cross_verify_dual_track, process_page_tabular_agent, prune_document_pages
+from .tabular_db import (
+    cross_verify_dual_track,
+    process_page_tabular_agent,
+    prune_document_pages,
+)
 
 if TYPE_CHECKING:
     from .graph import DocumentExtractionPipeline

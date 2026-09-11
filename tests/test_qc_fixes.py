@@ -6,15 +6,25 @@ import unittest
 from io import BytesIO, StringIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from zipfile import ZipFile
 
 from app.batch import batch_extract_documents
 from app.config import Settings
 from app.graph import DocumentExtractionPipeline
 from app.job_tracker import JobManager
-from app.streamlit_logic import _save_uploaded_files, table_csv_bytes, build_all_tables_csv_zip, build_sqlite_download
-from app.tabular_db import process_page_tabular_agent, cross_verify_dual_track, TabularDatabaseManager, prune_document_pages
+from app.streamlit_logic import (
+    _save_uploaded_files,
+    build_all_tables_csv_zip,
+    build_sqlite_download,
+    table_csv_bytes,
+)
+from app.tabular_db import (
+    TabularDatabaseManager,
+    cross_verify_dual_track,
+    process_page_tabular_agent,
+    prune_document_pages,
+)
 
 MD = '| Tanggal | Keterangan | Debit | Kredit | Saldo |\n|---|---|---|---|---|\n| 2025-01-01 | Belanja | 100 | 0 | 900 |'
 
