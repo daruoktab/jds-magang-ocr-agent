@@ -326,6 +326,13 @@ python main.py dokumen.pdf --debug
 
 ---
 
+## API ingest dengan FastAPI
+
+Jalankan `uv sync`, lalu `uv run uvicorn app.api:app --port 8000`.
+`POST /ingest` menerima hanya field upload `file` dan mengembalikan ZIP berisi
+Markdown, SQL SQLite, serta CSV jika ada tabel. Buka `/docs` untuk mencoba API
+dan `/plan` untuk melihat alur ingest. Lihat [panduan API](docs/API.md).
+
 ## 🖥️ Antarmuka Interaktif Streamlit Workspace Studio
 
 Aplikasi web interaktif Streamlit untuk monitoring proses ekstraksi, inspeksi visual side-by-side, preview chunking RAG, dan analisis data tabular SQLite.
