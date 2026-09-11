@@ -7,6 +7,13 @@ Sistem ekstraksi **dokumen internal perusahaan** (PDF, PPT/PPTX, Scan Gambar, Sc
 
 ---
 
+## Pembelajaran dari koreksi pengguna
+
+Streamlit menyediakan **Koreksi hasil halaman ini** untuk menyimpan perbaikan teks dan tabel.
+Contoh yang disetujui dapat dipakai admin untuk optimasi prompt dengan DSPy dan GEPA,
+evaluasi pada dokumen terpisah, penerapan kandidat, dan pemulihan versi sebelumnya.
+Lihat [panduan pembelajaran dan perintah admin](docs/PEMBELAJARAN.md).
+
 ## 🛠️ Instalasi & Persyaratan Sistem (Installation & Setup)
 
 ### 1. Persyaratan Sistem (Prerequisites)

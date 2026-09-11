@@ -500,6 +500,13 @@ def render_completed_document_view(stem: str, output_path: Path) -> None:
                             render_mermaid_html(m_code, height=320)
 
                 st.markdown(text_to_show)
+
+            from app.learning_ui import render_correction_form
+            render_correction_form(
+                stem=stem, page=selected_page_idx, image_path=current_img_path,
+                original=pages_map.get(selected_page_idx, ""), images=images,
+                source_path=job.input_path if job else None,
+            )
         else:
             st.info(
                 "ℹ️ Gambar halaman fisik tidak ditemukan untuk dokumen ini (mungkin dokumen diproses tanpa menyimpan kanvas halaman terpisah)."
